@@ -1293,3 +1293,44 @@ export interface ExternalLiveSignIn {
   username: string;
   exam_id: string;
 }
+
+// ---------- 2026-10-23: open to everyone or selected students; automatic close ----------
+
+/** "all" = every student of the exam (its class, LMS course or external roster). */
+export type OpenTo = "all" | number[];
+
+/** GET /api/exams/{id}/students: who may take the exam (the "Selected students" checklist). */
+export interface ExamStudent {
+  id: number;
+  username: string;
+  name: string;
+  /** has an attempt (removing them never stops it) */
+  started: boolean;
+}
+
+export interface Exam {
+  /** Who may start ("all" or student ids). Older servers: absent = all. */
+  open_to?: OpenTo;
+  /** The exam closes by itself at this time (UTC). External exams: from their source, read-only. */
+  closes_at?: string | null;
+  /** The last close was the automatic one. */
+  auto_closed?: boolean;
+}
+export interface ExamInput {
+  /** Optional automatic close (FairPlay exams). null = only the teacher closes it. */
+  closes_at?: string | null;
+}
+export interface LiveRoom {
+  open_to?: OpenTo;
+  /** The selected students with names (null when open to all). */
+  selected?: ExamStudent[] | null;
+  closes_at?: string | null;
+}
+export interface StudentExamSummary {
+  /** false = the teacher opened it for selected students only (no start, no package). */
+  open_for_me?: boolean;
+}
+export interface OfflineExam {
+  /** 2026-10-23: the offline countdown never runs past this */
+  closes_at?: string | null;
+}

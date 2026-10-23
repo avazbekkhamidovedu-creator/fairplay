@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { urlHost } from "../../components/teacher/externalValidation";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApiError, teacherApi } from "../../api/client";
-import type { Exam } from "../../api/types";
+import type { Exam, OpenTo } from "../../api/types";
 import { Loading } from "../../components/Loading";
 import { Pill } from "../../components/teacher/TeacherLayout";
 import { errorText, examStatus, formatWhen, plural } from "../../components/teacher/util";
@@ -11,6 +11,7 @@ import { QuestionsView } from "./QuestionsView";
 import { ResultsView } from "./ResultsView";
 import { ScanSteps } from "./scan/ScanSteps";
 import { ExternalSourceBanner } from "../../components/teacher/ExternalSource";
+import { OpenToChoice, closesAtLabel } from "../../components/teacher/OpenTo";
 
 type Tab = "live" | "questions" | "results" | "scan";
 
@@ -40,6 +41,8 @@ export default function TeacherExamPage() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 2026-10-23: who can start when the exam opens (everyone, or the ticked students)
+  const [openTo, setOpenTo] = useState<OpenTo>("all");
 
   useEffect(() => {
     let alive = true;
@@ -87,7 +90,7 @@ export default function TeacherExamPage() {
 
   const openExam = () =>
     run(
-      () => teacherApi.openExam(exam.id),
+      () => (openTo === "all" ? teacherApi.openExam(exam.id) : teacherApi.openExam(exam.id, openTo)),
       (e) => {
         if (e) setExam(e);
         selectTab("live");
@@ -108,7 +111,11 @@ export default function TeacherExamPage() {
     `${exam.duration_min} min`,
     exam.room && `Room ${exam.room}`,
     exam.scheduled_at && `Planned ${formatWhen(exam.scheduled_at)}`,
+    exam.status !== "closed" && closesAtLabel(exam),
+    exam.status === "closed" && exam.auto_closed && "Closed automatically at its end time",
   ].filter(Boolean);
+  const canOpen = exam.delivery !== "paper" && (exam.status === "draft" || exam.status === "closed");
+  const noneSelected = openTo !== "all" && openTo.length === 0;
 
   return (
     <>
@@ -147,7 +154,7 @@ export default function TeacherExamPage() {
                   type="button"
                   className="btn btn-primary"
                   onClick={openExam}
-                  disabled={busy || ext?.package_ready === false}
+                  disabled={busy || ext?.package_ready === false || noneSelected}
                 >
                   {busy ? "Opening…" : "Open exam"}
                 </button>
@@ -155,7 +162,7 @@ export default function TeacherExamPage() {
             </>
           )}
           {exam.status === "closed" && exam.delivery !== "paper" && (
-            <button type="button" className="btn btn-secondary" onClick={openExam} disabled={busy}>
+            <button type="button" className="btn btn-secondary" onClick={openExam} disabled={busy || noneSelected}>
               {busy ? "Opening…" : "Re-open exam"}
             </button>
           )}
@@ -195,6 +202,13 @@ export default function TeacherExamPage() {
         <div className="alert alert-info">
           This exam is a draft. When the class is seated, press <strong>Open exam</strong> to get a start code.
         </div>
+      )}
+
+      {canOpen && ext?.package_ready !== false && (
+        <section className="t-card" aria-label="Who can start" data-testid="open-to-choice">
+          <OpenToChoice examId={exam.id} value={openTo} onChange={setOpenTo} />
+          {noneSelected && <span className="t-small t-muted">Tick at least one student to open the exam.</span>}
+        </section>
       )}
 
       <div className="t-tabs" role="tablist" aria-label="Exam sections">

@@ -382,6 +382,13 @@ export function clearOfflineRecord(examId: string): void {
   }
 }
 
+/** 2026-10-23: start + duration, never past the exam's close time (packages built since). */
+export function offlineDeadline(exam: Pick<OfflineExam, "duration_min" | "closes_at">, now: number): number {
+  const end = now + exam.duration_min * 60_000;
+  const closes = exam.closes_at ? new Date(exam.closes_at).getTime() : NaN;
+  return Number.isFinite(closes) ? Math.min(end, closes) : end;
+}
+
 /** Build the local attempt from a decrypted package. */
 export function offlineAttemptView(exam: OfflineExam, now = Date.now()): AttemptView {
   return {
@@ -391,7 +398,7 @@ export function offlineAttemptView(exam: OfflineExam, now = Date.now()): Attempt
     course: exam.course,
     duration_min: exam.duration_min,
     started_at: new Date(now).toISOString(),
-    deadline_at: new Date(now + exam.duration_min * 60_000).toISOString(),
+    deadline_at: new Date(offlineDeadline(exam, now)).toISOString(),
     server_time: new Date(now).toISOString(),
     questions: exam.questions,
     answers: {},

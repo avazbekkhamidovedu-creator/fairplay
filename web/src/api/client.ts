@@ -5,6 +5,8 @@ import type { AllowedAppOption,
   AttemptView,
   EventsResponse,
   Exam,
+  ExamStudent,
+  OpenTo,
   ExamInput,
   EventReview,
   GradeInput,
@@ -287,7 +289,14 @@ export const teacherApi = {
   getExam: (id: string) => request<Exam>("teacher", "GET", `/api/exams/${enc(id)}`),
   updateExam: (id: string, input: ExamInput) => request<Exam>("teacher", "PUT", `/api/exams/${enc(id)}`, input),
   deleteExam: (id: string) => request<void>("teacher", "DELETE", `/api/exams/${enc(id)}`),
-  openExam: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/open`),
+  /** openTo omitted = everyone (no body, as before). */
+  openExam: (id: string, openTo?: OpenTo) =>
+    request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/open`, openTo === undefined ? undefined : { open_to: openTo }),
+  /** 2026-10-23: the exam's students (class / course members or the external roster). */
+  examStudents: (id: string) => request<ExamStudent[]>("teacher", "GET", `/api/exams/${enc(id)}/students`),
+  /** 2026-10-23: change who may start: the whole selection, or students to add / remove. */
+  updateOpenTo: (id: string, change: { open_to: OpenTo } | { add?: number[]; remove?: number[] }) =>
+    request<Exam>("teacher", "PUT", `/api/exams/${enc(id)}/open-to`, change),
   closeExam: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/close`),
   /** Audit #13: new start code for a live exam. */
   rotateCode: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/rotate-code`),
