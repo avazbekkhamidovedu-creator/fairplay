@@ -1,0 +1,67 @@
+# What each answer gets on the DMOJ judge (3 designed verdicts corrected after the first baseline run).
+# What each answer is designed to get. The authoritative baseline is what the DMOJ judge
+# (DKU OJ's judge) actually returns: results/dmoj-baseline.json. Where the two differ, the baseline
+# wins and the difference is itself worth knowing (for example how Java reports running out of memory).
+#
+# Verdicts (DMOJ codes): AC accepted, WA wrong answer, TLE time limit, MLE memory limit,
+# OLE output limit, IR invalid return (runtime error / exception), CE compile error.
+# "worst" is the verdict of the whole submission; "note" says what the answer checks.
+
+p01_sum:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  int_overflow.java: {worst: IR, note: "int instead of long; sum overflows (WA), 10^18 does not even parse (exception)"}
+  int_overflow.cpp: {worst: WA, note: "int instead of long long; partial points for the small cases"}
+  compile_error.cpp: {worst: CE, note: "missing semicolon; the compiler message must reach the student"}
+  output_flood.py: {worst: OLE, note: "prints forever; output limit, not a hang"}
+p02_max:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  off_by_one.py: {worst: WA, note: "0-based position"}
+  compile_error.java: {worst: CE, note: "missing closing brace"}
+  no_final_newline.java: {worst: AC, note: "no newline at the end of the output must still be accepted"}
+  index_out_of_bounds.java: {worst: IR, note: "ArrayIndexOutOfBoundsException"}
+p03_words:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  trailing_spaces.cpp: {worst: AC, note: "spaces at line ends must be ignored like DKU OJ's standard checker"}
+  syntax_error.py: {worst: CE, note: "Python syntax error is a compile error on DMOJ, not a runtime error"}
+  wrong_tie_order.py: {worst: WA, note: "equal counts not sorted alphabetically; first case may still pass"}
+p04_avg:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  uses_round.py: {worst: WA, note: "round() drops trailing zeros (2.5 instead of 2.50)"}
+  integer_division.cpp: {worst: WA, note: "integer division before formatting"}
+  raises.py: {worst: IR, note: "uncaught exception"}
+p05_primes:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  trial_division.py: {worst: TLE, note: "too slow only on the biggest case: partial points"}
+  too_much_memory.cpp: {worst: IR, note: "400 MB with a 256 MB limit: DMOJ caps the address space, so malloc returns NULL and the program exits with code 3 (IR), not MLE. Our runner must report the same"}
+  too_much_memory.java: {worst: MLE, note: "800 MB array; check whether the judge says MLE or an OutOfMemoryError (IR)"}
+p06_paths:
+  ok.py: {worst: AC, note: "1,000,000 cells in pure Python: tests the Python speed of the runtime"}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  no_modulo.java: {worst: WA, note: "long overflows on the big grids; small grids pass"}
+  infinite_loop.cpp: {worst: TLE, note: "must be killed at the time limit"}
+p07_brackets:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  recursion.py: {worst: IR, note: "RecursionError on 50,000-deep nesting; small cases pass"}
+  segfault.cpp: {worst: RTE, note: "null pointer write (SIGSEGV); DMOJ reports signals as RTE, exit codes as IR"}
+  infinite_loop.java: {worst: TLE}
+p08_sort:
+  ok.py: {worst: AC}
+  ok.cpp: {worst: AC}
+  ok.java: {worst: AC}
+  scanner_slow_io.java: {worst: AC, note: "Scanner + per-number printing of 10^6 numbers still fits in 2 s on DMOJ (Java 21); a slower runner would turn it into TLE"}
+  input_loop.py: {worst: TLE, note: "input() per line: the 10^6-line case times out on DMOJ (75 points); speed-sensitive, compare times too"}
+  too_much_memory.py: {worst: MLE}
+  bubble_sort.cpp: {worst: TLE, note: "O(n^2) on 10^5 and 10^6 numbers"}

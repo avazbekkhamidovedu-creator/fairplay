@@ -1,0 +1,17 @@
+# DMOJ judge config for the parity kit (local judging only; no site connection, so no key).
+# Runtimes as on this machine; DKU OJ production versions go in dku-runtimes.md when read from the live site.
+id: parity
+problem_storage_globs:
+  - /srv/classroom-judge/parity/problems/*
+runtime:
+  g++: /usr/bin/g++
+  g++17: /usr/bin/g++
+  gcc: /usr/bin/gcc
+  python3: /usr/bin/python3
+  java: /usr/lib/jvm/java-21-openjdk-amd64/bin/java
+  javac: /usr/lib/jvm/java-21-openjdk-amd64/bin/javac
+# Ubuntu's OpenJDK keeps its security config under /etc (symlinked from the JDK), which the
+# sandbox does not allow by default: without this, javac fails with "Error loading java.security file".
+extra_fs:
+  JAVA:
+  - recursive_dir: /etc/java-21-openjdk

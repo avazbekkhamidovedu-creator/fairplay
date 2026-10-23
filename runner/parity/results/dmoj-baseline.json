@@ -1,0 +1,3204 @@
+{
+ "judge": "DMOJ judge-server (dmoj on PyPI), the judge DKU OJ runs",
+ "dmoj_version": "?",
+ "host": "Linux-6.18.44-fc-v153-x86_64-with-glibc2.39",
+ "runtimes": {
+  "CPP17": [
+   [
+    "g++17",
+    "13"
+   ]
+  ],
+  "JAVA": [
+   [
+    "javac",
+    "21.0.12.1"
+   ]
+  ],
+  "PY3": [
+   [
+    "python3",
+    "3.13.16"
+   ]
+  ]
+ },
+ "generated_at": "2026-10-23T15:16:45Z",
+ "results": [
+  {
+   "problem": "p01_sum",
+   "answer": "compile_error.cpp",
+   "language": "CPP17",
+   "worst": "CE",
+   "points": 0,
+   "total": 100,
+   "cases": [],
+   "judge_seconds": 0.81,
+   "compile_error": "\u001b[01m\u001b[Kp01_sumcpp.cpp:\u001b[m\u001b[K In function \u2018\u001b[01m\u001b[Kint\u001b[01;32m\u001b[K main\u001b[m\u001b[K()\u001b[m\u001b[K\u2019:\r\n\u001b[01m\u001b[Kp01_sumcpp.cpp:4:5:\u001b[m\u001b[K \u001b[01;31m\u001b[Kerror: \u001b[m\u001b[Kexpected initializer before \u2018\u001b[01m\u001b[Kstd\u001b[m\u001b[K\u2019\r\n    4 |     \u001b[01;31m\u001b[Kstd\u001b[m\u001b[K::cin >> a >> b;\r\n      |     \u001b[01;31m\u001b[K^~~\u001b[m\u001b[K\r\n\u001b[01m\u001b[Kp01_sumcpp.cpp:5:22:\u001b[m\u001b[K \u001b[01;31m\u001b[Kerror: \u001b[m\u001b[K\u2018\u001b[01m\u001b[Kb\u001b[m\u001b[K\u2019 was not declared in this scope\r\n    5 |     std::cout << a + \u001b[01;31m\u001b[Kb\u001b[m\u001b[K << \"\\n\";\r\n      |                      \u001b[01;31m\u001b[K^\u001b[m\u001b[K\r\n"
+  },
+  {
+   "problem": "p01_sum",
+   "answer": "int_overflow.cpp",
+   "language": "CPP17",
+   "worst": "WA",
+   "points": 40.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.007,
+     "wall_s": 0.0084,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0051,
+     "wall_s": 0.006,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0051,
+     "wall_s": 0.006,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0058,
+     "wall_s": 0.007,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 5,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0071,
+     "wall_s": 0.0084,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 1.02
+  },
+  {
+   "problem": "p01_sum",
+   "answer": "int_overflow.java",
+   "language": "JAVA",
+   "worst": "IR",
+   "points": 40.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.1375,
+     "wall_s": 0.1596,
+     "memory_kb": 44344,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.1343,
+     "wall_s": 0.1504,
+     "memory_kb": 44592,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.1323,
+     "wall_s": 0.1496,
+     "memory_kb": 44356,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.1235,
+     "wall_s": 0.1378,
+     "memory_kb": 45068,
+     "feedback": "java.util.InputMismatchException",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 5,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.1249,
+     "wall_s": 0.1396,
+     "memory_kb": 44988,
+     "feedback": "java.util.InputMismatchException",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.59
+  },
+  {
+   "problem": "p01_sum",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0054,
+     "wall_s": 0.0065,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0054,
+     "wall_s": 0.0064,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0048,
+     "wall_s": 0.0057,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0048,
+     "wall_s": 0.0056,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 5,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0058,
+     "wall_s": 0.0094,
+     "memory_kb": 3584,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.99
+  },
+  {
+   "problem": "p01_sum",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.1615,
+     "wall_s": 0.1804,
+     "memory_kb": 44376,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.1322,
+     "wall_s": 0.1487,
+     "memory_kb": 44352,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.1509,
+     "wall_s": 0.168,
+     "memory_kb": 44412,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.1198,
+     "wall_s": 0.1352,
+     "memory_kb": 44472,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 5,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.16,
+     "wall_s": 0.183,
+     "memory_kb": 44572,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.67
+  },
+  {
+   "problem": "p01_sum",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0341,
+     "wall_s": 0.0442,
+     "memory_kb": 10432,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0401,
+     "wall_s": 0.0509,
+     "memory_kb": 10496,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0447,
+     "wall_s": 0.0566,
+     "memory_kb": 10432,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0407,
+     "wall_s": 0.0507,
+     "memory_kb": 10496,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 5,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 20,
+     "total": 20,
+     "time_s": 0.0375,
+     "wall_s": 0.0471,
+     "memory_kb": 10432,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.38
+  },
+  {
+   "problem": "p01_sum",
+   "answer": "output_flood.py",
+   "language": "PY3",
+   "worst": "OLE",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "OLE",
+     "codes": [
+      "OLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0898,
+     "wall_s": 0.1017,
+     "memory_kb": 10020,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "OLE",
+     "codes": [
+      "OLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0923,
+     "wall_s": 0.1039,
+     "memory_kb": 10020,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "OLE",
+     "codes": [
+      "OLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0785,
+     "wall_s": 0.089,
+     "memory_kb": 10020,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "OLE",
+     "codes": [
+      "OLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0744,
+     "wall_s": 0.0848,
+     "memory_kb": 10020,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 5,
+     "verdict": "OLE",
+     "codes": [
+      "OLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 20,
+     "time_s": 0.0818,
+     "wall_s": 0.092,
+     "memory_kb": 10020,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.63
+  },
+  {
+   "problem": "p02_max",
+   "answer": "compile_error.java",
+   "language": "JAVA",
+   "worst": "CE",
+   "points": 0,
+   "total": 100,
+   "cases": [],
+   "judge_seconds": 0.54,
+   "compile_error": "/tmp/tmpvyk7oua5/Main.java:8: error: reached end of file while parsing\r\n}\r\n ^\r\n1 error\r\n"
+  },
+  {
+   "problem": "p02_max",
+   "answer": "index_out_of_bounds.java",
+   "language": "JAVA",
+   "worst": "IR",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.099,
+     "wall_s": 0.1142,
+     "memory_kb": 44076,
+     "feedback": "java.lang.ArrayIndexOutOfBoundsException",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1428,
+     "wall_s": 0.1643,
+     "memory_kb": 43960,
+     "feedback": "java.lang.ArrayIndexOutOfBoundsException",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1292,
+     "wall_s": 0.1516,
+     "memory_kb": 43220,
+     "feedback": "java.lang.ArrayIndexOutOfBoundsException",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.217,
+     "wall_s": 0.2342,
+     "memory_kb": 63936,
+     "feedback": "java.lang.ArrayIndexOutOfBoundsException",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.6
+  },
+  {
+   "problem": "p02_max",
+   "answer": "no_final_newline.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1309,
+     "wall_s": 0.1445,
+     "memory_kb": 44680,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1213,
+     "wall_s": 0.1391,
+     "memory_kb": 44504,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1577,
+     "wall_s": 0.1767,
+     "memory_kb": 44852,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.2154,
+     "wall_s": 0.2331,
+     "memory_kb": 63124,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.59
+  },
+  {
+   "problem": "p02_max",
+   "answer": "off_by_one.py",
+   "language": "PY3",
+   "worst": "WA",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0366,
+     "wall_s": 0.0463,
+     "memory_kb": 10460,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0372,
+     "wall_s": 0.0483,
+     "memory_kb": 10460,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.033,
+     "wall_s": 0.0416,
+     "memory_kb": 10608,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0755,
+     "wall_s": 0.0835,
+     "memory_kb": 33528,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.35
+  },
+  {
+   "problem": "p02_max",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0051,
+     "wall_s": 0.0061,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.005,
+     "wall_s": 0.0059,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0039,
+     "wall_s": 0.0045,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0327,
+     "wall_s": 0.0335,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.3
+  },
+  {
+   "problem": "p02_max",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1259,
+     "wall_s": 0.1424,
+     "memory_kb": 44584,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1322,
+     "wall_s": 0.1477,
+     "memory_kb": 44448,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1444,
+     "wall_s": 0.1621,
+     "memory_kb": 44756,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.2547,
+     "wall_s": 0.2745,
+     "memory_kb": 63192,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.59
+  },
+  {
+   "problem": "p02_max",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0423,
+     "wall_s": 0.0507,
+     "memory_kb": 10460,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0467,
+     "wall_s": 0.0574,
+     "memory_kb": 10460,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0484,
+     "wall_s": 0.0591,
+     "memory_kb": 10608,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0862,
+     "wall_s": 0.0975,
+     "memory_kb": 33528,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.4
+  },
+  {
+   "problem": "p03_words",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0069,
+     "wall_s": 0.0079,
+     "memory_kb": 3668,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.007,
+     "wall_s": 0.0083,
+     "memory_kb": 3680,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.0099,
+     "wall_s": 0.0113,
+     "memory_kb": 3704,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 3.04
+  },
+  {
+   "problem": "p03_words",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.104,
+     "wall_s": 0.1237,
+     "memory_kb": 43600,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.1184,
+     "wall_s": 0.1329,
+     "memory_kb": 42632,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.1747,
+     "wall_s": 0.194,
+     "memory_kb": 45796,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.37
+  },
+  {
+   "problem": "p03_words",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0474,
+     "wall_s": 0.0568,
+     "memory_kb": 10464,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0384,
+     "wall_s": 0.0479,
+     "memory_kb": 10480,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.0466,
+     "wall_s": 0.0602,
+     "memory_kb": 11244,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.31
+  },
+  {
+   "problem": "p03_words",
+   "answer": "syntax_error.py",
+   "language": "PY3",
+   "worst": "CE",
+   "points": 0,
+   "total": 100,
+   "cases": [],
+   "judge_seconds": 0.13,
+   "compile_error": "*** Error compiling '/tmp/tmp6o6lzkh4/p03_words.py'...\r\n  File \"/tmp/tmp6o6lzkh4/p03_words.py\", line 3\r\n    for w in sys.stdin.read().split()\r\n                                     ^\r\nSyntaxError: expected ':'\r\n\r\n"
+  },
+  {
+   "problem": "p03_words",
+   "answer": "trailing_spaces.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0056,
+     "wall_s": 0.0068,
+     "memory_kb": 3664,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0069,
+     "wall_s": 0.0082,
+     "memory_kb": 3676,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.0133,
+     "wall_s": 0.0147,
+     "memory_kb": 3696,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 3.27
+  },
+  {
+   "problem": "p03_words",
+   "answer": "wrong_tie_order.py",
+   "language": "PY3",
+   "worst": "WA",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 33,
+     "time_s": 0.0478,
+     "wall_s": 0.0605,
+     "memory_kb": 10340,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 33,
+     "time_s": 0.0399,
+     "wall_s": 0.0524,
+     "memory_kb": 10356,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 34,
+     "time_s": 0.0382,
+     "wall_s": 0.0501,
+     "memory_kb": 11108,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.31
+  },
+  {
+   "problem": "p04_avg",
+   "answer": "integer_division.cpp",
+   "language": "CPP17",
+   "worst": "WA",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0058,
+     "wall_s": 0.0067,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0058,
+     "wall_s": 0.0068,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.006,
+     "wall_s": 0.007,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0203,
+     "wall_s": 0.0214,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.26
+  },
+  {
+   "problem": "p04_avg",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0045,
+     "wall_s": 0.0053,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0062,
+     "wall_s": 0.007,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0055,
+     "wall_s": 0.0064,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0137,
+     "wall_s": 0.0147,
+     "memory_kb": 1868,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.27
+  },
+  {
+   "problem": "p04_avg",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1471,
+     "wall_s": 0.1686,
+     "memory_kb": 44260,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1057,
+     "wall_s": 0.1211,
+     "memory_kb": 44136,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1504,
+     "wall_s": 0.1721,
+     "memory_kb": 44404,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.19,
+     "wall_s": 0.209,
+     "memory_kb": 52976,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.61
+  },
+  {
+   "problem": "p04_avg",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0382,
+     "wall_s": 0.0475,
+     "memory_kb": 10576,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0407,
+     "wall_s": 0.0512,
+     "memory_kb": 10640,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0456,
+     "wall_s": 0.0588,
+     "memory_kb": 10680,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0482,
+     "wall_s": 0.0622,
+     "memory_kb": 16316,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.35
+  },
+  {
+   "problem": "p04_avg",
+   "answer": "raises.py",
+   "language": "PY3",
+   "worst": "IR",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0704,
+     "wall_s": 0.0852,
+     "memory_kb": 12108,
+     "feedback": "ValueError",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0703,
+     "wall_s": 0.0884,
+     "memory_kb": 12108,
+     "feedback": "ValueError",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0519,
+     "wall_s": 0.0691,
+     "memory_kb": 12168,
+     "feedback": "ValueError",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0867,
+     "wall_s": 0.1085,
+     "memory_kb": 17292,
+     "feedback": "ValueError",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.5
+  },
+  {
+   "problem": "p04_avg",
+   "answer": "uses_round.py",
+   "language": "PY3",
+   "worst": "WA",
+   "points": 75.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0473,
+     "wall_s": 0.0572,
+     "memory_kb": 10644,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0355,
+     "wall_s": 0.046,
+     "memory_kb": 10644,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0413,
+     "wall_s": 0.0531,
+     "memory_kb": 10684,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0495,
+     "wall_s": 0.0591,
+     "memory_kb": 16316,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.37
+  },
+  {
+   "problem": "p05_primes",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0057,
+     "wall_s": 0.0068,
+     "memory_kb": 3896,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0058,
+     "wall_s": 0.007,
+     "memory_kb": 3896,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0063,
+     "wall_s": 0.0075,
+     "memory_kb": 3992,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0282,
+     "wall_s": 0.0292,
+     "memory_kb": 8264,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.46
+  },
+  {
+   "problem": "p05_primes",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1629,
+     "wall_s": 0.1871,
+     "memory_kb": 44512,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1564,
+     "wall_s": 0.1756,
+     "memory_kb": 44532,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.151,
+     "wall_s": 0.1709,
+     "memory_kb": 44748,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1818,
+     "wall_s": 0.199,
+     "memory_kb": 49872,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.58
+  },
+  {
+   "problem": "p05_primes",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0378,
+     "wall_s": 0.0515,
+     "memory_kb": 10476,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.05,
+     "wall_s": 0.0589,
+     "memory_kb": 10604,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0486,
+     "wall_s": 0.0596,
+     "memory_kb": 10788,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.114,
+     "wall_s": 0.1268,
+     "memory_kb": 18240,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.46
+  },
+  {
+   "problem": "p05_primes",
+   "answer": "too_much_memory.cpp",
+   "language": "CPP17",
+   "worst": "IR",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0061,
+     "wall_s": 0.0072,
+     "memory_kb": 1800,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0062,
+     "wall_s": 0.0074,
+     "memory_kb": 1800,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0141,
+     "wall_s": 0.0155,
+     "memory_kb": 1800,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.0065,
+     "wall_s": 0.0078,
+     "memory_kb": 1800,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.52
+  },
+  {
+   "problem": "p05_primes",
+   "answer": "too_much_memory.java",
+   "language": "JAVA",
+   "worst": "MLE",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1778,
+     "wall_s": 0.2009,
+     "memory_kb": 46656,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1647,
+     "wall_s": 0.183,
+     "memory_kb": 46392,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1501,
+     "wall_s": 0.1663,
+     "memory_kb": 46460,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1423,
+     "wall_s": 0.1644,
+     "memory_kb": 46456,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.61
+  },
+  {
+   "problem": "p05_primes",
+   "answer": "trial_division.py",
+   "language": "PY3",
+   "worst": "TLE",
+   "points": 75.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0459,
+     "wall_s": 0.0575,
+     "memory_kb": 10472,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0413,
+     "wall_s": 0.0524,
+     "memory_kb": 10536,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.5808,
+     "wall_s": 0.5905,
+     "memory_kb": 10536,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 2.9928,
+     "wall_s": 3.0026,
+     "memory_kb": 10196,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 3.86
+  },
+  {
+   "problem": "p06_paths",
+   "answer": "infinite_loop.cpp",
+   "language": "CPP17",
+   "worst": "TLE",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 4.0017,
+     "wall_s": 4.0028,
+     "memory_kb": 1672,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 4.0007,
+     "wall_s": 4.0023,
+     "memory_kb": 1672,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 3.9977,
+     "wall_s": 4.0021,
+     "memory_kb": 1672,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 4.0004,
+     "wall_s": 4.0022,
+     "memory_kb": 1672,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 16.32
+  },
+  {
+   "problem": "p06_paths",
+   "answer": "no_modulo.java",
+   "language": "JAVA",
+   "worst": "WA",
+   "points": 50.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1012,
+     "wall_s": 0.1186,
+     "memory_kb": 43416,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1115,
+     "wall_s": 0.1279,
+     "memory_kb": 43444,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1033,
+     "wall_s": 0.1189,
+     "memory_kb": 42392,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "WA",
+     "codes": [
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.1937,
+     "wall_s": 0.21,
+     "memory_kb": 46228,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.44
+  },
+  {
+   "problem": "p06_paths",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0061,
+     "wall_s": 0.007,
+     "memory_kb": 3648,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0054,
+     "wall_s": 0.0064,
+     "memory_kb": 3648,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0066,
+     "wall_s": 0.0077,
+     "memory_kb": 3648,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0267,
+     "wall_s": 0.0278,
+     "memory_kb": 3660,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 2.54
+  },
+  {
+   "problem": "p06_paths",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.112,
+     "wall_s": 0.1325,
+     "memory_kb": 43588,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1257,
+     "wall_s": 0.1419,
+     "memory_kb": 43464,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1374,
+     "wall_s": 0.1616,
+     "memory_kb": 43340,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.2196,
+     "wall_s": 0.2404,
+     "memory_kb": 46420,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.59
+  },
+  {
+   "problem": "p06_paths",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0359,
+     "wall_s": 0.0444,
+     "memory_kb": 10508,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0463,
+     "wall_s": 0.0578,
+     "memory_kb": 10508,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0506,
+     "wall_s": 0.0629,
+     "memory_kb": 10512,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.602,
+     "wall_s": 0.6133,
+     "memory_kb": 12000,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.94
+  },
+  {
+   "problem": "p07_brackets",
+   "answer": "infinite_loop.java",
+   "language": "JAVA",
+   "worst": "TLE",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 33,
+     "time_s": 1.9897,
+     "wall_s": 2.0071,
+     "memory_kb": 42848,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 33,
+     "time_s": 1.9878,
+     "wall_s": 2.0052,
+     "memory_kb": 42756,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 34,
+     "time_s": 1.9883,
+     "wall_s": 2.0062,
+     "memory_kb": 42152,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 6.88
+  },
+  {
+   "problem": "p07_brackets",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0074,
+     "wall_s": 0.0088,
+     "memory_kb": 3664,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0079,
+     "wall_s": 0.0096,
+     "memory_kb": 3664,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.0099,
+     "wall_s": 0.0117,
+     "memory_kb": 3792,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 2.34
+  },
+  {
+   "problem": "p07_brackets",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.11,
+     "wall_s": 0.1265,
+     "memory_kb": 43448,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.1128,
+     "wall_s": 0.1283,
+     "memory_kb": 43456,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.156,
+     "wall_s": 0.1756,
+     "memory_kb": 45064,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 1.29
+  },
+  {
+   "problem": "p07_brackets",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0355,
+     "wall_s": 0.0443,
+     "memory_kb": 10496,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0387,
+     "wall_s": 0.049,
+     "memory_kb": 10496,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 34,
+     "total": 34,
+     "time_s": 0.0816,
+     "wall_s": 0.0909,
+     "memory_kb": 10940,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.32
+  },
+  {
+   "problem": "p07_brackets",
+   "answer": "recursion.py",
+   "language": "PY3",
+   "worst": "IR",
+   "points": 66.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.039,
+     "wall_s": 0.0501,
+     "memory_kb": 10500,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 33,
+     "total": 33,
+     "time_s": 0.0465,
+     "wall_s": 0.0559,
+     "memory_kb": 10500,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 34,
+     "time_s": 0.1595,
+     "wall_s": 0.1762,
+     "memory_kb": 13200,
+     "feedback": "RecursionError",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 0.42
+  },
+  {
+   "problem": "p07_brackets",
+   "answer": "segfault.cpp",
+   "language": "CPP17",
+   "worst": "RTE",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "RTE",
+     "codes": [
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 33,
+     "time_s": 0.0058,
+     "wall_s": 0.007,
+     "memory_kb": 1672,
+     "feedback": "segmentation fault",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "RTE",
+     "codes": [
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 33,
+     "time_s": 0.0063,
+     "wall_s": 0.0075,
+     "memory_kb": 1672,
+     "feedback": "segmentation fault",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "RTE",
+     "codes": [
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 34,
+     "time_s": 0.0074,
+     "wall_s": 0.0087,
+     "memory_kb": 1672,
+     "feedback": "segmentation fault",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 0.34
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "bubble_sort.cpp",
+   "language": "CPP17",
+   "worst": "TLE",
+   "points": 50.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0075,
+     "wall_s": 0.0085,
+     "memory_kb": 3896,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0053,
+     "wall_s": 0.0063,
+     "memory_kb": 3896,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 4.0008,
+     "wall_s": 4.0024,
+     "memory_kb": 4268,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "RTE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 4.0012,
+     "wall_s": 4.0037,
+     "memory_kb": 11300,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 8.66
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "input_loop.py",
+   "language": "PY3",
+   "worst": "TLE",
+   "points": 75.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0513,
+     "wall_s": 0.0654,
+     "memory_kb": 10512,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0509,
+     "wall_s": 0.0637,
+     "memory_kb": 10512,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.2947,
+     "wall_s": 0.3085,
+     "memory_kb": 15736,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "TLE",
+     "codes": [
+      "TLE",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 2.2992,
+     "wall_s": 2.3143,
+     "memory_kb": 65996,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 2.97
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "ok.cpp",
+   "language": "CPP17",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0062,
+     "wall_s": 0.0073,
+     "memory_kb": 3668,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0047,
+     "wall_s": 0.0057,
+     "memory_kb": 3668,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0249,
+     "wall_s": 0.0266,
+     "memory_kb": 5004,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.2316,
+     "wall_s": 0.2328,
+     "memory_kb": 21260,
+     "feedback": "",
+     "runtime_version": "g++17 13"
+    }
+   ],
+   "judge_seconds": 3.29
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "ok.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.134,
+     "wall_s": 0.16,
+     "memory_kb": 43456,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1206,
+     "wall_s": 0.1379,
+     "memory_kb": 43392,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.2561,
+     "wall_s": 0.2772,
+     "memory_kb": 48772,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.8892,
+     "wall_s": 0.9126,
+     "memory_kb": 75876,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 2.51
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "ok.py",
+   "language": "PY3",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0413,
+     "wall_s": 0.0531,
+     "memory_kb": 10588,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.0475,
+     "wall_s": 0.0566,
+     "memory_kb": 10588,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.114,
+     "wall_s": 0.1256,
+     "memory_kb": 28380,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.9945,
+     "wall_s": 1.0064,
+     "memory_kb": 192708,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 1.47
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "scanner_slow_io.java",
+   "language": "JAVA",
+   "worst": "AC",
+   "points": 100,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1609,
+     "wall_s": 0.1812,
+     "memory_kb": 45596,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 2,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.1566,
+     "wall_s": 0.1721,
+     "memory_kb": 45232,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 3,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 0.5711,
+     "wall_s": 0.593,
+     "memory_kb": 89948,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    },
+    {
+     "case": 4,
+     "verdict": "AC",
+     "codes": [
+      "AC"
+     ],
+     "points": 25,
+     "total": 25,
+     "time_s": 1.5222,
+     "wall_s": 1.5449,
+     "memory_kb": 96384,
+     "feedback": "",
+     "runtime_version": "javac 21.0.12.1"
+    }
+   ],
+   "judge_seconds": 3.61
+  },
+  {
+   "problem": "p08_sort",
+   "answer": "too_much_memory.py",
+   "language": "PY3",
+   "worst": "MLE",
+   "points": 0.0,
+   "total": 100,
+   "cases": [
+    {
+     "case": 1,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.3651,
+     "wall_s": 0.3817,
+     "memory_kb": 263324,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 2,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.3604,
+     "wall_s": 0.3751,
+     "memory_kb": 263444,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 3,
+     "verdict": "IR",
+     "codes": [
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.3731,
+     "wall_s": 0.3872,
+     "memory_kb": 259284,
+     "feedback": "MemoryError",
+     "runtime_version": "python3 3.13.16"
+    },
+    {
+     "case": 4,
+     "verdict": "MLE",
+     "codes": [
+      "MLE",
+      "IR",
+      "WA"
+     ],
+     "points": 0.0,
+     "total": 25,
+     "time_s": 0.5108,
+     "wall_s": 0.529,
+     "memory_kb": 263992,
+     "feedback": "",
+     "runtime_version": "python3 3.13.16"
+    }
+   ],
+   "judge_seconds": 1.85
+  }
+ ]
+}
