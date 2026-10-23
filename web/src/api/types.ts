@@ -1,7 +1,7 @@
 // Types mirror CONTRACT.md exactly. Do not add fields that are not in the contract.
 
 export type Role = "teacher" | "student";
-export type QuestionType = "mcq" | "numeric" | "short" | "essay" | "external" | "code";
+export type QuestionType = "mcq" | "numeric" | "short" | "essay" | "external" | "code" | "fill_blank" | "file_upload";
 export type ExamStatus = "draft" | "live" | "closed";
 export type AttemptStatus = "in_progress" | "submitted";
 /** Slice 3: where students answer — in FairPlay or on another website (SEB-style). */
@@ -15,8 +15,17 @@ export interface ExternalExamFields {
   finish_url_contains: string | null;
 }
 
-/** mcq -> option index, numeric -> number, short -> string. Missing key = not answered. */
-export type AnswerValue = number | string;
+/** mcq -> option index, numeric -> number, short -> string. Missing key = not answered.
+ *  DKU OJ exams (docs/dkuoj-bridge.md §5): mcq multiple -> sorted option indexes,
+ *  fill_blank -> one string per blank, file_upload -> upload ids, code with several
+ *  languages -> {language, source}. */
+export type AnswerValue = number | string | number[] | string[] | CodeAnswer;
+
+/** A coding answer of a question with several languages (DKU OJ key, e.g. "PY3"). */
+export interface CodeAnswer {
+  language: string;
+  source: string;
+}
 export type AnswerMap = Record<string, AnswerValue>;
 
 export interface LoginResponse {
@@ -1132,4 +1141,88 @@ export interface GradingQuestion {
 }
 export interface FeedbackQuestion {
   language?: CodeLanguage;
+}
+
+// ---------- DKU OJ bridge (docs/dkuoj-bridge.md §5, §6) ----------
+
+/** Where an exam comes from. "dkuoj" exams are built and graded in DKU OJ. */
+export type ExamSource = "fairplay" | "dkuoj";
+
+/** How a prompt is written: plain text (FairPlay), DKU OJ markdown, or DKU OJ's sanitized HTML. */
+export type PromptFormat = "plain" | "oj_md" | "oj_html";
+
+/** One language of a DKU OJ coding question. runner null = no in-app runner. */
+export interface OjCodeLanguage {
+  key: string;
+  name: string;
+  runner: CodeLanguage | null;
+}
+
+/** Fields of questions from DKU OJ (all optional: FairPlay questions never have them). */
+export interface OjQuestionFields {
+  prompt_format?: PromptFormat;
+  /** "Q3" (DKU OJ display label) */
+  label?: string;
+  title?: string;
+  /** DKU OJ gives partial credit */
+  partial?: boolean;
+  // mcq
+  multiple?: boolean;
+  true_false?: boolean;
+  // fill_blank
+  blanks?: number;
+  blank_points?: number[];
+  // file_upload
+  allowed_extensions?: string[];
+  max_file_size?: number;
+  /** how many files may be handed in (default 1) */
+  max_files?: number;
+  // code with several languages
+  languages?: OjCodeLanguage[];
+  /** starter code per DKU OJ language key */
+  templates?: Record<string, string>;
+  /** fp-asset name -> URL. Offline packages carry data: URLs here; otherwise the page
+   *  fetches the attempt (or teacher) asset URL. */
+  asset_urls?: Record<string, string>;
+}
+export interface Question extends OjQuestionFields {}
+export interface StudentQuestion extends OjQuestionFields {}
+export interface GradingQuestion extends OjQuestionFields {}
+export interface FeedbackQuestion extends OjQuestionFields {
+  /** DKU OJ feedback (markdown) for this question */
+  feedback_md?: string;
+}
+
+export interface Exam {
+  source?: ExamSource;
+  oj_key?: string | null;
+  /** link to the assignment in DKU OJ (null when the bridge is not configured) */
+  oj_url?: string | null;
+}
+export interface AttemptView {
+  source?: ExamSource;
+}
+export interface OfflineExam {
+  source?: ExamSource;
+}
+export interface Results {
+  source?: ExamSource;
+  oj_url?: string | null;
+}
+export interface GradingQueue {
+  source?: ExamSource;
+  oj_url?: string | null;
+}
+export interface StudentGradeSummary {
+  source?: ExamSource;
+}
+export interface StudentFeedback {
+  source?: ExamSource;
+}
+
+/** A file handed in for a file_upload question (POST /api/student/attempts/{aid}/uploads). */
+export interface AnswerUpload {
+  id: string;
+  name: string;
+  size: number;
 }

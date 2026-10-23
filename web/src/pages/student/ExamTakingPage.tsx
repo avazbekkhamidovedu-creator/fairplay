@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ApiError, NetworkError, currentStudentId, getToken, slice6Api, studentApi } from "../../api/client";
-import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent } from "../../api/types";
+import { ApiError, NetworkError, currentStudentId, getToken, ojApi, slice6Api, studentApi } from "../../api/client";
+import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent, StudentQuestion } from "../../api/types";
+import { OjContent, type ExamLinks } from "../../components/OjContent";
+import { FileUploadInput, FillBlankQuestion } from "../../components/student/OjAnswers";
+import { attemptAssetContext, forgetAssets, prefetchAssets } from "../../lib/ojAssets";
+import { forgetOjNotes, rememberUpload } from "../../lib/ojAnswers";
+import { assetNames, isOjFormat } from "../../lib/ojMarkdown";
+import { isCodeLanguage } from "../../lib/code/languages";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
 import { CodeQuestion, forgetCodeResults } from "../../components/student/CodeQuestion";
@@ -87,9 +93,10 @@ function writeMarks(aid: string, marks: Set<string>): void {
 }
 
 /** 2026-10-23: the "Directions" list under the exam title. */
-export function examDirections(durationMin: number, count: number): string[] {
+export function examDirections(durationMin: number, count: number, totalPoints?: number): string[] {
+  const pts = totalPoints === undefined ? "" : ` · ${totalPoints} ${totalPoints === 1 ? "point" : "points"}`;
   return [
-    `${count} ${count === 1 ? "question" : "questions"} · ${durationMin} minutes.`,
+    `${count} ${count === 1 ? "question" : "questions"}${pts} · ${durationMin} minutes.`,
     "Answer in any order. Use the question list at the bottom to jump between questions.",
     "Mark for review flags a question so you can come back to it.",
     "On multiple choice, the ABC tool lets you cross out answers you think are wrong.",
@@ -279,6 +286,10 @@ function ExamTakingInner() {
       if (doneAid !== attemptId) clearExamPrefs(doneAid);
       forgetCodeResults(attemptId);
       resetSharedRunners();
+      // DKU OJ: pictures in memory, uploaded file names and other-language code
+      forgetAssets(`a:${doneAid}`);
+      forgetOjNotes(attemptId);
+      if (doneAid !== attemptId) forgetOjNotes(doneAid);
       // Sample exam: while the app is still locked the done page keeps the key, so a hand-in the
       // app cannot confirm still has a way out there (it clears the key once unlocked).
       if (trialRef.current && !bridge.isLocked()) writeTrialKey(doneAid, null);
@@ -672,9 +683,17 @@ function ExamTakingInner() {
   // Phase 4: load the runtime of runnable coding questions in idle time (Python is large)
   const runLangs = useMemo(
     () =>
-      [...new Set(questions.filter((x) => x.type === "code" && !x.write_only).map((x) => resolveLanguage(x.language)))].filter(
-        canRunInBrowser,
-      ),
+      [
+        ...new Set(
+          questions
+            .filter((x) => x.type === "code" && !x.write_only)
+            .flatMap((x) =>
+              x.languages?.length
+                ? x.languages.map((l) => l.runner).filter(isCodeLanguage)   // DKU OJ: each runnable language
+                : [resolveLanguage(x.language)],
+            ),
+        ),
+      ].filter(canRunInBrowser),
     [questions],
   );
   const runLangKey = runLangs.join(",");
@@ -737,7 +756,7 @@ function ExamTakingInner() {
     });
 
   // Move focus to the question when the student changes question (not on first show).
-  const promptRef = useRef<HTMLHeadingElement>(null);
+  const promptRef = useRef<HTMLElement>(null);
   const shownRef = useRef(false);
   useEffect(() => {
     if (phase !== "exam") return;
@@ -801,6 +820,33 @@ function ExamTakingInner() {
     calcButtonRef.current?.focus();
   };
   const [pane, setPane] = useState<null | "materials" | "websites">(null);
+  // DKU OJ: a link in a question to an allowed website opens in the Websites panel
+  const [siteRequest, setSiteRequest] = useState<{ url: string; seq: number } | null>(null);
+  const examLinks = useMemo<ExamLinks>(
+    () => ({
+      allowed: [...(attempt?.tools?.websites ?? [])],
+      onOpen: (url) => {
+        setPane("websites");
+        setSiteRequest((r) => ({ url, seq: (r?.seq ?? 0) + 1 }));
+      },
+    }),
+    [attempt?.tools?.websites],
+  );
+  // DKU OJ pictures: from the attempt asset URL (or the offline package's copies)
+  const assetAid = connected ? realAidRef.current : null;
+  const assetsFor = useCallback(
+    (qq: StudentQuestion) => attemptAssetContext(assetAid, qq.asset_urls ?? null),
+    [assetAid],
+  );
+  useEffect(() => {
+    // load every picture while online, so they still show if the Wi-Fi drops
+    if (!attempt || !assetAid) return;
+    for (const qq of attempt.questions) {
+      if (!isOjFormat(qq.prompt_format)) continue;
+      const names = [qq.prompt, ...(qq.options ?? [])].flatMap(assetNames).filter((n) => !qq.asset_urls?.[n]);
+      if (names.length) prefetchAssets(assetsFor(qq), names);
+    }
+  }, [attempt, assetAid, assetsFor]);
   // 2026-10-23: a side panel opens from More; closing it puts the focus back there
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const closePane = () => {
@@ -902,7 +948,42 @@ function ExamTakingInner() {
     !waitPanel && !stopPanel && (phase === "exam" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam"));
   const showReview =
     !waitPanel && !stopPanel && (phase === "review" || (phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current !== "exam"));
-  const typeLabel = q?.type === "essay" ? " · Essay" : q?.type === "code" ? " · Coding" : "";
+  const typeLabel =
+    q?.type === "essay"
+      ? " · Essay"
+      : q?.type === "code"
+        ? " · Coding"
+        : q?.type === "fill_blank"
+          ? " · Fill in the blank"
+          : q?.type === "file_upload"
+            ? " · File upload"
+            : q?.type === "mcq" && q.multiple
+              ? " · Choose all that apply"
+              : "";
+  const ojExam = attempt.source === "dkuoj" || questions.some((x) => isOjFormat(x.prompt_format));
+  const totalPoints = questions.reduce((sum, x) => sum + (Number(x.points) || 0), 0);
+  const promptNode = (qq: StudentQuestion) => (
+    <>
+      <QuestionImages images={qq.images} />
+      {qq.title && isOjFormat(qq.prompt_format) && <p className="stu-qtitle">{qq.title}</p>}
+      {isOjFormat(qq.prompt_format) ? (
+        <OjContent
+          ref={promptRef}
+          id="question-prompt"
+          tabIndex={-1}
+          className="stu-prompt"
+          format={qq.prompt_format}
+          text={qq.prompt}
+          assets={assetsFor(qq)}
+          links={examLinks}
+        />
+      ) : (
+        <h1 id="question-prompt" ref={promptRef as RefObject<HTMLHeadingElement>} tabIndex={-1} className="stu-prompt">
+          {qq.prompt}
+        </h1>
+      )}
+    </>
+  );
 
   const isLast = current === questions.length - 1;
   // 2026-10-23: no calculator or side panel while handing in or once the time is up
@@ -933,7 +1014,9 @@ function ExamTakingInner() {
             ? { count: tools.websites.length, onOpen: () => setPane("websites") }
             : undefined
         }
-        directions={attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length)}
+        directions={
+          attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length, ojExam ? totalPoints : undefined)
+        }
         moreButtonRef={moreButtonRef}
         trial={
           attempt.trial
@@ -1035,9 +1118,16 @@ function ExamTakingInner() {
                 <span className="sr-only">
                   Question {current + 1} of {questions.length}
                 </span>
-                <span className="stu-qhead-pts">
+                <span className="stu-qhead-pts" data-testid="question-points">
+                  {q.label ? `${q.label} · ` : ""}
                   {q.points} {q.points === 1 ? "point" : "points"}
                   {typeLabel}
+                  {q.partial && (
+                    <>
+                      {" · "}
+                      <span className="stu-partial">partial credit</span>
+                    </>
+                  )}
                 </span>
                 <button
                   type="button"
@@ -1049,7 +1139,7 @@ function ExamTakingInner() {
                   <BookmarkIcon />
                   {isMarked ? "Marked for review" : "Mark for review"}
                 </button>
-                {q.type === "mcq" && (
+                {q.type === "mcq" && !q.multiple && !q.true_false && (
                   <button
                     type="button"
                     className="stu-crossout-tool"
@@ -1070,22 +1160,39 @@ function ExamTakingInner() {
                   question={q}
                   value={answers[q.id]}
                   onChange={(v) => setAnswer(q.id, v)}
-                  prompt={
-                    <>
-                      <QuestionImages images={q.images} />
-                      <h1 id="question-prompt" ref={promptRef} tabIndex={-1} className="stu-prompt">
-                        {q.prompt}
-                      </h1>
-                    </>
-                  }
+                  prompt={promptNode(q)}
                 />
-              ) : (
+              ) : q.type === "fill_blank" ? (
                 <>
                   <QuestionImages images={q.images} />
-
-                  <h1 id="question-prompt" ref={promptRef} tabIndex={-1} className="stu-prompt">
-                    {q.prompt}
-                  </h1>
+                  {q.title && <p className="stu-qtitle">{q.title}</p>}
+                  <FillBlankQuestion
+                    key={q.id}
+                    question={q}
+                    value={answers[q.id]}
+                    onChange={(v) => setAnswer(q.id, v)}
+                    labelledBy="question-prompt"
+                    promptRef={promptRef}
+                    assets={assetsFor(q)}
+                    links={examLinks}
+                  />
+                </>
+              ) : q.type === "file_upload" ? (
+                <>
+                  {promptNode(q)}
+                  <FileUploadInput
+                    key={q.id}
+                    question={q}
+                    value={answers[q.id]}
+                    onChange={(v) => setAnswer(q.id, v)}
+                    attemptId={attemptId}
+                    upload={(file) => call((aid) => ojApi.uploadAnswerFile(aid, q.id, file))}
+                    onUploaded={(f) => rememberUpload(attemptId, f)}
+                  />
+                </>
+              ) : (
+                <>
+                  {promptNode(q)}
 
                   {q.type === "essay" && <RubricPanel question={q} />}
 
@@ -1096,6 +1203,8 @@ function ExamTakingInner() {
                     onChange={(v) => setAnswer(q.id, v)}
                     labelledBy="question-prompt"
                     cross={{ on: crossMode, crossed: crossed[q.id] ?? [], onToggle: (i) => toggleCross(q.id, i) }}
+                    assets={assetsFor(q)}
+                    links={examLinks}
                   />
                 </>
               )}
@@ -1286,7 +1395,7 @@ function ExamTakingInner() {
       )}
       {paneShown && pane === "websites" && tools && (
         <ToolPane title="Websites" icon={<GlobeIcon />} labelId="pane-websites-h" width={paneWidth} onWidth={setPaneWidth} onClose={closePane}>
-          <WebsitesPaneContent sites={tools.websites} />
+          <WebsitesPaneContent sites={tools.websites} request={siteRequest} />
         </ToolPane>
       )}
 

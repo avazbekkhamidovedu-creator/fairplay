@@ -4,6 +4,8 @@ import { LETTERS, fmtNum } from "./format";
 import { QuestionImages } from "../QuestionImages";
 import { LANGUAGE_LABEL } from "../../lib/code/languages";
 import "../../styles/code.css";
+import { OjContent } from "../OjContent";
+import { isCodeAnswer } from "../../lib/ojAnswers";
 
 export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "mcq") {
@@ -13,6 +15,8 @@ export function typeLabel(q: Pick<FQ, "type" | "options">): string {
   if (q.type === "numeric") return "Number";
   if (q.type === "short") return "Short answer";
   if (q.type === "code") return "Coding";
+  if (q.type === "fill_blank") return "Fill in the blank";
+  if (q.type === "file_upload") return "File upload";
   return "Essay";
 }
 
@@ -134,6 +138,61 @@ export function FeedbackQuestionCard({ q }: { q: FQ }) {
       {q.comment?.trim() && (
         <div className="stu-teacher-note">
           <strong>Teacher:</strong> {q.comment}
+        </div>
+      )}
+    </article>
+  );
+}
+
+// ---------------------------------------------------------------- DKU OJ bridge
+
+/** A DKU OJ answer in words (the feedback page). */
+export function describeOjAnswer(q: Pick<FQ, "type" | "options" | "multiple">, given: AnswerValue | null | undefined): string {
+  if (given === null || given === undefined || given === "") return "No answer";
+  if (isCodeAnswer(given)) return given.source.trim() ? given.source : "No answer";
+  if (q.type === "mcq" && Array.isArray(given))
+    return given.length
+      ? given.map((i) => (typeof i === "number" ? `${LETTERS[i] ?? i + 1} · ${q.options[i] ?? ""}` : String(i))).join("\n")
+      : "No answer";
+  if (q.type === "mcq" && typeof given === "number") return `${LETTERS[given] ?? given + 1} · ${q.options[given] ?? ""}`;
+  if (q.type === "fill_blank" && Array.isArray(given)) return given.map((s, i) => `${i + 1}. ${String(s) || "—"}`).join("\n");
+  if (q.type === "file_upload" && Array.isArray(given)) return given.length === 1 ? "1 file handed in" : `${given.length} files handed in`;
+  return String(given);
+}
+
+function ojStatus(q: FQ): FQ["status"] {
+  if (q.status) return q.status;
+  if (q.points_awarded >= q.points && q.points > 0) return "correct";
+  return q.points_awarded > 0 ? "partial" : "wrong";
+}
+
+/** One question of a DKU OJ exam on the feedback page: points and DKU OJ's feedback. */
+export function OjFeedbackQuestionCard({ q }: { q: FQ }) {
+  const headId = `fbq-${q.question_id}`;
+  const label = q.label || `Question ${q.index + 1}`;
+  const code = isCodeAnswer(q.given) || q.type === "code";
+  return (
+    <article className="stu-fbq" aria-labelledby={headId} data-testid="oj-feedback-question">
+      <div className="stu-fbq-head">
+        <h2 id={headId}>
+          {label}
+          {q.title ? ` · ${q.title}` : ""}
+        </h2>
+        <StatusPill q={{ ...q, status: ojStatus(q) }} />
+      </div>
+      <OjContent className="stu-fbq-prompt" format={q.prompt_format ?? "oj_md"} text={q.prompt} />
+      <div className={`stu-ans${code ? " code" : ""}`}>
+        <span>YOUR ANSWER{isCodeAnswer(q.given) ? ` · ${q.given.language}` : ""}</span>
+        {code ? (
+          <pre className="stu-fbq-code">{describeOjAnswer(q, q.given)}</pre>
+        ) : (
+          <span style={{ whiteSpace: "pre-wrap" }}>{describeOjAnswer(q, q.given)}</span>
+        )}
+      </div>
+      {q.feedback_md?.trim() && (
+        <div className="fp-oj-feedback" data-testid="oj-feedback">
+          <strong className="stu-small">Feedback</strong>
+          <OjContent format="oj_md" text={q.feedback_md} />
         </div>
       )}
     </article>

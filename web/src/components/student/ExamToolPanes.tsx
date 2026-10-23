@@ -87,7 +87,14 @@ export function MaterialsPaneContent({ attemptId }: { attemptId: string | null }
 export const FRAME_TIMEOUT_MS = 10_000;
 export const BLANK_HINT = "Blank page? This site doesn't allow being shown inside the exam.";
 
-export function WebsitesPaneContent({ sites }: { sites: string[] }) {
+export function WebsitesPaneContent({
+  sites,
+  request,
+}: {
+  sites: string[];
+  /** DKU OJ bridge: a link in a question to an allowed site opens here (seq: each click). */
+  request?: { url: string; seq: number } | null;
+}) {
   // Our own history of what we opened (the frame's own navigation is on another origin).
   const [history, setHistory] = useState<string[]>([]);
   const [index, setIndex] = useState(-1);
@@ -108,6 +115,15 @@ export function WebsitesPaneContent({ sites }: { sites: string[] }) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [current, index, reload]);
+
+  useEffect(() => {
+    if (!request) return;
+    setHistory((h) => [...h.slice(0, index + 1), request.url]);
+    setIndex((i) => i + 1);
+    setListOpen(false);
+    // each request once (index is read at that moment)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.seq]);
 
   const openSite = (host: string) => {
     const url = siteUrl(host);

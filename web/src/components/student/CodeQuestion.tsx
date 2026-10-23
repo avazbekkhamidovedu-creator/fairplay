@@ -3,9 +3,10 @@
 // The language is fixed by the teacher. Hidden tests are never here (the server strips
 // them); nothing on this screen shows a score.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import type { AnswerValue, CodeLanguage, StudentQuestion } from "../../api/types";
+import type { AnswerValue, CodeLanguage, OjCodeLanguage, StudentQuestion } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
-import { LANGUAGE_LABEL, DEFAULT_TIME_LIMIT_MS, canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
+import { LANGUAGE_LABEL, DEFAULT_TIME_LIMIT_MS, canRunInBrowser, isCodeLanguage, resolveLanguage } from "../../lib/code/languages";
+import { codeDrafts, currentLanguage, isCodeAnswer, saveCodeDraft, sourceFor } from "../../lib/ojAnswers";
 import { fmtSeconds, type RunResult } from "../../lib/code/runner";
 import { getRunner } from "../../lib/code/runners";
 import { STATUS_LABEL, runTests, type TestOutcome } from "../../lib/code/runTests";
@@ -48,20 +49,48 @@ export function rememberedCodeResults(): number {
 const DEFAULT_PANEL = 260;
 
 export function codeOf(question: StudentQuestion, value: AnswerValue | undefined): string {
+  if (isCodeAnswer(value)) return value.source;
   return typeof value === "string" ? value : question.starter_code ?? "";
 }
 
+/** DKU OJ bridge: the message for a language FairPlay cannot run in the exam. */
+export const RUNS_AFTER_HAND_IN = "This language runs after you hand in.";
+
+/** Editor colours for a DKU OJ language without a runner (C-like when unknown). */
+export function editorLanguageFor(l: OjCodeLanguage): CodeLanguage {
+  if (l.runner && isCodeLanguage(l.runner)) return l.runner;
+  const k = l.key.toUpperCase();
+  if (k.startsWith("PY")) return "python";
+  if (k === "JS" || k.startsWith("NODE") || k.startsWith("V8")) return "javascript";
+  if (k.startsWith("JAVA")) return "java";
+  if (/^C\d*$/.test(k)) return "c";
+  return "cpp";
+}
+
 export function CodeQuestion({ question, value, onChange, prompt, attemptId = "" }: Props) {
-  const lang: CodeLanguage = resolveLanguage(question.language);
-  const label = LANGUAGE_LABEL[lang];
+  // DKU OJ bridge: a question may allow several languages (the student picks one; the code
+  // of the others is kept on this computer).
+  const ojLangs = question.languages ?? [];
+  const multi = ojLangs.length > 0;
+  const [langKey, setLangKey] = useState(() => currentLanguage(ojLangs, value)?.key ?? "");
+  const ojLang = multi ? (ojLangs.find((l) => l.key === langKey) ?? ojLangs[0]!) : null;
+  const runLang: CodeLanguage | null = ojLang
+    ? ojLang.runner && isCodeLanguage(ojLang.runner)
+      ? ojLang.runner
+      : null
+    : resolveLanguage(question.language);
+  const lang: CodeLanguage = ojLang ? editorLanguageFor(ojLang) : (runLang ?? "python");
+  const label = ojLang ? ojLang.name : LANGUAGE_LABEL[lang];
   const samples = question.tests ?? [];
   const writeOnly = !!question.write_only;
-  const runnable = !writeOnly && canRunInBrowser(lang);
+  const runnable = !writeOnly && runLang !== null && canRunInBrowser(runLang);
   const limit = question.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS;
   const key = memoryKey(attemptId, question.id);
   const mem = memory.get(key);
 
-  const codeRef = useRef(codeOf(question, value));
+  const codeRef = useRef(
+    ojLang ? sourceFor(question, ojLang.key, value, codeDrafts(attemptId, question.id)) : codeOf(question, value),
+  );
   const [tab, setTab] = useState<Tab>(mem?.tab ?? (samples.length ? "samples" : "custom"));
   const [results, setResults] = useState<TestOutcome[] | null>(mem?.samples ?? null);
   const [customInput, setCustomInput] = useState(mem?.customInput ?? "");
@@ -77,13 +106,29 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
   const onCode = useCallback(
     (code: string) => {
       codeRef.current = code;
-      onChange(code.trim() === "" ? undefined : code);
+      if (ojLang) {
+        saveCodeDraft(attemptId, question.id, ojLang.key, code);
+        onChange(code.trim() === "" ? undefined : { language: ojLang.key, source: code });
+      } else onChange(code.trim() === "" ? undefined : code);
     },
-    [onChange],
+    [onChange, ojLang, attemptId, question.id],
   );
 
+  const switchLanguage = (key: string) => {
+    if (!ojLang || key === ojLang.key) return;
+    saveCodeDraft(attemptId, question.id, ojLang.key, codeRef.current);
+    const src = sourceFor(question, key, undefined, codeDrafts(attemptId, question.id));
+    codeRef.current = src;
+    setLangKey(key);
+    setResults(null);
+    setCustom(null);
+    setProblem(null);
+    onChange(src.trim() === "" ? undefined : { language: key, source: src });
+  };
+
   async function runner() {
-    const r = getRunner(lang);
+    if (!runLang) return null;
+    const r = getRunner(runLang);
     if (!r) return null;
     const x = await r;
     setBusy("loading");
@@ -159,7 +204,7 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
   };
 
   const passed = results?.filter((r) => r.status === "pass").length ?? 0;
-  const status = busy === "loading" ? (lang === "python" ? "Loading Python (first run only)…" : "Starting…") : busy === "running" ? "Running…" : null;
+  const status = busy === "loading" ? (runLang === "python" ? "Loading Python (first run only)…" : "Starting…") : busy === "running" ? "Running…" : null;
 
   return (
     <div className="stu-cq" data-testid="code-question">
@@ -188,9 +233,27 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
 
       <section className="stu-cq-right" aria-label="Your code" ref={rightRef}>
         <div className="stu-cq-bar">
-          <span className="stu-cq-lang" data-testid="code-language">
-            {label}
-          </span>
+          {ojLangs.length > 1 ? (
+            <label className="stu-cq-langpick">
+              Language
+              <select
+                data-testid="code-language-picker"
+                value={ojLang?.key}
+                disabled={!!busy}
+                onChange={(e) => switchLanguage(e.target.value)}
+              >
+                {ojLangs.map((l) => (
+                  <option key={l.key} value={l.key}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span className="stu-cq-lang" data-testid="code-language">
+              {label}
+            </span>
+          )}
           <span className="stu-cq-meta">Time limit {fmtSeconds(limit)}</span>
           <span className="stu-spacer" />
           <span className="stu-cq-meta" id={`code-keys-${question.id}`}>
@@ -199,6 +262,7 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
         </div>
         <div className="stu-cq-editor">
           <CodeEditor
+            key={ojLang?.key ?? lang}
             initialValue={codeRef.current}
             language={lang}
             onChange={onCode}
@@ -211,7 +275,9 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
           <div className="stu-cq-note" role="note" data-testid="code-no-run">
             {writeOnly
               ? "Write your answer. It is checked after the exam."
-              : `Run isn't available for ${label} in this exam. Your code is checked after the exam.`}
+              : ojLang
+                ? RUNS_AFTER_HAND_IN
+                : `Run isn't available for ${label} in this exam. Your code is checked after the exam.`}
           </div>
         ) : (
           <>

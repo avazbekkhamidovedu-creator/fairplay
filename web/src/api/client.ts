@@ -679,3 +679,58 @@ export const toolsApi = {
   siteCheck: (host: string) =>
     request<SiteCheck>("teacher", "GET", `/api/tools/site-check?host=${encodeURIComponent(host)}`),
 };
+
+// ---------- DKU OJ bridge (docs/dkuoj-bridge.md §5, §6) ----------
+
+import type { AnswerUpload } from "./types";
+
+/** Server answers for an uploaded file, read leniently (id / upload_id, name / filename, size / bytes). */
+function toAnswerUpload(data: unknown, file: File): AnswerUpload {
+  const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  const id = typeof d.id === "string" ? d.id : typeof d.upload_id === "string" ? d.upload_id : "";
+  if (!id) throw new ApiError(502, "The server did not return the uploaded file.");
+  const name = typeof d.name === "string" ? d.name : typeof d.filename === "string" ? d.filename : file.name;
+  const size = typeof d.size === "number" ? d.size : typeof d.bytes === "number" ? d.bytes : file.size;
+  return { id, name, size };
+}
+
+export const ojApi = {
+  /** A picture of a DKU OJ question during the attempt (attempt owner, exam live). */
+  attemptAsset: (aid: string, name: string) =>
+    fetchBlob("student", `/api/student/attempts/${enc(aid)}/assets/${enc(name)}`),
+  /** The same picture for the teacher. */
+  teacherAsset: (examId: string, name: string) => fetchBlob("teacher", `/api/exams/${enc(examId)}/assets/${enc(name)}`),
+  /** POST multipart "file" + "question_id": a file for a file_upload question. The answer
+   *  keeps the returned id; the server re-uploads it to DKU OJ after the hand-in. */
+  async uploadAnswerFile(aid: string, questionId: string, file: File): Promise<AnswerUpload> {
+    const path = `/api/student/attempts/${enc(aid)}/uploads`;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const token = getToken("student");
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const sess = getAttemptSession(aid);
+    if (sess) headers["X-FairPlay-Session"] = sess;
+    const form = new FormData();
+    form.append("question_id", questionId);
+    form.append("file", file, file.name);
+    let res: Response;
+    try {
+      res = await fetch(path, { method: "POST", headers: withAppHeaders(headers), body: form });
+    } catch {
+      throw new NetworkError();
+    }
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      if (res.status === 401) {
+        clearToken("student");
+        onUnauthorized("student");
+      }
+      throw errorOf(res.status, data, res.statusText || `Error ${res.status}`);
+    }
+    return toAnswerUpload(data, file);
+  },
+};

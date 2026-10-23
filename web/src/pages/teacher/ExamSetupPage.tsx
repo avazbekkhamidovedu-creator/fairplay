@@ -5,6 +5,8 @@ import type { Exam } from "../../api/types";
 import { Loading } from "../../components/Loading";
 import { errorText } from "../../components/teacher/util";
 import { ExamEditor } from "./ExamEditor";
+import { OjEditBanner, isOjExam } from "../../components/teacher/OjNotices";
+import { QuestionsView } from "./QuestionsView";
 
 /** /teacher/exams/new and /teacher/exams/:id/edit */
 export default function ExamSetupPage() {
@@ -44,6 +46,17 @@ export default function ExamSetupPage() {
       </>
     );
   if (!exam) return <Loading label="Loading exam…" />;
+  // DKU OJ bridge: built in DKU OJ, read-only here
+  if (isOjExam(exam))
+    return (
+      <>
+        <Link to={`/teacher/exams/${exam.id}`} className="t-back">
+          ← Back to {exam.title}
+        </Link>
+        <OjEditBanner exam={exam} />
+        <QuestionsView exam={exam} />
+      </>
+    );
   if (exam.status !== "draft")
     return (
       <>

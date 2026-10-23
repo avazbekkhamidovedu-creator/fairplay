@@ -2,6 +2,10 @@ import { useState } from "react";
 import type { AnswerValue, StudentQuestion } from "../../api/types";
 import { LETTERS, fmtNum, wordCount } from "./format";
 import { ChevronRightIcon } from "./icons";
+import type { AssetContext } from "../../lib/ojAssets";
+import { isOjFormat } from "../../lib/ojMarkdown";
+import type { ExamLinks } from "../OjContent";
+import { McqMultiInput, OptionText, TrueFalseInput } from "./OjAnswers";
 
 interface Props {
   question: StudentQuestion;
@@ -11,6 +15,9 @@ interface Props {
   labelledBy: string;
   /** 2026-10-23: cross-out for multiple choice (local only, never graded). */
   cross?: CrossOut;
+  /** DKU OJ questions: pictures and links inside options */
+  assets?: AssetContext | null;
+  links?: ExamLinks | null;
 }
 
 export interface CrossOut {
@@ -22,15 +29,25 @@ export interface CrossOut {
 }
 
 /** The answer control for one question. Remount (key) per question. */
-export function AnswerInput({ question, value, onChange, labelledBy, cross }: Props) {
+export function AnswerInput({ question, value, onChange, labelledBy, cross, assets, links }: Props) {
+  // DKU OJ: several answers (checkboxes) / true or false (two big options)
+  if (question.type === "mcq" && question.multiple)
+    return <McqMultiInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} assets={assets} links={links} />;
+  if (question.type === "mcq" && question.true_false)
+    return <TrueFalseInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} assets={assets} links={links} />;
   if (question.type === "mcq")
-    return <McqInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} cross={cross} />;
+    return (
+      <McqInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} cross={cross} assets={assets} links={links} />
+    );
+  // DKU OJ short answers are graded by the teacher there: room for a few sentences
+  if (question.type === "short" && isOjFormat(question.prompt_format))
+    return <EssayInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} />;
   if (question.type === "numeric") return <NumericInput question={question} value={value} onChange={onChange} />;
   if (question.type === "essay") return <EssayInput question={question} value={value} onChange={onChange} labelledBy={labelledBy} />;
   return <ShortInput question={question} value={value} onChange={onChange} />;
 }
 
-function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
+function McqInput({ question, value, onChange, labelledBy, cross, assets, links }: Props) {
   const count = question.options.length;
   const crossed = new Set(cross?.crossed ?? []);
   const crossOn = !!cross?.on;
@@ -80,7 +97,9 @@ function McqInput({ question, value, onChange, labelledBy, cross }: Props) {
                 <span className="stu-option-letter" aria-hidden="true">
                   {LETTERS[i]}
                 </span>
-                <span className="stu-option-text">{opt}</span>
+                <span className="stu-option-text">
+                  <OptionText question={question} text={opt} assets={assets} links={links} />
+                </span>
               </button>
               {crossOn && cross && (
                 <button

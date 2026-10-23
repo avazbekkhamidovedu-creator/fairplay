@@ -10,6 +10,7 @@ import { LiveRoom } from "./LiveRoom";
 import { QuestionsView } from "./QuestionsView";
 import { ResultsView } from "./ResultsView";
 import { ScanSteps } from "./scan/ScanSteps";
+import { OjEditBanner, isOjExam } from "../../components/teacher/OjNotices";
 
 type Tab = "live" | "questions" | "results" | "scan";
 
@@ -95,6 +96,7 @@ export default function TeacherExamPage() {
   const deleteExam = () => run(() => teacherApi.deleteExam(exam.id), () => navigate("/teacher/exams", { replace: true }));
 
   const st = examStatus(exam);
+  const fromOj = isOjExam(exam);   // DKU OJ: questions and grading live there
   const pending = exam.pending_grading ?? 0;
   const meta = [
     ...(exam.mode === "external"
@@ -122,7 +124,7 @@ export default function TeacherExamPage() {
           <p>{meta.join(" · ")}</p>
         </div>
         <div className="t-head-actions">
-          {exam.status !== "draft" && pending > 0 && (
+          {exam.status !== "draft" && pending > 0 && !fromOj && (
             <Link
               to={exam.delivery === "paper" ? `/teacher/exams/${exam.id}/scan?step=grade` : `/teacher/exams/${exam.id}/grading`}
               className="btn btn-secondary"
@@ -132,9 +134,11 @@ export default function TeacherExamPage() {
           )}
           {exam.status === "draft" && (
             <>
-              <Link to={`/teacher/exams/${exam.id}/edit`} className="btn btn-secondary">
-                Edit
-              </Link>
+              {!fromOj && (
+                <Link to={`/teacher/exams/${exam.id}/edit`} className="btn btn-secondary">
+                  Edit
+                </Link>
+              )}
               {exam.delivery !== "paper" && (
                 <button type="button" className="btn btn-primary" onClick={openExam} disabled={busy}>
                   {busy ? "Opening…" : "Open exam"}
@@ -147,7 +151,7 @@ export default function TeacherExamPage() {
               {busy ? "Opening…" : "Re-open exam"}
             </button>
           )}
-          {exam.status !== "live" && !confirmDelete && (
+          {exam.status !== "live" && !confirmDelete && !fromOj && (
             <button type="button" className="btn btn-danger-outline" onClick={() => setConfirmDelete(true)}>
               Delete
             </button>
@@ -173,6 +177,7 @@ export default function TeacherExamPage() {
           {actionError}
         </div>
       )}
+      {fromOj && <OjEditBanner exam={exam} />}
       {exam.status === "draft" && exam.delivery !== "paper" && (
         <div className="alert alert-info">
           This exam is a draft. When the class is seated, press <strong>Open exam</strong> to get a start code.

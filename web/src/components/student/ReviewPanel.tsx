@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AnswerMap, StudentQuestion } from "../../api/types";
 import { QuestionImages } from "../QuestionImages";
+import { plainSummary } from "../../lib/ojMarkdown";
 
 export function reviewCounts(questions: StudentQuestion[], answers: AnswerMap, marked: ReadonlySet<string>) {
   let answered = 0;
@@ -121,8 +122,8 @@ export function ReviewPanel({ questions, answers, marked, onGoTo, onKeepWorking,
               {attention.map(({ q, i, isMarked, isEmpty }) => (
                 <li key={q.id}>
                   <span className="qn">Q{i + 1}</span>
-                  <span className="qp" title={q.prompt}>
-                    {q.prompt}
+                  <span className="qp" title={plainSummary(q.prompt_format, q.prompt, 400)}>
+                    {plainSummary(q.prompt_format, q.prompt, 400)}
                   </span>
                   <QuestionImages images={q.images} compact label={`Pictures in question ${i + 1}`} />
                   {isMarked && <span className="st marked">Marked</span>}

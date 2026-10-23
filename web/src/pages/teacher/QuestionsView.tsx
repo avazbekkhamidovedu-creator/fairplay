@@ -6,6 +6,11 @@ import { QuestionImages, TopicChips } from "../../components/QuestionImages";
 import { LANGUAGE_LABEL, resolveLanguage } from "../../lib/code/languages";
 import { fmtSeconds } from "../../lib/code/runner";
 import "../../styles/code.css";
+import { OjContent } from "../../components/OjContent";
+import { isOjExam } from "../../components/teacher/OjNotices";
+import { formatSize, extensionList, normalizeExtensions } from "../../lib/ojAnswers";
+import { teacherAssetContext } from "../../lib/ojAssets";
+import { isOjFormat } from "../../lib/ojMarkdown";
 
 const LETTERS = "ABCDEFGH";
 
@@ -47,7 +52,7 @@ export function QuestionsView({ exam }: { exam: Exam }) {
             · {exam.questions.length}
           </span>
         </h2>
-        {exam.status === "draft" && (
+        {exam.status === "draft" && !isOjExam(exam) && (
           <Link to={`/teacher/exams/${exam.id}/edit`} className="t-card-link">
             Edit questions
           </Link>
@@ -64,20 +69,27 @@ export function QuestionsView({ exam }: { exam: Exam }) {
         <ol style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
           {exam.questions.map((q, i) => {
             const kind = kindOf(q);
+            const oj = isOjFormat(q.prompt_format);
+            const assets = oj ? teacherAssetContext(exam.id, q.asset_urls ?? null) : null;
             return (
               <li key={q.id} className="t-q">
                 <div className="t-q-summary">
                   <span className="t-q-num">{String(i + 1).padStart(2, "0")}</span>
                   <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
                     <QuestionImages images={q.images} compact />
-                    <span className="t-q-prompt">{q.prompt}</span>
+                    {oj && q.title && <strong className="t-small">{q.label ? `${q.label} · ` : ""}{q.title}</strong>}
+                    {oj ? (
+                      <OjContent className="t-q-prompt" format={q.prompt_format} text={q.prompt} assets={assets} />
+                    ) : (
+                      <span className="t-q-prompt">{q.prompt}</span>
+                    )}
                     <TopicChips topics={q.topics} />
                     {q.type === "mcq" && kind !== "tf" && (
                       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
                         {q.options.map((o, j) => (
                           <li key={j} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14 }}>
                             <span className="t-opt-letter">{LETTERS[j]}</span>
-                            <span>{o}</span>
+                            {oj ? <OjContent format="oj_md" text={o} inline assets={assets} /> : <span>{o}</span>}
                             {q.correct_index === j && <span className="t-pill green">Correct</span>}
                           </li>
                         ))}
@@ -126,9 +138,12 @@ export function QuestionsView({ exam }: { exam: Exam }) {
                         )}
                       </>
                     )}
-                    {q.type === "code" && <CodeSummary q={q} examDefault={exam.default_language} />}
+                    {q.type === "code" && !q.languages?.length && <CodeSummary q={q} examDefault={exam.default_language} />}
+                    {oj && <OjSummary q={q} />}
                     <span className="t-q-meta">
-                      {KIND_LABEL[kind]} · {q.points} {q.points === 1 ? "pt" : "pts"}
+                      {KIND_LABEL[kind]}
+                      {q.type === "mcq" && q.multiple ? " · several answers" : ""} · {q.points} {q.points === 1 ? "pt" : "pts"}
+                      {q.partial ? " · partial credit" : ""}
                     </span>
                   </div>
                 </div>
@@ -185,4 +200,39 @@ function CodeSummary({ q, examDefault }: { q: Exam["questions"][number]; examDef
       )}
     </div>
   );
+}
+
+/** DKU OJ bridge: what a DKU OJ question asks for (no answer keys exist in FairPlay). */
+function OjSummary({ q }: { q: Exam["questions"][number] }) {
+  if (q.type === "fill_blank") {
+    const n = q.blanks ?? 0;
+    return (
+      <span className="t-small">
+        {n === 1 ? "1 blank" : `${n} blanks`}
+        {q.blank_points?.length ? ` · ${q.blank_points.join(" / ")} pts` : ""}
+      </span>
+    );
+  }
+  if (q.type === "file_upload") {
+    const exts = normalizeExtensions(q.allowed_extensions);
+    return (
+      <span className="t-small">
+        {exts.length ? `${extensionList(exts)} files` : "Any file type"}
+        {q.max_file_size ? ` · up to ${formatSize(q.max_file_size)}` : ""}
+      </span>
+    );
+  }
+  if (q.type === "code" && q.languages?.length) {
+    const tests = q.tests ?? [];
+    return (
+      <div className="t-code-summary">
+        <span className="t-small">
+          <strong>{q.languages.map((l) => l.name).join(", ")}</strong> · {tests.length}{" "}
+          {tests.length === 1 ? "sample" : "samples"} · time limit {fmtSeconds(q.time_limit_ms ?? 2000)}
+          {q.languages.some((l) => !l.runner) ? " · some languages run only in DKU OJ" : ""}
+        </span>
+      </div>
+    );
+  }
+  return null;
 }

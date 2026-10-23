@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, NetworkError, studentApi } from "../../api/client";
 import type { StudentFeedback } from "../../api/types";
-import { FeedbackQuestionCard } from "../../components/student/FeedbackQuestion";
+import { FeedbackQuestionCard, OjFeedbackQuestionCard } from "../../components/student/FeedbackQuestion";
 import { fmtNum, fmtPercent, shortDate } from "../../components/student/format";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 
@@ -95,9 +95,18 @@ function Feedback({ data }: { data: StudentFeedback }) {
           </span>
         </div>
       </section>
-      {questions.map((q) => (
-        <FeedbackQuestionCard key={q.question_id} q={q} />
-      ))}
+      {data.source === "dkuoj" && (
+        <p className="stu-small stu-muted" style={{ margin: 0 }} data-testid="oj-graded-note">
+          Graded in DKU OJ.
+        </p>
+      )}
+      {questions.map((q) =>
+        data.source === "dkuoj" ? (
+          <OjFeedbackQuestionCard key={q.question_id} q={q} />
+        ) : (
+          <FeedbackQuestionCard key={q.question_id} q={q} />
+        ),
+      )}
     </>
   );
 }

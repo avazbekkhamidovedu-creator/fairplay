@@ -16,6 +16,8 @@ import { errorText, eventLabel, formatWhen, num, pct } from "../../components/te
 import { KIND_LABEL, kindOf } from "./examDraft";
 import { formatGiven } from "./ResultsView";
 import "../../styles/code.css";
+import { OjContent } from "../../components/OjContent";
+import { isOjFormat } from "../../lib/ojMarkdown";
 
 const LETTERS = "ABCDEFGH";
 
@@ -339,7 +341,10 @@ function ReviewItem({
         {status}
       </div>
       {!isExternal && <QuestionImages images={q?.images} compact />}
-      {!isExternal && q?.prompt && <p className="t-review-prompt">{q.prompt}</p>}
+      {!isExternal && q?.prompt && isOjFormat(q.prompt_format) && (
+        <OjContent className="t-review-prompt" format={q.prompt_format} text={q.prompt} />
+      )}
+      {!isExternal && q?.prompt && !isOjFormat(q.prompt_format) && <p className="t-review-prompt">{q.prompt}</p>}
       {!isExternal && <TopicChips topics={q?.topics} />}
       {!isExternal && (
         <div className="t-review-answers">
