@@ -6,7 +6,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AnswerValue, Exam, StudentQuestion } from "../api/types";
+import type { AnswerValue, Exam, Results, StudentQuestion } from "../api/types";
 import { ApiError, getToken, contentApi, setToken, teacherApi } from "../api/client";
 import { AnswerInput } from "../components/student/AnswerInput";
 import { CodeQuestion } from "../components/student/CodeQuestion";
@@ -175,5 +175,42 @@ describe("external exam before its questions arrive", () => {
     );
     expect(await screen.findByTestId("external-package-waiting")).toHaveTextContent("24 hours before the start");
     expect(screen.getByRole("button", { name: "Open exam" })).toBeDisabled();
+  });
+});
+
+describe("one student's page of an externally graded exam (the report link target)", () => {
+  it("shows the answers with a Graded in banner and no grade inputs", async () => {
+    setToken("teacher", "T");
+    const external = { source: "campusjudge", name: "Campus Judge", url: "https://judge.example.edu/contest/m",
+      read_only: true, graded_externally: true, package_ready: true };
+    vi.spyOn(teacherApi, "getExam").mockResolvedValue({
+      id: "e_1", title: "Midterm", duration_min: 90, status: "closed", start_code: null, created_at: "",
+      questions: [{ id: "q_1", type: "short", prompt: "Explain **hashing**", points: 10, options: [], prompt_format: "markdown",
+        accepted_answers: [], rubric: [], images: [], topics: [] }],
+      question_count: 1, total_points: 10, course: "", room: "", scheduled_at: null, shuffle_questions: false,
+      grades_released: false, released_at: null, closed_at: null, pending_grading: 0, external,
+    } as unknown as Exam);
+    vi.spyOn(teacherApi, "results").mockResolvedValue({
+      exam_id: "e_1", title: "Midterm", course: "", total_points: 10, average_percent: null, median_percent: null,
+      grades_released: false, released_at: null, pending_grading: 0, submitted_count: 1, attempt_count: 1,
+      flags_total: 0, flags_open: 0, score_buckets: [], questions: [], external,
+      attempts: [{ attempt_id: "a_1", username: "ax19", name: "Avazbek", status: "submitted", auto_submitted: false,
+        score: 0, total_points: 10, percent: 0, submitted_at: "2026-11-27T02:00:00Z", receipt: "R1", events: [],
+        needs_grading: 0, overall_comment: "", flag_count: 0,
+        answers: [{ question_id: "q_1", given: "It spreads keys.", correct: false, points_awarded: 0, max_points: 10,
+          manual: false, pending: true, comment: "", rubric_scores: null }] }],
+    } as unknown as Results);
+    const { default: SubmissionReviewPage } = await import("../pages/teacher/SubmissionReviewPage");
+    render(
+      <MemoryRouter initialEntries={["/teacher/exams/e_1/submissions/a_1"]}>
+        <Routes>
+          <Route path="/teacher/exams/:id/submissions/:attemptId" element={<SubmissionReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("external-graded-banner")).toHaveTextContent("Graded in Campus Judge");
+    expect(screen.getByText("It spreads keys.", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton")).toBeNull();
+    expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
   });
 });
