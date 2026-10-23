@@ -332,3 +332,14 @@
   background: var(--surface-2);
   border: 1px solid var(--divider);
 }
+
+/* 2026-10-24: a fill-in blank shown without an input (teacher views, review) */
+.fp-blank-view {
+  display: inline-block;
+  min-width: 3.5em;
+  color: transparent;
+  border-bottom: 1.5px solid currentColor;
+  border-bottom-color: var(--t-text-3, #8a8f98);
+  line-height: 1;
+  user-select: none;
+}

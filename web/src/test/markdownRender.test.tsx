@@ -75,6 +75,15 @@ describe("markdown", () => {
     expect(renderMarkdown("A ___ here").blankCount).toBe(0);
   });
 
+  it("without inputs a blank still shows as a line (it used to vanish as empty emphasis)", () => {
+    const r = renderMarkdown("Binary search runs in O(___) time; a hash table lookup in O(___).");
+    expect(r.blankCount).toBe(0);
+    const d = dom(r.html);
+    expect(d.querySelectorAll(".fp-blank-view")).toHaveLength(2);
+    expect(d.querySelector("em")).toBeNull();
+    expect(d.querySelectorAll("[data-fp-blank]")).toHaveLength(0);
+  });
+
   it("finds fp-asset names and makes plain summaries", () => {
     expect(assetNames("![c](fp-asset:cell.png) and ![d](fp-asset:my%20pic.jpg)")).toEqual(["cell.png", "my pic.jpg"]);
     expect(plainSummary("markdown", "Find **x** where ~x^2 = 4~")).toMatch(/^Find x where/);

@@ -130,7 +130,8 @@ function mathBlock(state: StateBlock, startLine: number, endLine: number, silent
 }
 
 function blankInline(state: StateInline, silent: boolean): boolean {
-  if (!(state.env as Env).blanksOn) return false;
+  // Always recognised (2026-10-24): otherwise "___" became empty emphasis and the blank
+  // vanished from the text wherever there is no input (teacher views, review, results).
   const src = state.src;
   const start = state.pos;
   if (src.charCodeAt(start) !== 0x5f /* _ */) return false;
@@ -174,8 +175,10 @@ function makeMd(): MarkdownIt {
     placeholder(env, tokens[idx]!.content, !!(tokens[idx]!.meta as { display: boolean }).display);
   md.renderer.rules.fp_math_block = (tokens, idx, _o, env: Env) =>
     `<div class="fp-md-display">${placeholder(env, tokens[idx]!.content, true)}</div>\n`;
-  md.renderer.rules.fp_blank = (tokens, idx) =>
-    `<span data-fp-blank="${(tokens[idx]!.meta as { index: number }).index}"></span>`;
+  md.renderer.rules.fp_blank = (tokens, idx, _o, env: Env) =>
+    env.blanksOn
+      ? `<span data-fp-blank="${(tokens[idx]!.meta as { index: number }).index}"></span>`
+      : `<span class="fp-blank-view" aria-label="blank ${(tokens[idx]!.meta as { index: number }).index + 1}">______</span>`;
   // markdown-it refuses unknown link schemes only for javascript:/vbscript:/file:/data:
   // (except images); fp-asset: passes and is handled by the sanitizer hook below.
   return md;
