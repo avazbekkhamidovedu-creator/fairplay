@@ -822,7 +822,8 @@ source-agnostic). Code: `server/app/integrations/` (`base.py` = `ExternalSource`
 `server/app/question_types.py` (the extended question types), `server/app/answer_files.py`.
 DKU OJ settings are read only by `integrations/dkuoj/config.py`: `DKUOJ_URL`, `DKUOJ_TOKEN` (both
 set = connected), `DKUOJ_SYNC_SECONDS` (120), `DKUOJ_DELIVERY_RPS` (10). `FAIRPLAY_PUBLIC_URL`
-(FairPlay's own address) makes report links absolute; DKU OJ drops links that are not http(s).
+(FairPlay's own address) makes report links absolute (`<it>/teacher/exams/<id>/submissions/<aid>`);
+DKU OJ drops links that are not http(s).
 A switched-off integration keeps its exams readable as read-only archives (they cannot start).
 
 ### Extended question types (FairPlay types, usable by FairPlay's own editor later)
@@ -874,7 +875,9 @@ ids of external exams are opaque (`q_` + 16 hex).
   `X-FairPlay-Session`) → 201 `{id, question_id, name, size, sha256, created_at}` (extension / size
   checked); `GET .../files/{id}` → the bytes.
 - **Assets** `fp-asset:<name>` → `GET /api/student/attempts/{aid}/assets/<name>` (Bearer +
-  `X-FairPlay-Session`; attempt owner, exam live or attempt in progress; ETag = sha256).
+  `X-FairPlay-Session`; attempt owner, exam live or attempt in progress; ETag = sha256), and for
+  the student's released grade page `GET /api/student/grades/{exam_id}/assets/<name>` (Bearer
+  only; 404 unless the source released that student's result).
 - **Live-room link**: `GET /integrations/<source>/live?…` (DKU OJ: contract §1 parameters) → 303
   `/teacher/external-live?code=<one-time, 60 s>`; `POST /api/integrations/live/exchange {code}` →
   `{token, role: "teacher", name, username, exam_id}`. Each signed link works once.
