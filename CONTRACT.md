@@ -943,3 +943,10 @@ Generic for every exam (FairPlay and external). Code: `server/app/access.py` (op
 - Opening stays manual. Re-opening a FairPlay exam after its close time clears `closes_at` (the
   teacher closes it by hand); an external exam whose source end time has passed can't be opened
   (409 `"The end time set in <name> has passed. …"`).
+- Review fixes (2026-10-23): a never-opened (draft) FairPlay exam whose close time has passed is
+  not opened (409 `"The automatic close time has passed. …"`); `ExamIn.closes_at` must be after
+  `scheduled_at` when both are sent (422). `PUT /open-to` with nothing to add or remove keeps
+  `"all"`. A close that stopped between the status flip and the hand-in (crash) is finished by
+  the loop: exams closed in the last 2 days (and over 30 s ago) with attempts still writing get
+  them handed in (outbox rows for external exams). DKU OJ moving its end time later while the
+  exam is live moves the capped deadlines of running attempts with it (never shorter).

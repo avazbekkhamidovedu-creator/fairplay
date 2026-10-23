@@ -480,6 +480,13 @@ class ExamIn(BaseModel):
             v = v.astimezone(timezone.utc).replace(tzinfo=None)
         return v
 
+    @model_validator(mode="after")
+    def _close_after_start(self) -> "ExamIn":
+        # 2026-10-23: an automatic close before the planned start would close it at once
+        if self.closes_at is not None and self.scheduled_at is not None and self.closes_at <= self.scheduled_at:
+            raise ValueError("closes_at must be after scheduled_at (the automatic close comes after the start)")
+        return self
+
     @field_validator("allowed_domains")
     @classmethod
     def _domains(cls, v: list[str]) -> list[str]:

@@ -231,6 +231,9 @@ async def open_exam(exam_id: str, body: OpenIn | None = None, p: Principal = Dep
         if integ is not None:        # the source owns the end time
             raise HTTPException(409, f"The end time set in {integ.name} has passed. "
                                      f"Change it in {integ.name} to open the exam again.")
+        if e.status == "draft":      # never opened: the setting is a mistake, not a past run
+            raise HTTPException(409, "The automatic close time has passed. Change or clear "
+                                     "\"Close automatically at\" in the exam settings.")
         e.closes_at = None           # re-opened after its close time: the teacher closes it
     e.open_to = await _checked_open_to(session, e, (body or OpenIn()).open_to)
     e.status = "live"
@@ -279,8 +282,8 @@ async def update_open_to(exam_id: str, body: OpenToIn, p: Principal = Depends(re
     if body.open_to is not None:
         value = body.open_to
     else:
-        if e.open_to is None and body.add and not body.remove:
-            value = "all"            # adding to "everyone" changes nothing
+        if e.open_to is None and not body.remove:
+            value = "all"            # adding to "everyone" (or nothing) changes nothing
         else:
             base = set(e.open_to or []) if e.open_to is not None else \
                 {sid for sid, _, _ in await eligible_students(session, e)}

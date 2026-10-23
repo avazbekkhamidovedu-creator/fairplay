@@ -213,6 +213,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
                  total_points=0.0, title="", duration_min=60, allowed_apps=[], allowed_domains=[],
                  external_meta={})
         session.add(e)
+    old_end = _time((e.external_meta or {}).get("end_time"))
     for k in KEEP_META:
         if k in (e.external_meta or {}):
             meta[k] = e.external_meta[k]
@@ -235,7 +236,31 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     await _replace(session, OjEditor, e.id, {u.id: {} for u in editors})
     await _replace(session, OjRosterEntry, e.id, {u.id: {"extra_time_seconds": x} for u, x in students})
     await _classes(session, e, item, [u for u, _ in students])
+    new_end = _time(meta.get("end_time"))
+    if e.status == "live" and old_end is not None and new_end is not None and new_end > old_end:
+        e.moved_attempts = await follow_end_time(session, e, new_end)
     return e
+
+
+async def follow_end_time(session: AsyncSession, e: Exam, new_end: datetime) -> list[str]:
+    """2026-10-23: DKU OJ moved the end time later while the exam runs. Attempts whose
+    deadline was capped at the old end time get the new cap (start + duration + extra,
+    never past the new end + extra); a deadline is never made shorter here. Returns the
+    attempt ids changed (their cached deadline is dropped after the commit)."""
+    from ...models import Attempt
+    extras = dict((await session.execute(select(OjRosterEntry.user_id, OjRosterEntry.extra_time_seconds)
+                                         .where(OjRosterEntry.exam_id == e.id))).all())
+    rows = (await session.execute(select(Attempt.id, Attempt.student_id, Attempt.started_at, Attempt.deadline_at)
+                                  .where(Attempt.exam_id == e.id, Attempt.status == "in_progress"))).all()
+    moved = []
+    for aid, sid, started, deadline in rows:
+        extra = timedelta(seconds=max(0, int(extras.get(sid) or 0)))
+        want = min(started + timedelta(minutes=e.duration_min) + extra, new_end + extra)
+        if want > deadline:
+            await session.execute(update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress")
+                                  .values(deadline_at=want))
+            moved.append(aid)
+    return moved
 
 
 async def _replace(session: AsyncSession, model, exam_id: str, wanted: dict[int, dict]) -> None:
@@ -300,6 +325,10 @@ async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> i
                 if e is not None:
                     n += 1
                     await invalidate_exam(get_store(), e.id)
+                    moved = getattr(e, "moved_attempts", None)
+                    if moved:      # the end time moved later: heartbeats re-read the deadline
+                        from ...services import attempt_key
+                        await get_store().delete(*[attempt_key(a) for a in moved])
             up = item.get("updated_at")
             if isinstance(up, str) and (newest is None or _time(up) and _time(up) > (_time(newest) or datetime.min)):
                 newest = up

@@ -333,7 +333,18 @@ export function validateDraft(d: DraftExam): DraftErrors {
   if (d.course.length > 64) errors.course = "Keep the course under 64 characters.";
   if (d.room.length > 64) errors.room = "Keep the room under 64 characters.";
   if (d.time.trim() && !d.date.trim()) errors.schedule = "Pick a date for the start time.";
-  if ((d.closeTime ?? "").trim() && !(d.closeDate ?? "").trim()) errors.closes = "Pick a date for the automatic close.";
+  const closeDate = (d.closeDate ?? "").trim();
+  const closeTime = (d.closeTime ?? "").trim();
+  if (d.delivery !== "paper") {
+    // 2026-10-23: no 09:00 default for the close (a date alone would close it that morning)
+    if (closeTime && !closeDate) errors.closes = "Pick a date for the automatic close.";
+    else if (closeDate && !closeTime) errors.closes = "Pick a time for the automatic close.";
+    else if (closeDate) {
+      const closes = joinSchedule(closeDate, closeTime);
+      const startsAt = joinSchedule(d.date, d.time);
+      if (closes && startsAt && closes <= startsAt) errors.closes = "The automatic close must be after the start time.";
+    }
+  }
   if (d.external.mode === "external") {
     const ext = validateExternalSettings(d.external);
     if (Object.keys(ext).length) errors.external = ext;

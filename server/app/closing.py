@@ -17,7 +17,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import false, func, or_, select, update
+from sqlalchemy import exists, false, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,8 +122,25 @@ def _candidates():
             or_(Exam.closes_at.is_not(None), Exam.source != FAIRPLAY))
 
 
-async def any_candidate(session: AsyncSession) -> bool:
-    return (await session.execute(select(Exam.id).where(*_candidates()).limit(1))).first() is not None
+# A close that stopped between the status flip and the hand-in (worker crash, database
+# error) leaves attempts writing in a closed exam; the loop hands them in later. Only exams
+# closed in the last LEFTOVER_WINDOW (cheap: the exam_id index), and not ones closing now.
+LEFTOVER_WINDOW = timedelta(days=2)
+LEFTOVER_AFTER = timedelta(seconds=30)
+
+
+def _leftovers(now: datetime):
+    return (Exam.status == "closed", Exam.is_trial == false(),
+            Exam.closed_at.is_not(None), Exam.closed_at >= now - LEFTOVER_WINDOW,
+            Exam.closed_at <= now - LEFTOVER_AFTER,
+            exists().where(Attempt.exam_id == Exam.id, Attempt.status == "in_progress"))
+
+
+async def any_candidate(session: AsyncSession, now: datetime | None = None) -> bool:
+    now = now or utcnow()
+    if (await session.execute(select(Exam.id).where(*_candidates()).limit(1))).first() is not None:
+        return True
+    return (await session.execute(select(Exam.id).where(*_leftovers(now)).limit(1))).first() is not None
 
 
 async def run_once(sessionmaker, now: datetime | None = None) -> list[str]:
@@ -141,6 +158,18 @@ async def run_once(sessionmaker, now: datetime | None = None) -> list[str]:
             except Exception:  # noqa: BLE001 -- one exam's trouble never stops the others
                 await session.rollback()
                 log.exception("automatic close of %s", e.id)
+        leftovers = (await session.execute(
+            select(Exam).where(*_leftovers(now)).order_by(Exam.id))).scalars().all()
+        for e in leftovers:
+            try:
+                rows = await sweep_in_progress(session, e, now, automatic=bool(e.auto_closed))
+                if rows:
+                    await get_store().delete(*[attempt_key(r[0]) for r in rows])
+                    log.warning("exam %s: %d attempt(s) still writing after the close, handed in",
+                                e.id, len(rows))
+            except Exception:  # noqa: BLE001
+                await session.rollback()
+                log.exception("hand-in after the close of %s", e.id)
     return closed
 
 
