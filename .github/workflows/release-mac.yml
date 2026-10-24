@@ -153,27 +153,27 @@ jobs:
           fi
           hdiutil verify FairPlay-Mac.dmg
 
-      # The code repo is private; students download from the public khamidov17/fairplay-download.
-      # Needs the secret PUBLIC_RELEASE_TOKEN (fine-grained, Contents read/write on fairplay-download).
+      # The code repo is private; students download from the public
+      # avazbekkhamidovedu-creator/fairplay-download. Needs the secret DOWNLOAD_TOKEN
+      # (fine-grained, Contents read/write on that repository).
       - name: Publish to fairplay-download
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::error::DOWNLOAD_TOKEN not set: students can't download this version"; exit 1; fi
+          sed 's#avazbekkhamidovedu-creator/fairplay/releases#avazbekkhamidovedu-creator/fairplay-download/releases#g' RELEASES.md > notes.md
+          bash scripts/publish-download.sh avazbekkhamidovedu-creator/fairplay-download "$TAG" notes.md FairPlay-Mac.dmg FairPlay-Mac.zip
+      # Bridge (2026-10-25): apps up to 0.7.0 check only khamidov17/fairplay-download, so the
+      # release that moves them to the new address is copied there too. Delete the secret
+      # PUBLIC_RELEASE_TOKEN once installed apps have updated; this step then does nothing.
+      - name: Bridge copy to the old download repo
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then echo "::error::PUBLIC_RELEASE_TOKEN not set: students can't download this version"; exit 1; fi
-          R=khamidov17/fairplay-download
-          sed 's#khamidov17/fairplay/releases#khamidov17/fairplay-download/releases#g' RELEASES.md > notes.md
-          if ! gh release view "$TAG" -R $R >/dev/null 2>&1; then
-            if ! out=$(gh release create "$TAG" -R $R --title "FairPlay $TAG" --notes-file notes.md 2>&1); then
-              gh release view "$TAG" -R $R >/dev/null 2>&1 || {   # not created meanwhile by another workflow
-                echo "$out"; echo "::error::Creating release $TAG on $R failed: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"
-                echo "::error::PUBLIC_RELEASE_TOKEN needs Repository access to khamidov17/fairplay-download with Contents read and write"
-                exit 1; }
-            fi
-          fi
-          if ! out=$(gh release upload "$TAG" -R $R FairPlay-Mac.dmg FairPlay-Mac.zip --clobber 2>&1); then
-            echo "$out"; echo "::error::Upload to $R failed: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"; exit 1
-          fi
+          if [ -z "$GH_TOKEN" ]; then echo "PUBLIC_RELEASE_TOKEN not set: no copy to the old download repo"; exit 0; fi
+          bash scripts/publish-download.sh khamidov17/fairplay-download "$TAG" notes.md FairPlay-Mac.dmg FairPlay-Mac.zip
 
       - name: Keep the zip (manual runs)
         if: github.event_name != 'push'

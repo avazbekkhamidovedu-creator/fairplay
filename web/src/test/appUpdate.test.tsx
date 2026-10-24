@@ -157,7 +157,7 @@ describe("update line in the Test my device card", () => {
     act(() => send({ type: "updateFailed", reason }));
     expect(screen.getByRole("alert").textContent).toBe("Download the new version from the download page.");
     const link = screen.getByRole("link", { name: "download page" });
-    expect(link.getAttribute("href")).toBe("https://github.com/khamidov17/fairplay-download/releases/latest");
+    expect(link.getAttribute("href")).toBe("https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest");
     fireEvent.click(link);
     expect(posted.some((m) => m.action === "openDownloadPage")).toBe(true);
   });

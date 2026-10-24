@@ -257,7 +257,7 @@ export function parseUpdateFailure(reason: unknown): UpdateFailure {
 }
 
 /** Public page with every FairPlay download. */
-export const DOWNLOAD_PAGE = "https://github.com/khamidov17/fairplay-download/releases/latest";
+export const DOWNLOAD_PAGE = "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest";
 
 /** 2026-10-22: ask the Mac or Windows app to download, verify and install the update it offered
  *  (state.update). It answers updateProgress / updateFailed, or quits and reopens updated.

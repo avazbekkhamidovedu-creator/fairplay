@@ -13,9 +13,9 @@ private func releaseJSON(tag: String = "v0.5.4",
                          digest: String? = goodDigest,
                          draft: Bool = false,
                          prerelease: Bool = false) -> Data {
-    let dl = url ?? "https://github.com/khamidov17/fairplay-download/releases/download/\(tag)/\(assetName)"
+    let dl = url ?? "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/\(tag)/\(assetName)"
     var mac: [String: Any] = [
-        "url": "https://api.github.com/repos/khamidov17/fairplay-download/releases/assets/301",
+        "url": "https://api.github.com/repos/avazbekkhamidovedu-creator/fairplay-download/releases/assets/301",
         "id": 301, "name": assetName, "label": "", "content_type": "application/zip",
         "state": "uploaded", "size": 9_876_543, "download_count": 12,
         "created_at": "2026-10-22T08:00:00Z", "updated_at": "2026-10-22T08:00:05Z",
@@ -23,17 +23,17 @@ private func releaseJSON(tag: String = "v0.5.4",
     ]
     if let digest { mac["digest"] = digest }
     let obj: [String: Any] = [
-        "url": "https://api.github.com/repos/khamidov17/fairplay-download/releases/200",
-        "html_url": "https://github.com/khamidov17/fairplay-download/releases/tag/\(tag)",
+        "url": "https://api.github.com/repos/avazbekkhamidovedu-creator/fairplay-download/releases/200",
+        "html_url": "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/tag/\(tag)",
         "id": 200, "tag_name": tag, "target_commitish": "main", "name": "FairPlay \(tag)",
         "draft": draft, "prerelease": prerelease,
         "created_at": "2026-10-22T07:59:00Z", "published_at": "2026-10-22T08:01:00Z",
         "assets": [
             mac,
             ["id": 302, "name": "FairPlay-Mac.dmg", "state": "uploaded", "digest": goodDigest,
-             "browser_download_url": "https://github.com/khamidov17/fairplay-download/releases/download/\(tag)/FairPlay-Mac.dmg"],
+             "browser_download_url": "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/\(tag)/FairPlay-Mac.dmg"],
             ["id": 303, "name": "FairPlay-Windows-Setup.exe", "state": "uploaded", "digest": goodDigest,
-             "browser_download_url": "https://github.com/khamidov17/fairplay-download/releases/download/\(tag)/FairPlay-Windows-Setup.exe"],
+             "browser_download_url": "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/\(tag)/FairPlay-Windows-Setup.exe"],
         ],
         "body": "Fixes.",
     ]
@@ -44,7 +44,7 @@ private func releaseJSON(tag: String = "v0.5.4",
     @Test func validReleaseParses() {
         let r = Updater.parseRelease(json: releaseJSON())
         #expect(r?.version == "0.5.4")
-        #expect(r?.zipURL.absoluteString == "https://github.com/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip")
+        #expect(r?.zipURL.absoluteString == "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip")
         #expect(r?.sha256 == String(repeating: "ab12", count: 16))
     }
 
@@ -73,16 +73,17 @@ private func releaseJSON(tag: String = "v0.5.4",
 
     @Test func foreignURLsAreRefused() {
         let bad = [
-            "https://evil.example/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
-            "http://github.com/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
+            "https://evil.example/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
+            "https://github.com/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",  // old download repo (before 0.7.1)
+            "http://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
             "https://github.com/someone/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
-            "https://github.com/khamidov17/fairplay-download/releases/download/v0.5.3/FairPlay-Mac.zip",
-            "https://github.com/khamidov17/fairplay-download/releases/download/v0.5.4/../../x/FairPlay-Mac.zip",
-            "https://github.com.evil.example/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
-            "https://user@github.com/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
-            "https://github.com:8443/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
-            "https://objects.githubusercontent.com/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
-            "https://github.com/khamidov17/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip?x=1",
+            "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.3/FairPlay-Mac.zip",
+            "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/../../x/FairPlay-Mac.zip",
+            "https://github.com.evil.example/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
+            "https://user@github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
+            "https://github.com:8443/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
+            "https://objects.githubusercontent.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip",
+            "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.5.4/FairPlay-Mac.zip?x=1",
         ]
         for u in bad {
             #expect(Updater.parseRelease(json: releaseJSON(url: u)) == nil, "url \(u)")

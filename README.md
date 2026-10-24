@@ -4,9 +4,9 @@
 
 | Computer | Download |
 |---|---|
-| Mac (Apple Silicon or Intel) | [FairPlay-Mac.dmg](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-Mac.dmg) |
-| Windows 10/11 | [FairPlay-Windows-Setup.exe](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-Windows-Setup.exe) |
-| iPad (test build) | [FairPlay-iPad.ipa](https://github.com/khamidov17/fairplay-download/releases/latest/download/FairPlay-iPad.ipa) (install with Sideloadly / AltStore, see RELEASES.md) |
+| Mac (Apple Silicon or Intel) | [FairPlay-Mac.dmg](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Mac.dmg) |
+| Windows 10/11 | [FairPlay-Windows-Setup.exe](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Windows-Setup.exe) |
+| iPad (test build) | [FairPlay-iPad.ipa](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-iPad.ipa) (install with Sideloadly / AltStore, see RELEASES.md) |
 
 Install steps (the apps are not signed yet, so macOS and Windows ask once): [RELEASES.md](RELEASES.md).
 Releases are built by `.github/workflows/release-mac.yml`, `.github/workflows/ipad.yml` (and the Windows repo's `release.yml`)

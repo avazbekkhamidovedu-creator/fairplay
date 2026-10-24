@@ -737,21 +737,21 @@ lock, heartbeats and app beats. Not related to practice assignments (`/api/pract
 
 ## In-app update (Mac app) (2026-10-22)
 Release builds of the Mac app update themselves from the public download repo
-(`khamidov17/fairplay-download`, GitHub Releases, tag `vX.Y.Z`). Dev builds never check.
+(`avazbekkhamidovedu-creator/fairplay-download`, GitHub Releases, tag `vX.Y.Z`). Dev builds never check.
 - **Check:** a few seconds after launch, then every 6 h (1 h after a failed check; skipped while
-  locked): `GET https://api.github.com/repos/khamidov17/fairplay-download/releases/latest`
+  locked): `GET https://api.github.com/repos/avazbekkhamidovedu-creator/fairplay-download/releases/latest`
   (`Accept: application/vnd.github+json`, a `FairPlay/<version> (Mac)` User-Agent, 10 s timeout,
   `If-None-Match` with the last ETag). An update is offered only when: not a draft/prerelease;
   `tag_name` is `vX.Y.Z` (or `X.Y.Z`) and newer than the app (`AppVersion.compare`); exactly one
   asset is named `FairPlay-Mac.zip`; its `browser_download_url` is exactly
-  `https://github.com/khamidov17/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip`
+  `https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip`
   (GitHub's redirect to its file host is followed); its `digest` is `sha256:<64 hex>`. No digest
   means no update (never an unverified install).
 - **State:** the `state` message adds `"update": {"version": "X.Y.Z"}` while such a release is
   known and the app is not locked (omitted otherwise). The app re-sends `state` when a check finds
   one. The page accepts only `{version}` matching `^\d+\.\d+\.\d+$`.
 - **Page → app:** `{"action":"installUpdate"}`; `{"action":"openDownloadPage"}` opens the fixed
-  page `https://github.com/khamidov17/fairplay-download/releases/latest` in the browser (not while
+  page `https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest` in the browser (not while
   locked; the exam window itself only shows the server).
 - **App → page:** `{"type":"updateProgress","stage":"downloading"|"installing"}`;
   `{"type":"updateFailed","reason":"download"|"verify"|"not_writable"|"locked"|"busy"}`. On success

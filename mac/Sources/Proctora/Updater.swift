@@ -8,7 +8,7 @@ import Security
 /// public download repo (GitHub API). An update is offered only when
 ///  - the tag is vX.Y.Z and newer than Config.version,
 ///  - it has exactly one asset "FairPlay-Mac.zip" whose download URL is
-///    https://github.com/khamidov17/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip,
+///    https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip,
 ///  - GitHub gives that asset a "sha256:<64 hex>" digest (no digest: no update, never an
 ///    unverified install).
 /// The page learns about it from the "state" message (`update: {version}`).
@@ -37,10 +37,10 @@ final class Updater {
         case notWritable = "not_writable"
     }
 
-    static let latestAPI = URL(string: "https://api.github.com/repos/khamidov17/fairplay-download/releases/latest")!
-    static let releasePage = URL(string: "https://github.com/khamidov17/fairplay-download/releases/latest")!
+    static let latestAPI = URL(string: "https://api.github.com/repos/avazbekkhamidovedu-creator/fairplay-download/releases/latest")!
+    static let releasePage = URL(string: "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest")!
     static let assetName = "FairPlay-Mac.zip"
-    static let assetPathPrefix = "/khamidov17/fairplay-download/releases/download/"
+    static let assetPathPrefix = "/avazbekkhamidovedu-creator/fairplay-download/releases/download/"
     static let appName = "FairPlay.app"
     static let checkEvery: TimeInterval = 6 * 3600
     static let retryAfterFailure: TimeInterval = 3600
@@ -177,7 +177,7 @@ final class Updater {
         return String(hex)
     }
 
-    /// Only https://github.com/khamidov17/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip
+    /// Only https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip
     /// (GitHub then redirects to its file host; URLSession follows that).
     static func isAllowedAssetURL(_ url: URL, tag: String) -> Bool {
         guard url.scheme?.lowercased() == "https", url.host?.lowercased() == "github.com",
