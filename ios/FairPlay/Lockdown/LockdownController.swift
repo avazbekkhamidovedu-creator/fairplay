@@ -240,6 +240,16 @@ final class LockdownController {
         clearPasteboard()
         surface?.enterLockedMode()
         installWatchers()
+        // 2026-10-24 (the Mac fix "the lock takes the front back"): the student may have
+        // left FairPlay between "Lock and continue" and the lock coming up (a watched or
+        // Single App Mode lock can come up while FairPlay is in the background, before the
+        // watchers above existed). iPadOS lets no app bring itself back: count it as leaving
+        // and cover the exam until the student returns (didBecomeActive removes the cover).
+        if UIApplication.shared.applicationState == .background {
+            leaves += 1
+            EventLog.shared.record("app_backgrounded", "not in front when the lock started")
+            surface?.setPrivacyCover(true)
+        }
         runChecks(atLock: true)
         let t = Timer(timeInterval: 3, repeats: true) { _ in
             MainActor.assumeIsolated { LockdownController.shared.runChecks(atLock: false) }

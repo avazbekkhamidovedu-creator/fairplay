@@ -258,7 +258,10 @@ final class ExamViewController: UIViewController, LockSurface,
     func reload() {
         guard Config.serverIsAcceptable else { return }
         if webView.url == nil || webView.url?.scheme == "about" {
-            loadFromServer(Config.startURL)
+            // 2026-10-24: while locked the sign-in page is refused (decidePolicyFor) and the
+            // page stayed blank: back to the last page the lock showed instead.
+            let locked = LockdownController.shared.isLocked
+            loadFromServer(locked ? (ExamViewController.lastLockedPage ?? Config.startURL) : Config.startURL)
         } else {
             webView.reload()
         }
