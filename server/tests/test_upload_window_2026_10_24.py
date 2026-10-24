@@ -215,7 +215,10 @@ def test_upload_days_validated_and_cleared_for_website_exams(client, teacher):
 def test_dkuoj_settings_endpoint(oj, fake):
     path = f"{V1}/exams/{KEY}/settings"
     body = {"upload_opens_days": 2, "websites": [f"Course folder {BOX}", "docs.python.org", "www.dropbox.com"]}
-    assert call(oj, "POST", path, body).status_code == 409                  # not synced yet
+    # not synced yet: kept for the exam (v2 §11) and shown as not synced
+    v = call(oj, "POST", path, body).json()
+    assert v["synced"] is False and v["settings"]["upload_opens_days"] == 2
+    assert v["settings"]["websites"] == ["duke.app.box.com", "docs.python.org"]
     base = fake.listing
 
     def listing():

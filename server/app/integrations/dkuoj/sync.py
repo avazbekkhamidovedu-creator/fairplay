@@ -262,12 +262,19 @@ def _settings(item: dict) -> dict:
 
 
 # 2026-10-24: settings set in FairPlay for a DKU OJ exam (POST /exams/<key>/settings, v2 §3),
-# kept in external_meta[FAIRPLAY_SETTINGS]: {"upload_opens_days": n, "websites": [...],
-# "website_links": [...], "websites_blocked": [...], "updated_at": iso}, each field only when
-# set. A field set here wins over the same field in the exam list (every later sync applies
-# it again); sending it as null hands it back to DKU OJ's value.
+# kept in external_meta[FAIRPLAY_SETTINGS]: {"calculator": ..., "open_book": ..., "strong_lock": ...,
+# "resume_needs_approval": ..., "upload_opens_days": n, "websites": [...], "website_links": [...],
+# "websites_blocked": [...], "websites_input": [...], "updated_at": iso}, each field only when set.
+# A field set here wins over the same field in the exam list (every later sync applies it again);
+# sending it as null hands it back to DKU OJ's value (the exam list's, or the default).
+# 2026-10-24 (§11): DKU OJ keeps no FairPlay settings any more; its exam list has no "settings"
+# and every setting comes through POST /exams/<key>/settings.
 FAIRPLAY_SETTINGS = "fairplay_settings"
-OVERRIDABLE = ("upload_opens_days", "websites")
+OVERRIDABLE = ("calculator", "open_book", "websites", "strong_lock", "resume_needs_approval", "upload_opens_days")
+# setting name in the API -> Exam attribute
+EXAM_FIELD = {"calculator": "calculator", "open_book": "open_book", "strong_lock": "require_strong_lock",
+              "resume_needs_approval": "resume_needs_approval", "upload_opens_days": "upload_opens_days"}
+PENDING_PREFIX = "pending:"     # oj_state rows: settings for an exam not synced yet (§11)
 
 
 def apply_fairplay_settings(e: Exam, meta: dict) -> None:
@@ -275,12 +282,41 @@ def apply_fairplay_settings(e: Exam, meta: dict) -> None:
     ov = meta.get(FAIRPLAY_SETTINGS)
     if not isinstance(ov, dict):
         return
+    if "calculator" in ov:
+        e.calculator = ov["calculator"] if ov["calculator"] in ("off", "scientific", "graphing") else "off"
+    for f in ("open_book", "strong_lock", "resume_needs_approval"):
+        if f in ov:
+            setattr(e, EXAM_FIELD[f], bool(ov[f]))
     if "upload_opens_days" in ov:
         e.upload_opens_days = upload_days_of(ov.get("upload_opens_days"))
     if isinstance(ov.get("websites"), list):
         e.websites = [w for w in ov["websites"] if isinstance(w, str)][:MAX_WEBSITES]
         e.website_links = clean_website_links(ov.get("website_links") or [], e.websites)
         meta["websites_blocked"] = [b for b in ov.get("websites_blocked") or [] if isinstance(b, dict)][:40]
+
+
+async def take_pending(session: AsyncSession, e: Exam, meta: dict) -> tuple | None:
+    """§11: settings DKU OJ saved for this key before FairPlay had the exam: they become its
+    FairPlay settings now, and the pending row goes. Returns the pending (review, updated_at)
+    for the caller to apply last (apply_review replaces external_meta), or None."""
+    import json as _json
+    row = await session.get(OjState, PENDING_PREFIX + (e.external_key or ""))
+    if row is None:
+        return None
+    try:
+        pending = _json.loads(row.value or "{}")
+    except ValueError:
+        pending = {}
+    await session.delete(row)
+    if not isinstance(pending, dict):
+        return None
+    review = pending.pop("review", None), pending.pop("review_updated_at", None)
+    if not e.external_frozen_version:
+        have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
+        have.update({k: v for k, v in pending.items() if k in OVERRIDABLE or k in (
+            "website_links", "websites_blocked", "websites_input", "updated_at")})
+        meta[FAIRPLAY_SETTINGS] = have
+    return review if review[0] is not None else None
 
 
 def _duration_min(item: dict) -> int:
@@ -361,6 +397,8 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     for k in KEEP_META:
         if k in (e.external_meta or {}):
             meta[k] = e.external_meta[k]
+    # §11: settings saved before the exam arrived (before external_meta is set: the query may flush)
+    pending_review = await take_pending(session, e, meta)
     e.external_meta = meta
     e.external_removed = bool(item.get("removed"))
     e.external_synced_at = now
@@ -372,13 +410,18 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         e.scheduled_at = _time(item.get("start_time"))
         # minutes added with "Add time" stay added (exam_control.extend_exam)
         e.duration_min = _duration_min(item) + extra_close_minutes(e)
-        tools = _settings(item)
-        meta["websites_blocked"] = tools.pop("websites_blocked")
-        for f, v in tools.items():
-            setattr(e, f, v)
+        if isinstance(item.get("settings"), dict):
+            # An exam list that still carries settings (DKU OJ before §11).
+            tools = _settings(item)
+            meta["websites_blocked"] = tools.pop("websites_blocked")
+            for f, v in tools.items():
+                setattr(e, f, v)
         apply_fairplay_settings(e, meta)     # 2026-10-24: set in FairPlay -> wins
     oj_settings = item.get("settings") or {}
-    apply_review(e, oj_settings.get("review"), oj_settings.get("review_updated_at"))
+    if isinstance(oj_settings, dict) and "review" in oj_settings:
+        apply_review(e, oj_settings.get("review"), oj_settings.get("review_updated_at"))
+    if pending_review is not None:
+        apply_review(e, *pending_review)
     e.updated_at = now
     await session.flush()
     if editors and e.teacher_id not in {u.id for u in editors}:
@@ -457,6 +500,37 @@ async def _classes(session: AsyncSession, e: Exam, item: dict, students: list[Us
     await session.flush()
 
 
+async def mark_removed(sessionmaker, active: set[str], since: datetime | None) -> list[str]:
+    """§11: DKU OJ's first page lists the keys of ALL its FairPlay exams that end after
+    `since` (`active_keys`, `active_since`). A DKU OJ exam of ours in that window whose key is
+    not listed was switched off (or deleted) there: marked removed, as a `removed` entry did.
+    One listed again is no longer removed. Exams that ended before the window are left alone
+    (DKU OJ stops listing them, they are not removed). Returns the exam ids changed."""
+    changed = []
+    async with sessionmaker() as session:
+        rows = (await session.execute(select(Exam).where(Exam.source == "dkuoj"))).scalars().all()
+        for e in rows:
+            key = e.external_key or ""
+            if key in active:
+                if e.external_removed:
+                    e.external_removed = False
+                    e.updated_at = utcnow()
+                    changed.append(e.id)
+                continue
+            end = _time((e.external_meta or {}).get("end_time"))
+            if e.external_removed or since is None or end is None or end < since + timedelta(days=1):
+                continue
+            e.external_removed = True
+            e.updated_at = utcnow()
+            changed.append(e.id)
+        await session.commit()
+    for exam_id in changed:
+        await invalidate_exam(get_store(), exam_id)
+    if changed:
+        log.info("DKU OJ exam list: %d exam(s) switched off or back on", len(changed))
+    return changed
+
+
 async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> int:
     """Page through changed exams since the stored cursor. Returns how many were applied."""
     async with sessionmaker() as session:
@@ -464,8 +538,14 @@ async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> i
     newest = cursor
     n = 0
     page = 1
+    active: set[str] | None = None
+    active_since = None
+    complete = False
     for _ in range(MAX_PAGES):
         data = await client.list_exams(cursor, page)
+        if page == 1 and isinstance(data.get("active_keys"), list):
+            active = {k for k in data["active_keys"] if isinstance(k, str)}
+            active_since = _time(data.get("active_since"))
         for item in data.get("exams") or []:
             if not isinstance(item, dict):
                 continue
@@ -484,8 +564,11 @@ async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> i
                 newest = up
         nxt = data.get("next_page")
         if not nxt:
+            complete = True
             break
         page = int(nxt) if isinstance(nxt, (int, str)) and str(nxt).isdigit() else page + 1
+    if complete and active is not None:
+        await mark_removed(sessionmaker, active, active_since)
     if newest != cursor:
         async with sessionmaker() as session:
             await set_state(session, CURSOR, newest)

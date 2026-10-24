@@ -841,7 +841,9 @@ use is built into the FairPlay exam page.
   list with Remove). The websites tab lists each start page (title + link) and opens it first.
 - **Site policy (external exams):** `FAIRPLAY_SITE_POLICY_EXCEPTIONS` (exact hosts; unset =
   `duke.app.box.com,duke.box.com`, empty = none) are not refused by the deny-list. See
-  `docs/dkuoj-bridge-v2.md` §10 for DKU OJ's side (`POST /exams/<key>/settings`).
+  `docs/dkuoj-bridge-v2.md` §10 for DKU OJ's side (`POST /exams/<key>/settings`), and §11: DKU OJ
+  keeps no FairPlay settings (no schema change there); all of them are set through that endpoint,
+  also before the first sync (pending), and its exam list carries `active_keys` instead of `removed` rows.
 
 ## Integrations + DKU OJ — FairPlay server as implemented (2026-10-23)
 Binding: `docs/dkuoj-bridge.md` plus the product owner's integration rule (core is

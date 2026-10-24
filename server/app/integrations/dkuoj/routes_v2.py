@@ -401,9 +401,14 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
                          "companions": companions(websites),
                          "upload_opens_days": upload_days(e),
                          # which of these were set in FairPlay (POST /exams/<key>/settings) and
-                         # so win over DKU OJ's values
-                         "set_in_fairplay": [f for f in ("upload_opens_days", "websites")
+                         # so win over DKU OJ's exam list (§11: all of them, with a current DKU OJ)
+                         "set_in_fairplay": [f for f in SET_IN_FAIRPLAY_ORDER
                                              if f in ((e.external_meta or {}).get("fairplay_settings") or {})],
+                         # §11: the allowed websites as DKU OJ last sent them (for its form)
+                         **({"websites_input": list(((e.external_meta or {}).get("fairplay_settings") or {})
+                                                    ["websites_input"])}
+                            if isinstance(((e.external_meta or {}).get("fairplay_settings") or {})
+                                          .get("websites_input"), list) else {}),
                          "websites_blocked": [{"site": b["site"], "reason": str(b.get("reason") or "")}
                                               for b in blocked],
                          "strong_lock": bool(e.require_strong_lock),
@@ -413,10 +418,49 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "counts": counts, "students": students, "server_time": iso(now)}
 
 
-def _not_synced() -> dict:
+SET_IN_FAIRPLAY_ORDER = ("upload_opens_days", "websites", "calculator", "open_book", "strong_lock",
+                         "resume_needs_approval")
+
+
+def _pending_settings(pending: dict | None) -> dict | None:
+    """§11: the GET shape's `settings` of an exam not synced yet: FairPlay's defaults with the
+    settings DKU OJ already saved for it (None when it saved none)."""
+    from ...site_companions import companions
+    if not isinstance(pending, dict):
+        return None
+    sites = [w for w in pending.get("websites") or [] if isinstance(w, str)]
+    out = {"calculator": pending.get("calculator") if pending.get("calculator") in ("off", "scientific", "graphing")
+           else "off",
+           "open_book": bool(pending.get("open_book", False)), "websites": sites,
+           "website_links": [x for x in pending.get("website_links") or [] if isinstance(x, dict)],
+           "companions": companions(sites), "upload_opens_days": int(pending.get("upload_opens_days") or 0),
+           "set_in_fairplay": [f for f in SET_IN_FAIRPLAY_ORDER if f in pending],
+           "websites_blocked": [b for b in pending.get("websites_blocked") or [] if isinstance(b, dict)],
+           "strong_lock": bool(pending.get("strong_lock", False)),
+           "resume_needs_approval": pending.get("resume_needs_approval") is not False,
+           "review": pending.get("review") or "nothing"}
+    if isinstance(pending.get("websites_input"), list):
+        out["websites_input"] = pending["websites_input"]
+    return out
+
+
+def _not_synced(pending: dict | None = None) -> dict:
     return {"synced": False, "package_ready": False, "questions": 0, "points": 0, "status": None,
             "start_code": None, "invigilator_code": None, "closes_at": None, "open_to": "all",
-            "settings": None, "counts": None, "students": [], "server_time": iso(utcnow())}
+            "settings": _pending_settings(pending), "counts": None, "students": [], "server_time": iso(utcnow())}
+
+
+async def _pending(session: AsyncSession, key: str) -> dict | None:
+    from .models import OjState
+    from .sync import PENDING_PREFIX
+    row = await session.get(OjState, PENDING_PREFIX + key)
+    if row is None:
+        return None
+    try:
+        data = json.loads(row.value or "{}")
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 async def _view(session: AsyncSession, e: Exam) -> JSONResponse:
@@ -428,7 +472,7 @@ async def _view(session: AsyncSession, e: Exam) -> JSONResponse:
 async def exam_get(key: str, call: BridgeCall = Depends(signed_call), session: AsyncSession = Depends(get_session)):
     e = await _editor_exam(session, key, call, required=False)
     if e is None:
-        return _not_synced()
+        return JSONResponse(_not_synced(await _pending(session, key)), headers={"Cache-Control": "no-store"})
     return await _view(session, e)
 
 
@@ -512,62 +556,187 @@ async def exam_review(key: str, call: BridgeCall = Depends(signed_call),
 
 MAX_SETTINGS_SITES = 100       # lines in one settings call (at most MAX_WEBSITES hosts kept)
 SETTINGS_FIXED = "The exam has started: its settings can't change any more."
+MAX_PENDING = 2000             # exams not synced yet that may hold settings at once
+PENDING_FOR = timedelta(days=180)
+SETTING_FIELDS = ("calculator", "open_book", "websites", "strong_lock", "resume_needs_approval",
+                  "upload_opens_days", "review")
+
+
+def _settings_body(data: dict, key: str) -> tuple[list[str], dict]:
+    """Validate a settings body: (fields sent, {field: value}) where a value None hands the
+    field back (to DKU OJ's exam list value or the default). Websites are parsed and checked
+    against the site policy here (website_links / websites_blocked / websites_input added)."""
+    from ...review import LEVELS
+    from .sync import parse_sites
+    sent = [f for f in SETTING_FIELDS if f in data]
+    if not sent:
+        raise HTTPException(400, "Send at least one of: " + ", ".join(SETTING_FIELDS))
+    ov: dict = {}
+    for f in sent:
+        v = data[f]
+        if v is None:
+            if f == "review":
+                raise HTTPException(400, "review must be one of: " + ", ".join(LEVELS))
+            ov[f] = None
+            continue
+        if f == "calculator":
+            if v not in ("off", "scientific", "graphing"):
+                raise HTTPException(400, "calculator must be off, scientific or graphing")
+            ov[f] = v
+        elif f in ("open_book", "strong_lock", "resume_needs_approval"):
+            if not isinstance(v, bool):
+                raise HTTPException(400, f"{f} must be true or false")
+            ov[f] = v
+        elif f == "upload_opens_days":
+            if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 7:
+                raise HTTPException(400, "upload_opens_days must be a whole number from 0 to 7")
+            ov[f] = v
+        elif f == "review":
+            if v not in LEVELS:
+                raise HTTPException(400, "review must be one of: " + ", ".join(LEVELS))
+            ov[f] = v
+        elif f == "websites":
+            if not isinstance(v, list) or len(v) > MAX_SETTINGS_SITES or not all(
+                    isinstance(x, str) and len(x) <= 2100
+                    or isinstance(x, dict) and isinstance(x.get("url"), str) and len(x["url"]) <= 2100
+                    and (x.get("title") is None or isinstance(x.get("title"), str))
+                    for x in v):
+                raise HTTPException(400, "websites must be a list of site names or links (at most "
+                                         f"{MAX_SETTINGS_SITES})")
+            sites, links, blocked = parse_sites(v, None, key)
+            ov.update(websites=sites, website_links=links, websites_blocked=blocked,
+                      websites_input=[x if isinstance(x, str) else
+                                      (f"{x.get('title') or ''} {x['url']}".strip()) for x in v])
+    return sent, ov
+
+
+def _current(e: Exam, f: str):
+    if f == "websites":
+        return list(e.websites or []), list(e.website_links or [])
+    return getattr(e, sync_field(f))
+
+
+def sync_field(f: str) -> str:
+    from .sync import EXAM_FIELD
+    return EXAM_FIELD[f]
+
+
+async def _store_pending(session: AsyncSession, key: str, sent: list[str], ov: dict) -> dict:
+    """§11: settings for an assignment FairPlay has not synced yet, applied when it arrives."""
+    from sqlalchemy import func
+    from .models import OjState
+    from .sync import PENDING_PREFIX
+    if not key or len(key) > 64 - len(PENDING_PREFIX):
+        raise HTTPException(400, "Unknown exam key")
+    now = utcnow()
+    row = await session.get(OjState, PENDING_PREFIX + key)
+    if row is None:
+        # Old ones (an assignment that never arrived) go; a cap keeps the table small.
+        for old in (await session.execute(select(OjState).where(OjState.name.like(PENDING_PREFIX + "%"))
+                                          )).scalars().all():
+            try:
+                at = json.loads(old.value or "{}").get("updated_at")
+            except (ValueError, AttributeError):
+                at = None
+            if not isinstance(at, str) or at < iso(now - PENDING_FOR):
+                await session.delete(old)
+        await session.flush()
+        count = (await session.execute(select(func.count()).select_from(OjState).where(
+            OjState.name.like(PENDING_PREFIX + "%")))).scalar_one()
+        if count >= MAX_PENDING:
+            raise HTTPException(429, "Too many exams waiting for their first sync; try again later")
+        row = OjState(name=PENDING_PREFIX + key, value="{}")
+        session.add(row)
+        have: dict = {}
+    else:
+        try:
+            have = json.loads(row.value or "{}")
+        except ValueError:
+            have = {}
+        if not isinstance(have, dict):
+            have = {}
+    for f in sent:
+        keys = (f,) if f != "websites" else ("websites", "website_links", "websites_blocked", "websites_input")
+        for k in keys:
+            have.pop(k, None)
+        if ov.get(f) is not None:
+            for k in keys:
+                if k in ov:
+                    have[k] = ov[k]
+    if "review" in sent:
+        have["review_updated_at"] = iso(now)
+    have["updated_at"] = iso(now)
+    row.value = json.dumps(have)
+    await session.commit()
+    return have
 
 
 @router.post("/exams/{key}/settings")
 async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
                         session: AsyncSession = Depends(get_session)):
-    """2026-10-24: exam settings kept in FairPlay for a DKU OJ exam (v2 §3). Body, any of:
-    {"upload_opens_days": 0..7 | null, "websites": ["docs.python.org", "https://duke.app.box.com/folder/0",
-    "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}] | null}.
-    A field sent wins over DKU OJ's exam list from now on (sync.FAIRPLAY_SETTINGS); null hands
-    it back to DKU OJ. Websites pass the same parsing and site policy as synced ones (refused
-    ones are in settings.websites_blocked). Only before the first student started (409 after)."""
+    """The exam settings of a DKU OJ exam, kept in FairPlay (v2 §3, §10, §11). Body, any of:
+    {"calculator": "off|scientific|graphing", "open_book": bool, "strong_lock": bool,
+    "resume_needs_approval": bool, "upload_opens_days": 0..7, "review": "<level>",
+    "websites": ["docs.python.org", "https://duke.app.box.com/folder/0",
+    "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}]}; null
+    hands a field back (the exam list's value or the default; not for review).
+    Websites pass the same parsing and site policy as synced ones (refused ones are in
+    settings.websites_blocked). An assignment not synced yet: kept and applied when it arrives
+    (the answer is the not-synced shape with these settings). Once the first student started
+    only `review` may change (any other field that differs from the exam's: 409); `review`
+    changes at any time. A field equal to what the exam has is no change."""
     from ...services import invalidate_exam
-    from .sync import FAIRPLAY_SETTINGS, OVERRIDABLE, apply_fairplay_settings, parse_sites
-    data = call.data
-    sent = [f for f in OVERRIDABLE if f in data]
-    if not sent:
-        raise HTTPException(400, "Send upload_opens_days and/or websites")
-    ov: dict = {}
-    if "upload_opens_days" in data and data["upload_opens_days"] is not None:
-        n = data["upload_opens_days"]
-        if not isinstance(n, int) or isinstance(n, bool) or not 0 <= n <= 7:
-            raise HTTPException(400, "upload_opens_days must be a whole number from 0 to 7")
-        ov["upload_opens_days"] = n
-    if "websites" in data and data["websites"] is not None:
-        w = data["websites"]
-        if not isinstance(w, list) or len(w) > MAX_SETTINGS_SITES or not all(
-                isinstance(x, str) and len(x) <= 2100
-                or isinstance(x, dict) and isinstance(x.get("url"), str) and len(x["url"]) <= 2100
-                and (x.get("title") is None or isinstance(x.get("title"), str))
-                for x in w):
-            raise HTTPException(400, "websites must be a list of site names or links (at most "
-                                     f"{MAX_SETTINGS_SITES})")
-        sites, links, blocked = parse_sites(w, None, key)
-        ov.update(websites=sites, website_links=links, websites_blocked=blocked)
+    from .sync import FAIRPLAY_SETTINGS, apply_fairplay_settings, apply_review
+    sent, ov = _settings_body(call.data, key)
+    e = await _exam_by_key(session, key)
+    if e is None:
+        pending = await _store_pending(session, key, sent, ov)
+        log.info("DKU OJ exam %s (not synced yet): FairPlay settings %s kept by %s", key, ", ".join(sent),
+                 call.acting_user)
+        return JSONResponse(_not_synced(pending), headers={"Cache-Control": "no-store"})
     e = await _editor_exam(session, key, call)
-    if e.external_frozen_version or e.status == "closed":
-        raise HTTPException(409, SETTINGS_FIXED)
+    lock_fields = [f for f in sent if f != "review"]
     meta = dict(e.external_meta or {})
-    have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
-    for f in sent:      # null: back to DKU OJ's value (from the stored listing, applied below)
-        for k in ((f,) if f != "websites" else ("websites", "website_links", "websites_blocked")):
-            have.pop(k, None)
-    have.update(ov)
-    have["updated_at"] = iso(utcnow())
-    meta[FAIRPLAY_SETTINGS] = have
-    if any(f not in ov for f in sent):
-        # a field handed back: DKU OJ's value from the last exam list
-        from .sync import _settings
-        synced = _settings({"key": key, "settings": meta.get("settings") or {}})
-        if "upload_opens_days" in sent and "upload_opens_days" not in ov:
-            e.upload_opens_days = synced["upload_opens_days"]
-        if "websites" in sent and "websites" not in ov:
-            e.websites, e.website_links = synced["websites"], synced["website_links"]
-            meta["websites_blocked"] = synced["websites_blocked"]
-    apply_fairplay_settings(e, meta)
-    e.external_meta = meta
+    if lock_fields and (e.external_frozen_version or e.status == "closed"):
+        changed = []
+        for f in lock_fields:
+            if ov.get(f) is None:
+                changed.append(f)
+            elif f == "websites":
+                if (ov["websites"], ov["website_links"]) != _current(e, f):
+                    changed.append(f)
+            elif ov[f] != _current(e, f):
+                changed.append(f)
+        if changed:
+            raise HTTPException(409, SETTINGS_FIXED)
+        lock_fields = []
+    if lock_fields:
+        have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
+        for f in lock_fields:     # null: back to DKU OJ's value (from the stored listing, applied below)
+            for k in ((f,) if f != "websites" else ("websites", "website_links", "websites_blocked",
+                                                    "websites_input")):
+                have.pop(k, None)
+            if ov.get(f) is not None:
+                for k in ((f,) if f != "websites" else ("websites", "website_links", "websites_blocked",
+                                                        "websites_input")):
+                    have[k] = ov[k]
+        have["updated_at"] = iso(utcnow())
+        meta[FAIRPLAY_SETTINGS] = have
+        handed_back = [f for f in lock_fields if ov.get(f) is None]
+        if handed_back:
+            # a field handed back: DKU OJ's value from the last exam list (or the default)
+            from .sync import EXAM_FIELD, _settings
+            synced = _settings({"key": key, "settings": meta.get("settings") or {}})
+            for f in handed_back:
+                if f == "websites":
+                    e.websites, e.website_links = synced["websites"], synced["website_links"]
+                    meta["websites_blocked"] = synced["websites_blocked"]
+                else:
+                    setattr(e, EXAM_FIELD[f], synced[EXAM_FIELD[f]])
+        apply_fairplay_settings(e, meta)
+        e.external_meta = meta
+    if "review" in sent:
+        apply_review(e, ov["review"], iso(utcnow()))
     e.updated_at = utcnow()
     await session.commit()
     await invalidate_exam(get_store(), e.id)

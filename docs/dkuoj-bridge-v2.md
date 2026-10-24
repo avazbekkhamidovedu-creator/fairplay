@@ -1,14 +1,16 @@
 # DKU OJ ↔ FairPlay bridge, v2: professors use only DKU OJ
 
 Status: build contract (2026-10-24; review fixes 2026-10-24; security review fixes 2026-10-24 (§1 rotation / transport / bounded answers, §3 reset refusal and websites_blocked); class-login password viewable, login
-history, strong student passwords, student classes, student review after hand-in §8 2026-10-24, five review levels §8 2026-10-24; early upload window, website links, Duke Box and `POST /exams/<key>/settings` §10 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
+history, strong student passwords, student classes, student review after hand-in §8 2026-10-24, five review levels §8 2026-10-24; early upload window, website links, Duke Box and `POST /exams/<key>/settings` §10 2026-10-24; DKU OJ
+without schema changes §11 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
 assets, uploads, submissions, results). Everything in v1 stays, except where this file changes it
 (§1 signing replaces the Bearer token; §6 retires the live-room link).
 
 Product rules (from Mister):
 - Professors never sign in to FairPlay for DKU OJ classes. Everything is in DKU OJ: a top-menu
   item **FAIRPLAY** (teachers/admins only) and a **FairPlay** tab on FairPlay assignments.
-- The FAIRPLAY pages list ONLY assignments whose lock is FairPlay (`fairplay_required = True`).
+- The FAIRPLAY pages list ONLY assignments whose lock is FairPlay (§11: assignments with the DKU
+  OJ contest tag `fairplay`; this file's older wording `fairplay_required` means that tag).
 - Students get ONE temporary class login per class from the professor; at first sign-in in the
   FairPlay app they type first name, last name, NetID, then choose their own username and
   password. The professor can reset a student and create a new class login at any time.
@@ -125,7 +127,8 @@ assignment (a TA or professor of another course who is a plain member here can't
 student). 404 unknown class, and (2026-10-24, §9) 404 for a class FairPlay has no business
 with: the class must be in `classes` of a `fairplay_required` assignment, have its course in
 such an assignment's `organizations`, or have had a FairPlay class login made for it in DKU OJ
-(`Class.fairplay_enabled_at`, set before the first create call).
+(§11: recorded in DKU OJ's shared cache, `fpb:class-login:<id>`, 180 days, set before the first
+create call and renewed whenever a manager of the class sees an active login; no column).
 
 **`GET /api/fairplay/v1/students/<netid>/classes`** (2026-10-24) — the ACTIVE classes the NetID
 is a student of, by the same rule as the roster above (a class where they are an admin,
@@ -249,11 +252,19 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   `companions` = sites the lock also opens so a service works (Duke Box), `upload_opens_days`
   = the early upload window (0 = off), `set_in_fairplay` = which of `upload_opens_days` /
   `websites` were set with `POST /exams/<key>/settings` (they win over the exam list).
-- **`POST /exams/<key>/settings`** (2026-10-24, §10) body, any of
-  `{"upload_opens_days": 0..7 | null, "websites": ["docs.python.org", "https://duke.app.box.com/folder/0", "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}] | null}`
-  → GET shape. Editor-checked like the other exam endpoints (403), not synced → 409, after the
-  first student started (or closed) → 409. Neither field → 400; `upload_opens_days` not a whole
-  number 0–7 → 400; `websites` not a list of strings / `{url, title?}` (≤ 100) → 400.
+- **`POST /exams/<key>/settings`** (2026-10-24, §10; every setting §11) body, any of
+  `{"calculator": "off|scientific|graphing" | null, "open_book": bool | null, "strong_lock": bool | null,
+  "resume_needs_approval": bool | null, "upload_opens_days": 0..7 | null, "review": "<level>",
+  "websites": ["docs.python.org", "https://duke.app.box.com/folder/0", "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}] | null}`
+  → GET shape. Editor-checked like the other exam endpoints (403). §11: an assignment FairPlay
+  has not synced yet → the settings are KEPT for that key (pending, applied at its first sync;
+  answer: the not-synced shape whose `settings` are FairPlay's defaults with the pending ones;
+  key longer than 56 characters → 400; more than 2000 keys pending → 429; pending settings older
+  than 180 days are dropped). After the first student started (or closed): `review` still
+  changes; any other field that DIFFERS from the exam's → 409 (equal values are no change, so
+  DKU OJ may send its whole form). No field → 400; a field of the wrong type → 400;
+  `upload_opens_days` not a whole number 0–7 → 400; `websites` not a list of strings /
+  `{url, title?}` (≤ 100) → 400; `review` null → 400.
 - **`POST /exams/<key>/open`** body `{"open_to": "all" | ["netid", ...]}` → same shape as GET.
   Idempotent (already live: updates `open_to`).
 - **`POST /exams/<key>/close`** → GET shape. Same effect as the FairPlay teacher Close (writers
@@ -264,7 +275,7 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   added minutes, so `closes_at` in the answer moves; students starting after it get the time,
   and the automatic close waits for it. The hand-ins then reach DKU OJ after the assignment's
   end time: DKU OJ files them anyway (until 14 days after the close, §9). DKU OJ counts the
-  minutes added through its FairPlay tab (`Contest.fairplay_added_minutes`); lateness is judged
+  minutes added through its FairPlay tab (§11: in its shared cache); lateness is judged
   against end time + those minutes (§9).
 - **`POST /exams/<key>/new-code`** → GET shape (new start code).
 - **`POST /exams/<key>/review`** body `{"review": "nothing" | "score" | "breakdown" | "answers" | "answers_and_results",
@@ -422,11 +433,12 @@ does not allow is never sent, not even in fields the page does not show.
 `score` and `breakdown` were added later; the other three values keep their meaning. No class
 average is shown below `answers_and_results`.
 
-DKU OJ:
-- `Contest.fairplay_review` (CharField, choices above, default `nothing`) and
-  `fairplay_review_updated_at` (set whenever the value changes; migrations
-  `0221_contest_fairplay_review`, `0222_contest_fairplay_review_levels` for the five choices).
-  `Contest.FAIRPLAY_REVIEW_HELP` holds the one-line description shown under each choice.
+DKU OJ (§11: DKU OJ stores nothing; the value lives in FairPlay):
+- The five choices and their one-line descriptions are constants in DKU OJ
+  (`judge/utils/fairplay.py`: `FAIRPLAY_REVIEW_CHOICES`, `FAIRPLAY_REVIEW_HELP`). The value is
+  read from FairPlay's `GET /exams/<key>` and set with `POST /exams/<key>/settings {"review": ...}`
+  (shown and changeable only while FairPlay answers). The rest of this list is the pre-§11
+  design, kept for FairPlay's compatibility with an exam list that still has `settings`.
 - Changed on the assignment's **FairPlay** tab: "Student review after hand-in", five radio
   options, each with its one-line description, + Save (`POST /contest/<key>/fairplay/review`,
   CSRF, `contest.is_editable_by`), shown in every state and also when FairPlay is down. Also in
@@ -484,7 +496,7 @@ DKU OJ side (FairPlay → DKU OJ calls are trusted only as far as below, even wh
 
 - **Class scope** (§2): roster and student classes only for classes a `fairplay_required`
   assignment uses (its `classes`, or classes of its `organizations`) or that have a FairPlay
-  class login (`Class.fairplay_enabled_at`); else 404 / not listed.
+  class login (§11: recorded in DKU OJ's shared cache); else 404 / not listed.
 - **Exam list** (v1 `GET exams`): `editors` and `roster` entries no longer carry `email`
   (FairPlay never used it): `{"username","first_name","last_name"}` (+ `extra_time_seconds` in
   the roster).
@@ -568,3 +580,72 @@ app reads 64). Sources: Box "Configuring a firewall for Box applications and ser
 Note: in the apps the websites pane is a frame; Box / Duke sign-in and Duo do not work inside a
 frame (and Safari blocks third-party cookies), so a native site view in the apps is planned
 separately. This section only makes the data and the web side right.
+
+## 11. DKU OJ without schema changes (2026-10-24)
+
+Product rule (from Mister, for DKU OJ's acceptance): the integration adds NO column, table or
+migration to DKU OJ. DKU OJ only reads its own data and makes the writes it already makes
+(submissions, participations, attaching existing contest tags, files in its submission store).
+Everything FairPlay-specific lives in FairPlay and is exchanged through the signed API.
+
+DKU OJ side:
+- **Which assignments are FairPlay exams:** the DMOJ contest tag `fairplay` (`ContestTag`, made on
+  first use). The editor's lock option FairPlay sets and clears it (the tag picker neither shows
+  nor sets it; "Add new" refuses the name); the admin may attach it (checked: not with SEB, needs
+  a student list). Everything that read `fairplay_required` reads the tag.
+- **Settings:** none stored. The editor's FairPlay panel and the FairPlay tab read FairPlay's
+  `GET /exams/<key>` (`settings`) and save with `POST /exams/<key>/settings` (only when changed;
+  the tab's form sends its fields, the review form only `review`). FairPlay not reachable: the
+  panel and the tab say "FairPlay not reachable: the settings can't be shown or changed right
+  now"; what the professor typed is not dropped (kept in their session and offered again on the
+  tab, marked "NOT saved"). A new assignment's settings go to FairPlay as pending (§3). An
+  assignment whose key changes takes its settings along (read under the old key, saved under the
+  new one).
+- **Exam list:** entries have no `settings`. Change tracking (`updated_at`) is a digest per entry
+  in DKU OJ's shared cache (`fpb:exam-track:<contest id>`, 60 days); a digest the cache lost counts
+  as a change (the entry is listed again; FairPlay applies it idempotently). The first page also
+  carries `"active_keys": [...]` (every FairPlay exam whose end time is after `active_since`,
+  = now − 30 days) and `"active_since": "<iso>"`. Switched-off assignments are no longer listed
+  as `"removed": true` entries.
+- **Hand-ins** (`POST exams/<key>/submissions`): the receipt records live in the shared cache
+  (`fpb:attempt:<sha256(attempt id)>` and `fpb:handin:<contest>:<student>`, 60 days). A cache lock
+  per student and exam serialises deliveries. Before filing, DKU OJ also checks its database: a
+  student who already has submissions in the exam (newer than a professor's clear) but no hand-in
+  record (the cache lost it) is refused with `409 {"detail": "This student already has answers on
+  file for this exam in DKU OJ, but DKU OJ no longer has the record of that hand-in. ..."}` and the
+  professor is warned on the assignment page and the FairPlay tab (rather than filing twice). Rare
+  edge: a replay of the SAME attempt after the cache lost its record also gets that 409 (FairPlay
+  marks the delivery dead and shows it to the teacher; the answers are already in DKU OJ). "Clear
+  FairPlay hand-in" deletes the hand-in record and remembers the newest submission id
+  (`fpb:cleared:...`), so later submissions count as a new hand-in. One attempt per student and the
+  idempotent replay (same body → same receipt, other body → 409) are unchanged.
+- **Uploads** (`POST exams/<key>/uploads`): the file is staged in DKU OJ's submission store at
+  `fairplay_uploads/<contest>/<student>/<problem>/<token><ext>` (tracked by the store's own record
+  of every saved file); the upload id is `up_<token>` and only works for that student, exam and
+  question. On hand-in it becomes a normal file submission (graded in DKU OJ as usual) and the
+  staged copy is deleted; unclaimed ones are deleted after 15 days. The original file name is kept
+  in the cache (lost: `answer<ext>`).
+- **Results** (`GET exams/<key>/results`): the students are the exam's LIVE participations (not
+  staff); change tracking is a digest per student in the cache (one entry per exam). A result
+  without a digest is listed (also unreleased, `"released": false`), so a withdrawn release is
+  never missed.
+- **Close time:** "Add time" on the FairPlay tab counts the minutes in the cache
+  (`fpb:added-minutes:<contest>`). Lateness and the 14-day window use end time + that count; if
+  the cache lost it, the hand-in's `exam_closes_at` (FairPlay's close time, below) is used, at most
+  8 hours past the end time.
+
+FairPlay side:
+- `POST /exams/<key>/settings` takes every setting and keeps settings for unsynced keys (§3);
+  they are stored in `oj_state` rows `pending:<key>` and moved into the exam's
+  `external_meta.fairplay_settings` (and `review_after_handin`) at its first sync.
+- An exam-list entry without `settings` leaves the exam's settings alone (a new exam starts from
+  FairPlay's defaults: calculator off, no websites, not open book, normal lock, resume needs
+  approval, no early upload, review `nothing`); an entry WITH `settings` (older DKU OJ) is applied
+  as before, and FairPlay-set fields still win.
+- `GET /exams/<key>`: `settings.set_in_fairplay` lists every setting set through the endpoint;
+  `settings.websites_input` = the websites as DKU OJ last sent them (for its form), when set.
+- `active_keys`: after a complete pass, every DKU OJ exam of FairPlay that is not removed, whose
+  end time is at least a day after `active_since` and whose key is not listed, is marked removed;
+  one listed again is no longer removed. A list without `active_keys` changes nothing.
+- The hand-in body (v1 submissions) gains `"exam_closes_at": "<iso Z>"` (FairPlay's close: DKU OJ's
+  end time + the minutes added).

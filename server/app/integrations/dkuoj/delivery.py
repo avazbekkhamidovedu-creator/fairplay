@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from ...models import Attempt, Exam, User
+from ...services import exam_closes_at
 from ...timeutil import iso, utcnow
 from .adapter import answer_to_oj
 from .client import DkuojClient, OjError, sleep
@@ -94,6 +95,10 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
         "handed_in_evidence": "sealed" if a.sealed_proof else "server",
         "answers": out_answers,
         "integrity_report_url": report_url(cfg, e.id, a.id),
+        # 2026-10-24 (v2 §11): when the exam closes in FairPlay (DKU OJ's end time + the minutes
+        # added). DKU OJ judges lateness by its own count of added minutes and uses this only
+        # when it has lost that count (bounded there).
+        "exam_closes_at": _z(exam_closes_at(e)),
     }
     d.payload = body
     await session.commit()

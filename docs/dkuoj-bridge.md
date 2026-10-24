@@ -13,6 +13,10 @@ Teachers build and grade assignments in DKU OJ. If the teacher picks **FairPlay*
 
 ## 2. Teacher settings in DKU OJ (assignment editor)
 
+> 2026-10-24 (v2 §11): DKU OJ makes no schema change. `fairplay_required` below is the DKU OJ contest
+> tag `fairplay`; the other settings are kept by FairPlay (v2 `POST /exams/<key>/settings`) and the
+> exam list carries no `settings`.
+
 In the anti-cheating box, the lock becomes one choice: **No lock · Safe Exam Browser · FairPlay**. Choosing FairPlay shows a small panel (all optional, sensible defaults):
 
 | Field (on `Contest`) | Type | Default | FairPlay meaning |
