@@ -1,0 +1,51 @@
+{
+ "token": "fp-test-token-0123456789abcdef0123456789",
+ "key_oj_to_fp_hex": "79df9cdb43e8071eb2739310eb1715a212024d9a8abdf20a86c33ed254865d75",
+ "key_fp_to_oj_hex": "05eba4571aa91c79fc6a142c013c93a4ba07dfd481057b8c27c526031a3eac06",
+ "cases": [
+  {
+   "direction": "oj->fp",
+   "method": "POST",
+   "path": "/api/integrations/dkuoj/v1/exams/c000001/open",
+   "timestamp": 1792800000,
+   "nonce": "0123456789abcdef0123456789abcdef",
+   "acting_user": "prof_dong",
+   "body": "{\"open_to\": \"all\"}",
+   "canonical": "v2\nPOST\n/api/integrations/dkuoj/v1/exams/c000001/open\n1792800000\n0123456789abcdef0123456789abcdef\nprof_dong\ne406fc10aa45128e930c3e5a88136bf0452f89847a9ecfd997ab4b109a604baf",
+   "signature": "50f703da451707fb1407793c78961ffc17c3a00b5837079eccfb1c9667ee1b63"
+  },
+  {
+   "direction": "oj->fp",
+   "method": "GET",
+   "path": "/api/integrations/dkuoj/v1/classes/31/status",
+   "timestamp": 1792800005,
+   "nonce": "ffffffffffffffffffffffffffffffff",
+   "acting_user": "",
+   "body": "",
+   "canonical": "v2\nGET\n/api/integrations/dkuoj/v1/classes/31/status\n1792800005\nffffffffffffffffffffffffffffffff\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "8e88c7a85c5b146b38f023569d2b01efc5082d9a6c38640fa4fca105cdb78268"
+  },
+  {
+   "direction": "fp->oj",
+   "method": "GET",
+   "path": "/api/fairplay/v1/exams?page=2&changed_since=2026-10-23T18%3A05%3A48Z",
+   "timestamp": 1792800010,
+   "nonce": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+   "acting_user": "",
+   "body": "",
+   "canonical": "v2\nGET\n/api/fairplay/v1/exams?page=2&changed_since=2026-10-23T18%3A05%3A48Z\n1792800010\na1b2c3d4e5f60718293a4b5c6d7e8f90\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "c8dbdc832b5ef6defa1bdf0c16b132cef70e6400837312c36ee0e44c292c41a4"
+  },
+  {
+   "direction": "fp->oj",
+   "method": "POST",
+   "path": "/api/fairplay/v1/exams/c000001/submissions",
+   "timestamp": 1792800020,
+   "nonce": "00000000000000000000000000000001",
+   "acting_user": "",
+   "body": "{\"username\":\"bl642\",\"answers\":[]}",
+   "canonical": "v2\nPOST\n/api/fairplay/v1/exams/c000001/submissions\n1792800020\n00000000000000000000000000000001\n\n075fde7e84a323c884c48d8d1f6931774988ae1266e358b5bd7e7a5d133a1d5d",
+   "signature": "4a0d47d7d1a114586b6a8b15736ac0423604fffc53ac43dc94715f1336d92349"
+  }
+ ]
+}
