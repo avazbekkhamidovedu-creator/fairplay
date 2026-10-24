@@ -803,7 +803,7 @@ use is built into the FairPlay exam page.
   - `GET /api/student/exams/{id}/materials` → `{open_book, can_change, reason, files, used_bytes,
     max_files: 5, max_bytes: 52428800, types}`; `POST` (multipart `file`) → 201 file;
     `DELETE .../materials/{mid}` → 204. Changes only while the exam is open book, not closed, and
-    the student has no attempt yet (else 409). Limits 5 files / 50 MB in all (409 / 413); type
+    the student has no attempt yet (else 409). Limits 5 files / 20 MB in all (409 / 413); type
     from the bytes: PDF (`%PDF-`), PNG, JPEG, or UTF-8 text named `.txt` / `.md` (else 422).
   - During the attempt (`in_progress`, with `X-FairPlay-Session`):
     `GET /api/student/attempts/{aid}/materials` → `{files}`; `.../materials/{mid}` → the bytes as
