@@ -241,7 +241,7 @@ export function ExamToolsSettings({
                       )}
                       {showComp && (
                         <span className="t-site-companions" role="note" data-testid="site-companions">
-                          Also opened for {comp!.name} to work: <span className="mono">{comp!.sites.join(", ")}</span>
+                          Also opened so {comp!.name} works: <span className="mono">{comp!.sites.join(", ")}</span>
                         </span>
                       )}
                       <button
@@ -292,8 +292,8 @@ export function ExamToolsSettings({
             ) : (
               <span id="exam-site-hint" className="t-small t-muted">
                 {/* 2026-10-23 (review): entries match exactly; "*." for a whole site */}
-                docs.python.org — exactly this site; *.python.org — all of python.org; a full link (e.g. a Duke Box folder) opens
-                there first and allows every page of its site. A title may go before a link. Up to {MAX_WEBSITES} sites.
+                docs.python.org — exactly this site; *.python.org — all of python.org; a full link (like a Duke Box folder) opens
+                first and allows every page of its site. A title may go before a link. Up to {MAX_WEBSITES} sites.
               </span>
             )}
           </div>

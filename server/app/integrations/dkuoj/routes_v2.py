@@ -400,6 +400,10 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
                          "website_links": clean_website_links(e.website_links or [], websites),
                          "companions": companions(websites),
                          "upload_opens_days": upload_days(e),
+                         # which of these were set in FairPlay (POST /exams/<key>/settings) and
+                         # so win over DKU OJ's values
+                         "set_in_fairplay": [f for f in ("upload_opens_days", "websites")
+                                             if f in ((e.external_meta or {}).get("fairplay_settings") or {})],
                          "websites_blocked": [{"site": b["site"], "reason": str(b.get("reason") or "")}
                                               for b in blocked],
                          "strong_lock": bool(e.require_strong_lock),
@@ -503,6 +507,71 @@ async def exam_review(key: str, call: BridgeCall = Depends(signed_call),
         e.updated_at = utcnow()
     await session.commit()
     log.info("DKU OJ exam %s: student review set to %s by %s", key, value, call.acting_user)
+    return await _view(session, e)
+
+
+MAX_SETTINGS_SITES = 100       # lines in one settings call (at most MAX_WEBSITES hosts kept)
+SETTINGS_FIXED = "The exam has started: its settings can't change any more."
+
+
+@router.post("/exams/{key}/settings")
+async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
+                        session: AsyncSession = Depends(get_session)):
+    """2026-10-24: exam settings kept in FairPlay for a DKU OJ exam (v2 §3). Body, any of:
+    {"upload_opens_days": 0..7 | null, "websites": ["docs.python.org", "https://duke.app.box.com/folder/0",
+    "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}] | null}.
+    A field sent wins over DKU OJ's exam list from now on (sync.FAIRPLAY_SETTINGS); null hands
+    it back to DKU OJ. Websites pass the same parsing and site policy as synced ones (refused
+    ones are in settings.websites_blocked). Only before the first student started (409 after)."""
+    from ...services import invalidate_exam
+    from .sync import FAIRPLAY_SETTINGS, OVERRIDABLE, apply_fairplay_settings, parse_sites
+    data = call.data
+    sent = [f for f in OVERRIDABLE if f in data]
+    if not sent:
+        raise HTTPException(400, "Send upload_opens_days and/or websites")
+    ov: dict = {}
+    if "upload_opens_days" in data and data["upload_opens_days"] is not None:
+        n = data["upload_opens_days"]
+        if not isinstance(n, int) or isinstance(n, bool) or not 0 <= n <= 7:
+            raise HTTPException(400, "upload_opens_days must be a whole number from 0 to 7")
+        ov["upload_opens_days"] = n
+    if "websites" in data and data["websites"] is not None:
+        w = data["websites"]
+        if not isinstance(w, list) or len(w) > MAX_SETTINGS_SITES or not all(
+                isinstance(x, str) and len(x) <= 2100
+                or isinstance(x, dict) and isinstance(x.get("url"), str) and len(x["url"]) <= 2100
+                and (x.get("title") is None or isinstance(x.get("title"), str))
+                for x in w):
+            raise HTTPException(400, "websites must be a list of site names or links (at most "
+                                     f"{MAX_SETTINGS_SITES})")
+        sites, links, blocked = parse_sites(w, None, key)
+        ov.update(websites=sites, website_links=links, websites_blocked=blocked)
+    e = await _editor_exam(session, key, call)
+    if e.external_frozen_version or e.status == "closed":
+        raise HTTPException(409, SETTINGS_FIXED)
+    meta = dict(e.external_meta or {})
+    have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
+    for f in sent:      # null: back to DKU OJ's value (from the stored listing, applied below)
+        for k in ((f,) if f != "websites" else ("websites", "website_links", "websites_blocked")):
+            have.pop(k, None)
+    have.update(ov)
+    have["updated_at"] = iso(utcnow())
+    meta[FAIRPLAY_SETTINGS] = have
+    if any(f not in ov for f in sent):
+        # a field handed back: DKU OJ's value from the last exam list
+        from .sync import _settings
+        synced = _settings({"key": key, "settings": meta.get("settings") or {}})
+        if "upload_opens_days" in sent and "upload_opens_days" not in ov:
+            e.upload_opens_days = synced["upload_opens_days"]
+        if "websites" in sent and "websites" not in ov:
+            e.websites, e.website_links = synced["websites"], synced["website_links"]
+            meta["websites_blocked"] = synced["websites_blocked"]
+    apply_fairplay_settings(e, meta)
+    e.external_meta = meta
+    e.updated_at = utcnow()
+    await session.commit()
+    await invalidate_exam(get_store(), e.id)
+    log.info("DKU OJ exam %s: FairPlay settings %s set by %s", key, ", ".join(sent), call.acting_user)
     return await _view(session, e)
 
 

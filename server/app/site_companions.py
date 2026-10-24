@@ -30,6 +30,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 WILDCARD = "*."
+# The most sites the lock is handed (allowed websites + companions): the Windows app reads at
+# most 64 entries. The allowed websites themselves are at most schemas.MAX_WEBSITES (20), so
+# only companions are ever cut, last ones first.
+MAX_LOCK_SITES = 64
 
 
 @dataclass(frozen=True)
@@ -114,14 +118,16 @@ def companions_for(entry: str) -> tuple[str | None, list[str]]:
 def companions(websites: list[str]) -> list[dict]:
     """[{"for": entry, "name": "Duke Box", "sites": [...]}] for the entries that match a
     service; companion sites already on the list (or given for an earlier entry) are left
-    out."""
+    out, and none past MAX_LOCK_SITES in all."""
     have = set(websites)
+    room = MAX_LOCK_SITES - len(websites)
     out: list[dict] = []
     for w in websites:
         name, sites = companions_for(w)
-        sites = [c for c in sites if c not in have]
+        sites = [c for c in sites if c not in have][:max(0, room)]
         if name and sites:
             have.update(sites)
+            room -= len(sites)
             out.append({"for": w, "name": name, "sites": sites})
     return out
 
@@ -131,4 +137,4 @@ def allowed_sites(websites: list[str]) -> list[str]:
     out = list(websites)
     for c in companions(websites):
         out.extend(c["sites"])
-    return out
+    return out[:MAX_LOCK_SITES]

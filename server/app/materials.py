@@ -250,8 +250,9 @@ def window_out(exam: dict) -> dict:
 
 async def _can_change(session: AsyncSession, exam: dict, p: Principal, now=None) -> tuple[bool, str]:
     """May the student add or remove files now?
-    - live, before their start: yes, unless the exam has an early window (then the files were
-      fixed when the window closed: at the exam's date, or when it opened, if earlier);
+    - live, before their start: yes, unless the exam has an early window that has begun (then
+      the files were fixed when the window closed: at the exam's date, or when it opened, if
+      earlier; an exam opened before its window began takes files as one without a window);
     - draft (not open yet): only inside the early window (2026-10-24; before, a draft took
       uploads at any time although students never saw it);
     - never once they started, or after the close."""
@@ -264,7 +265,8 @@ async def _can_change(session: AsyncSession, exam: dict, p: Principal, now=None)
     w = upload_window(exam)
     now = now or utcnow()
     if exam.get("status") == "live":
-        return (False, WINDOW_CLOSED) if w is not None else (True, "")
+        # opened before its window even began: as without a window ("Before you start")
+        return (False, WINDOW_CLOSED) if w is not None and now >= w[0] else (True, "")
     if w is None:
         return False, NOT_YET
     if now < w[0]:

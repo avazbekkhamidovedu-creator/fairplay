@@ -538,7 +538,7 @@ def test_exam_endpoints(oj, fake):
     assert v["synced"] and v["package_ready"] and v["questions"] == 7 and v["points"] == 100
     assert v["status"] == "draft" and v["start_code"] is None and v["open_to"] == "all"
     assert v["settings"] == {"calculator": "scientific", "open_book": False, "websites": ["docs.python.org"],
-                             "website_links": [], "companions": [], "upload_opens_days": 0,
+                             "website_links": [], "companions": [], "upload_opens_days": 0, "set_in_fairplay": [],
                              "websites_blocked": [{"site": "*.com",            # refused, and shown
                                                    "reason": "'*.com' is not a website name like docs.python.org"}],
                              "strong_lock": True, "resume_needs_approval": True,

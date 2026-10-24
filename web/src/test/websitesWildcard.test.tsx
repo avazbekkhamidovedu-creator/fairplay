@@ -73,7 +73,7 @@ describe("teacher: allowed websites input", () => {
   it("explains exact vs *. and takes both", async () => {
     render(<Settings />);
     fireEvent.click(screen.getByRole("checkbox", { name: /Allowed websites/ }));
-    expect(screen.getByText(/docs\.python\.org — exactly this site; \*\.python\.org — all of python\.org\./)).toBeInTheDocument();
+    expect(screen.getByText(/docs\.python\.org — exactly this site; \*\.python\.org — all of python\.org;/)).toBeInTheDocument();
     const site = screen.getByLabelText("Website to allow");
     await userEvent.type(site, "*.github.io{Enter}");
     expect(screen.getByText(/Anyone can make a site under github.io/)).toBeInTheDocument();

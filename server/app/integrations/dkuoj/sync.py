@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import ClassMember, Exam, SchoolClass, User
-from ...schemas import MAX_WEBSITE_LINKS, clean_website_links, parse_website_entry
+from ...schemas import MAX_WEBSITE_LINKS, MAX_WEBSITES, clean_website_links, parse_website_entry
 from ..sanitize import clean_markdown
 from ..site_policy import filter_sites
 from ...services import invalidate_exam, new_id
@@ -202,19 +202,22 @@ async def _owner(session: AsyncSession) -> User:
     return u
 
 
-def _settings(item: dict) -> dict:
-    s = item.get("settings") or {}
-    calc = s.get("calculator")
+def parse_sites(websites, website_links, key=None) -> tuple[list[str], list[dict], list[dict]]:
+    """Allowed websites from DKU OJ (the exam list's settings, or POST /exams/<key>/settings)
+    -> (hosts, start pages, refused [{"site", "reason"}]).
+    2026-10-24: `websites` are host names or full links ("https://duke.app.box.com/folder/0",
+    optionally after a title); `website_links` [{url, title}] more start pages. A link's host
+    goes on the list (every page of it allowed), the link becomes a start page."""
     sites, unusable, links = [], [], []
-    # 2026-10-24: `websites` are host names; `website_links` [{host, url, title}] the start pages
-    # (a link in `websites` itself, from an older or newer DKU OJ, is split here as well)
-    raw_links = [x for x in s.get("website_links") or [] if isinstance(x, dict)][:MAX_WEBSITE_LINKS]
-    entries = [(w, None) for w in s.get("websites") or []] + [(x.get("url"), x.get("title")) for x in raw_links]
+    raw_links = [x for x in website_links or [] if isinstance(x, dict)][:MAX_WEBSITE_LINKS]
+    entries = [((w.get("url"), w.get("title")) if isinstance(w, dict) else (w, None))
+               for w in websites or []]
+    entries += [(x.get("url"), x.get("title")) for x in raw_links]
     for w, title in entries:
         try:
-            h, link = parse_website_entry(str(w))
+            h, link = parse_website_entry(str(w or ""))
         except ValueError as exc:
-            log.warning("DKU OJ exam %s: website %r skipped", item.get("key"), w)
+            log.warning("DKU OJ exam %s: website %r skipped", key, w)
             unusable.append({"site": str(w)[:200], "reason": str(exc)[:200]})
             continue
         if h not in sites:
@@ -225,23 +228,59 @@ def _settings(item: dict) -> dict:
             links.append(link)
     # Security review 2026-10-24: FairPlay's own policy for sites an external source opens
     # in the lock (app.integrations.site_policy); the dropped ones go to websites_blocked.
-    sites, blocked = filter_sites(sites[:20])
+    sites, blocked = filter_sites(sites[:MAX_WEBSITES])
     links = clean_website_links(links, sites)
     blocked = (unusable + blocked)[:40]
     if blocked:
-        log.warning("DKU OJ exam %s: websites refused by FairPlay: %s", item.get("key"),
+        log.warning("DKU OJ exam %s: websites refused by FairPlay: %s", key,
                     ", ".join(b["site"] for b in blocked))
+    return sites, links, blocked
+
+
+def upload_days_of(v) -> int:
+    """upload_opens_days from DKU OJ: a whole number 0..7, anything else 0."""
+    if isinstance(v, bool):
+        return 0
     try:
-        days = int(s.get("upload_opens_days") or 0)
+        days = int(v or 0)
     except (TypeError, ValueError):
-        days = 0
+        return 0
+    return days if 0 <= days <= 7 else 0
+
+
+def _settings(item: dict) -> dict:
+    s = item.get("settings") or {}
+    calc = s.get("calculator")
+    sites, links, blocked = parse_sites(s.get("websites"), s.get("website_links"), item.get("key"))
     return {"calculator": calc if calc in ("off", "scientific", "graphing") else "off",
             "open_book": bool(s.get("open_book")), "websites": sites, "websites_blocked": blocked,
             "website_links": links,
             # 2026-10-24: open book: students may upload this many days before start_time
-            "upload_opens_days": days if 0 <= days <= 7 else 0,
+            "upload_opens_days": upload_days_of(s.get("upload_opens_days")),
             "require_strong_lock": bool(s.get("strong_lock")),
             "resume_needs_approval": s.get("resume_needs_approval") is not False}
+
+
+# 2026-10-24: settings set in FairPlay for a DKU OJ exam (POST /exams/<key>/settings, v2 §3),
+# kept in external_meta[FAIRPLAY_SETTINGS]: {"upload_opens_days": n, "websites": [...],
+# "website_links": [...], "websites_blocked": [...], "updated_at": iso}, each field only when
+# set. A field set here wins over the same field in the exam list (every later sync applies
+# it again); sending it as null hands it back to DKU OJ's value.
+FAIRPLAY_SETTINGS = "fairplay_settings"
+OVERRIDABLE = ("upload_opens_days", "websites")
+
+
+def apply_fairplay_settings(e: Exam, meta: dict) -> None:
+    """Put the FairPlay-set fields (FAIRPLAY_SETTINGS) on the exam, over the synced ones."""
+    ov = meta.get(FAIRPLAY_SETTINGS)
+    if not isinstance(ov, dict):
+        return
+    if "upload_opens_days" in ov:
+        e.upload_opens_days = upload_days_of(ov.get("upload_opens_days"))
+    if isinstance(ov.get("websites"), list):
+        e.websites = [w for w in ov["websites"] if isinstance(w, str)][:MAX_WEBSITES]
+        e.website_links = clean_website_links(ov.get("website_links") or [], e.websites)
+        meta["websites_blocked"] = [b for b in ov.get("websites_blocked") or [] if isinstance(b, dict)][:40]
 
 
 def _duration_min(item: dict) -> int:
@@ -257,7 +296,8 @@ def _duration_min(item: dict) -> int:
 META_KEYS = ("course", "classes", "start_time", "end_time", "time_limit_seconds", "results_hidden",
              "package_version", "updated_at", "settings")
 KEEP_META = ("results_cursor", "package_retry_at", "package_error", "package_failed_version",
-             "description_md", "assets", "extra_close_minutes", "review_updated_at", "websites_blocked")
+             "description_md", "assets", "extra_close_minutes", "review_updated_at", "websites_blocked",
+             "fairplay_settings")      # 2026-10-24: FAIRPLAY_SETTINGS
 
 
 def apply_review(e: Exam, value, updated_at) -> bool:
@@ -336,6 +376,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         meta["websites_blocked"] = tools.pop("websites_blocked")
         for f, v in tools.items():
             setattr(e, f, v)
+        apply_fairplay_settings(e, meta)     # 2026-10-24: set in FairPlay -> wins
     oj_settings = item.get("settings") or {}
     apply_review(e, oj_settings.get("review"), oj_settings.get("review_updated_at"))
     e.updated_at = now

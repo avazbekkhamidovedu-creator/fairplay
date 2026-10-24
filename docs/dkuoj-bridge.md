@@ -20,7 +20,7 @@ In the anti-cheating box, the lock becomes one choice: **No lock · Safe Exam Br
 | `fairplay_required` | bool | false | the assignment runs in FairPlay and is hidden from students on DKU OJ |
 | `fairplay_calculator` | `off` / `scientific` / `graphing` | `off` | built-in calculator |
 | `fairplay_open_book` | bool | false | students may add their own notes/files before starting |
-| `fairplay_websites` | text, one host per line | empty | websites students may open inside the exam (e.g. `docs.python.org`); FairPlay drops AI-assistant, messaging and file-sharing sites and, when set, any site not on its `FAIRPLAY_EXTERNAL_SITE_ALLOWLIST` (v2 §3 `websites_blocked`) |
+| `fairplay_websites` | text, one host per line | empty | websites students may open inside the exam (e.g. `docs.python.org`, or a full link like `https://duke.app.box.com/folder/0`, v2 §10); FairPlay drops AI-assistant, messaging and file-sharing sites (Duke Box is an exception) and, when set, any site not on its `FAIRPLAY_EXTERNAL_SITE_ALLOWLIST` (v2 §3 `websites_blocked`) |
 | `fairplay_strong_lock` | bool | false | only the strongest lock counts (Windows separate desktop, Mac assessment mode) |
 | `fairplay_resume_needs_approval` | bool | true | after a crash a student waits for the invigilator |
 
@@ -48,6 +48,10 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
  "next_page":null,"server_time":"2026-11-20T09:15:02Z"}
 ```
 `settings.review` / `review_updated_at`: student review after hand-in (v2 §8, 2026-10-24).
+2026-10-24 (v2 §10): `settings.websites` entries may also be full links (`https://duke.app.box.com/folder/0`,
+optionally after a title): FairPlay keeps the host on the allow-list and the link as a start page; optional
+`settings.website_links: [{url, title}]` and `settings.upload_opens_days` (0–7) are read when present (DKU OJ does
+not send them today; its schema does not change). Values set with v2 `POST /exams/<key>/settings` win over these.
 `package_version` = first 16 hex of sha256 over the canonical package JSON (it changes whenever anything in the package changes). `time_limit_seconds` null = the whole window.
 
 **`GET exams/<key>/package`** — 404 if not a FairPlay assignment; `425` + `Retry-After` earlier than 24 h before `start_time`. `ETag: "<package_version>"`, honours `If-None-Match` (304).

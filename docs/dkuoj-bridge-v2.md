@@ -1,7 +1,7 @@
 # DKU OJ ↔ FairPlay bridge, v2: professors use only DKU OJ
 
 Status: build contract (2026-10-24; review fixes 2026-10-24; security review fixes 2026-10-24 (§1 rotation / transport / bounded answers, §3 reset refusal and websites_blocked); class-login password viewable, login
-history, strong student passwords, student classes, student review after hand-in §8 2026-10-24, five review levels §8 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
+history, strong student passwords, student classes, student review after hand-in §8 2026-10-24, five review levels §8 2026-10-24; early upload window, website links, Duke Box and `POST /exams/<key>/settings` §10 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
 assets, uploads, submissions, results). Everything in v1 stays, except where this file changes it
 (§1 signing replaces the Bearer token; §6 retires the live-room link).
 
@@ -216,6 +216,9 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
    "status": "draft|live|closed", "start_code": "219074" | null,
    "invigilator_code": "583204" | null, "closes_at": "...", "open_to": "all" | ["bl642"],
    "settings": {"calculator":"scientific","open_book":false,"websites":["docs.python.org"],
+                "website_links":[{"host":"duke.app.box.com","url":"https://duke.app.box.com/folder/0","title":"Course folder"}],
+                "companions":[{"for":"duke.app.box.com","name":"Duke Box","sites":["app.box.com","..."]}],
+                "upload_opens_days":2,"set_in_fairplay":["upload_opens_days","websites"],
                 "websites_blocked":[{"site":"chatgpt.com","reason":"AI assistant"}],
                 "strong_lock":true,"resume_needs_approval":true,"review":"nothing"},
    "counts": {"roster": 68, "set_up": 61, "not_started": 3, "writing": 23, "offline": 1,
@@ -242,6 +245,15 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   exams"). A name that isn't a usable site (`*.com`, a path, an IP) is listed too, with the
   reason. FairPlay-native exams are not affected. DKU OJ shows `websites_blocked` on the
   FairPlay tab.
+  2026-10-24 (§10): `website_links` = start pages (allowed websites given as full links),
+  `companions` = sites the lock also opens so a service works (Duke Box), `upload_opens_days`
+  = the early upload window (0 = off), `set_in_fairplay` = which of `upload_opens_days` /
+  `websites` were set with `POST /exams/<key>/settings` (they win over the exam list).
+- **`POST /exams/<key>/settings`** (2026-10-24, §10) body, any of
+  `{"upload_opens_days": 0..7 | null, "websites": ["docs.python.org", "https://duke.app.box.com/folder/0", "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}] | null}`
+  → GET shape. Editor-checked like the other exam endpoints (403), not synced → 409, after the
+  first student started (or closed) → 409. Neither field → 400; `upload_opens_days` not a whole
+  number 0–7 → 400; `websites` not a list of strings / `{url, title?}` (≤ 100) → 400.
 - **`POST /exams/<key>/open`** body `{"open_to": "all" | ["netid", ...]}` → same shape as GET.
   Idempotent (already live: updates `open_to`).
 - **`POST /exams/<key>/close`** → GET shape. Same effect as the FairPlay teacher Close (writers
@@ -497,3 +509,62 @@ DKU OJ side (FairPlay → DKU OJ calls are trusted only as far as below, even wh
     it is dropped (the hand-in is still filed).
 - **Signing** (§1): two-token rotation; shared nonce cache enforced by a system check; https
   `FAIRPLAY_URL` off the loopback; capped, time-limited reading of FairPlay's answers.
+
+## 10. Early upload window, allowed websites as links, Duke Box (2026-10-24)
+
+Product rule (from Mister): for an open-book exam the professor may let students upload their
+files one or more days before the exam; during that time the exam shows on the student's pages
+with only the upload. Professors and students use Duke Box: a Box link the professor allows
+must open, and every page under that site too.
+
+DKU OJ's database schema does not change for this: the values are kept in FairPlay
+(`external_meta.fairplay_settings` of the exam) and set with `POST /exams/<key>/settings` (§3).
+A later step moves all FairPlay settings of DKU OJ assignments into FairPlay this way.
+
+**Precedence.** A field set with `POST /exams/<key>/settings` wins over the same field in the
+exam list (`settings.upload_opens_days`, `settings.websites` / `settings.website_links`): every
+later sync keeps the FairPlay value. Sending the field as `null` hands it back to DKU OJ (the
+value from the last exam list applies at once). Fields not sent are left as they are.
+`settings.set_in_fairplay` in the GET shape says which fields are FairPlay's. Like all exam
+settings, they are fixed once the first student started (409).
+
+**Upload window** (`upload_opens_days`, 0 = off, 1–7). Only for open-book exams with a start
+time (DKU OJ `start_time`). From `start_time − N days` until `start_time` (or until the exam is
+opened, if earlier) the exam is listed to its students as "Upcoming — upload your files ·
+uploads close <time>" with only the student's own materials upload (`/api/student/exams/<id>/materials`,
+same limits: 5 files, 20 MB, PDF/PNG/JPEG/TXT/MD). The server gives nothing about the questions:
+`question_count: null`, no `package_id`, start / package / package-key refuse (409). After the
+window the files are fixed and the student reads them in the exam. Answers to file-upload
+questions are part of the attempt and are made during the exam only. The exam list may also
+carry `settings.upload_opens_days` (DKU OJ does not send it today).
+
+**Websites as links.** A website may be a full link (`https://duke.app.box.com/folder/0`,
+optionally after a title). Its host goes into `settings.websites` (every path of that host is
+allowed: `.../folder/0/somewherenew/123` opens too) and the link into `settings.website_links`
+(`[{host, url, title}]`, at most 20): the student's websites tab opens it first. `websites`
+keeps its format for the apps (lowercase hosts, `*.x.com`; at most 20). The exam list may send
+links in `settings.websites` or `settings.website_links: [{url, title}]` too.
+
+**Duke Box.** FairPlay's site policy for external exams (§3) refuses file sharing, `box.com`
+among it. Exceptions (`FAIRPLAY_SITE_POLICY_EXCEPTIONS`, exact hosts; default
+`duke.app.box.com,duke.box.com`) are allowed: Duke Box is the university's own storage. Box in
+general (`app.box.com`, `*.box.com`, other organisations' Box) stays refused as a site of its
+own. Trade-off: Box shows the student their OWN Box (all their files, files shared with them,
+Box Notes they can open): allowing it is the professor's choice, like open book.
+
+**Companions** (`app/site_companions.py`). A service works only when a few more hosts load:
+for a Box site the lock also opens `app.box.com`, `<tenant>.app.box.com`, `account.box.com`,
+`<tenant>.account.box.com`, `api.box.com`, `sso.services.box.net`, `*.boxcdn.net`,
+`*.boxcloud.com`; for Duke Box also Duke's sign-in `shib.oit.duke.edu` and Duo
+`*.duosecurity.com`. They are in the GET shape's `settings.companions` (the FairPlay tab shows
+"Also opened so Duke Box works: …") and in the student's `tools.allowed_sites` (what the page
+hands the app), never in `websites`. Websites + companions are at most 64 entries (the Windows
+app reads 64). Sources: Box "Configuring a firewall for Box applications and services"
+(support.box.com/hc/en-us/articles/33552262497683); Duke OIT Shibboleth documentation
+(authentication.oit.duke.edu/manager/documentation: IdP shib.oit.duke.edu); Duke OIT Duo
+(oit.duke.edu/service/duo/). Left out on purpose: Box uploads (`upload.*.box.com`) and Box Notes
+(`notes.services.box.com`).
+
+Note: in the apps the websites pane is a frame; Box / Duke sign-in and Duo do not work inside a
+frame (and Safari blocks third-party cookies), so a native site view in the apps is planned
+separately. This section only makes the data and the web side right.

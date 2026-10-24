@@ -996,7 +996,9 @@ button.stu-filerow:hover {
   gap: 8px;
   font-size: 14px;
 }
-.t-select-sm {
+.t-inline-field .t-select-sm {
   width: auto;
   min-width: 200px;
+  max-width: 100%;
+  flex: 0 1 auto;
 }

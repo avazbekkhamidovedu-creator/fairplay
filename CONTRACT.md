@@ -815,6 +815,34 @@ use is built into the FairPlay exam page.
   - The exam page fetches the files when the exam opens and keeps them in memory; after a reload
     without the connection it says "Materials need the connection" (the exam keeps working).
 
+### Early upload window, website links, companions (2026-10-24)
+- **Exam fields:** `upload_opens_days: 0..7` (default 0; open book only, needs `scheduled_at`);
+  `websites` lines may be full links (`https://duke.app.box.com/folder/0`, optionally after a
+  title: `Course folder https://...`). The server stores the HOST in `websites` (unchanged format
+  for the apps: lowercase hosts, `*.x.com`, at most 20) and the link in
+  `website_links: [{host, url, title}]` (≤ 20, `url` always https; anything sent in
+  `website_links` is ignored: it comes from `websites`). Exam out adds `website_links`,
+  `companions: [{for, name, sites}]` (`app/site_companions.py`) and `upload_opens_days`.
+  Website exams: 0 / `[]`. `GET /api/tools/site-check?host=` takes a link too and adds
+  `companions: {name, sites} | null`.
+- **Student:** `tools` adds `website_links` and `allowed_sites` (= `websites` + companions, at
+  most 64): the exam page hands `allowed_sites` to the app (`lock` / `session`), older servers
+  without it → `websites`. `/api/student/exams` rows add `upload_window: {opens_at, closes_at} | null`.
+  A draft exam is listed while its window is open (`scheduled_at − N days` ≤ now < `scheduled_at`),
+  with `question_count: null`, `package_id: null`; start / package / package-key refuse it (409).
+  `GET .../materials` adds `upload_opens_at` / `upload_closes_at`. Uploads: a draft only inside
+  its window; a live exam whose window had begun takes none (fixed when the window closed, at
+  `scheduled_at` or when it was opened); a live exam opened before its window began, or without a
+  window, takes them until the student starts (as before). 409 reasons: "Uploads for this exam
+  have not opened yet" / "Uploads for this exam have closed" / "You can add your files when your
+  teacher opens the exam". File-upload ANSWERS are made in the attempt only.
+- **Web:** student pages list it as "Upcoming — upload your files · Uploads close <time>"
+  (Home / Exams / course), `/student/exams/<id>/upload` has only the upload area (time left, file
+  list with Remove). The websites tab lists each start page (title + link) and opens it first.
+- **Site policy (external exams):** `FAIRPLAY_SITE_POLICY_EXCEPTIONS` (exact hosts; unset =
+  `duke.app.box.com,duke.box.com`, empty = none) are not refused by the deny-list. See
+  `docs/dkuoj-bridge-v2.md` §10 for DKU OJ's side (`POST /exams/<key>/settings`).
+
 ## Integrations + DKU OJ — FairPlay server as implemented (2026-10-23)
 Binding: `docs/dkuoj-bridge.md` plus the product owner's integration rule (core is
 source-agnostic). Code: `server/app/integrations/` (`base.py` = `ExternalSource` hooks,
