@@ -245,9 +245,18 @@ final class LockdownController {
         // Single App Mode lock can come up while FairPlay is in the background, before the
         // watchers above existed). iPadOS lets no app bring itself back: count it as leaving
         // and cover the exam until the student returns (didBecomeActive removes the cover).
-        if UIApplication.shared.applicationState == .background {
+        let appState = UIApplication.shared.applicationState
+        if appState == .background {
             leaves += 1
             EventLog.shared.record("app_backgrounded", "not in front when the lock started")
+            surface?.setPrivacyCover(true)
+        } else if appState == .inactive {
+            // Review 2026-10-24: Control Center / Notification Center (or iPadOS's own lock
+            // prompt) over FairPlay when the lock came up: willResignActive already fired
+            // before the watchers existed, so cover now too. Not a leave and not reported
+            // (the Assessment Mode prompt also makes the app inactive); didBecomeActive
+            // removes the cover as soon as FairPlay is in front again.
+            DebugLog.log("lock", "inactive when the lock started (system overlay): exam covered")
             surface?.setPrivacyCover(true)
         }
         runChecks(atLock: true)

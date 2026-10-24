@@ -94,7 +94,8 @@ final class LockdownController {
         surface?.enterLockedMode()
         // The student may have switched to another app during "Close them and start"
         // (2026-10-24): hide it so FairPlay really comes to the front (reclaimFront).
-        hideRefusedLogged.removeAll()
+        hideRefusedLogged.removeAll(); keptVisibleLogged.removeAll()
+        hiddenByUs.removeAll(); lastOwnHide = nil
         reclaimFront(from: NSWorkspace.shared.frontmostApplication)
         installWorkspaceWatchers()
         installFocusGuard()
@@ -138,6 +139,7 @@ final class LockdownController {
         Watchdog.lockEnded()
         surface?.hideBlocking()
         surface?.exitLockedMode()
+        unhideWhatWeHid()
         EventLog.shared.record(.lockEnded)
         AppSession.shared.beat()
         if isPreLock {
@@ -197,6 +199,17 @@ final class LockdownController {
         return true
     }
 
+    /// Review 2026-10-24: at unlock, show again the apps FairPlay hid during the lock (a VPN
+    /// client, an allowed app, Finder ...) that still run. Apps the student hid are untouched.
+    private func unhideWhatWeHid() {
+        let apps = Array(hiddenByUs.values)
+        hiddenByUs.removeAll(); lastOwnHide = nil
+        for app in apps where !app.isTerminated && app.isHidden {
+            let ok = app.unhide()
+            DebugLog.log("lock", "unlock: shown again (\(ok ? "ok" : "REFUSED")): \(DebugLog.describe(app))")
+        }
+    }
+
     private func bringToFront() {
         NSApp.activate(ignoringOtherApps: true)
         surface?.takeFocus()
@@ -209,18 +222,53 @@ final class LockdownController {
     /// active, were off) until Chrome was quit by hand. Hiding the app in front always
     /// works and hands activation back to us; then we ask for it as before. System
     /// security dialogs are never touched. Apps that must go are still closed by the checks.
+    ///
+    /// Review 2026-10-24: VPN clients, teacher-allowed apps and Apple system agents
+    /// (Allowlist.mayStayVisible) are never hidden, only asked to give the front back. What
+    /// we hid is remembered and shown again at unlock (hiddenByUs).
     private func reclaimFront(from front: NSRunningApplication?) {
         if let front, front.processIdentifier != ProcessInfo.processInfo.processIdentifier,
            !Allowlist.isSystemDialog(front), !front.isHidden, !front.isTerminated {
-            let ok = front.hide()
-            if ok || !hideRefusedLogged.contains(front.processIdentifier) {
-                if !ok { hideRefusedLogged.insert(front.processIdentifier) }
-                DebugLog.log("lock", "other app in front while locked -> hidden (\(ok ? "ok" : "REFUSED")): \(DebugLog.describe(front))")
+            let pid = front.processIdentifier
+            if Allowlist.mayStayVisible(front) {
+                if !keptVisibleLogged.contains(pid) {
+                    keptVisibleLogged.insert(pid)
+                    DebugLog.log("lock", "kept app in front while locked -> not hidden, taking the front back: \(DebugLog.describe(front))")
+                }
+            } else {
+                let ok = front.hide()
+                if ok {
+                    hiddenByUs[pid] = front
+                    lastOwnHide = Date()
+                }
+                if ok || !hideRefusedLogged.contains(pid) {
+                    if !ok { hideRefusedLogged.insert(pid) }
+                    DebugLog.log("lock", "other app in front while locked -> hidden (\(ok ? "ok" : "REFUSED")): \(DebugLog.describe(front))")
+                }
             }
         }
         bringToFront()
     }
     private var hideRefusedLogged: Set<pid_t> = []
+    private var keptVisibleLogged: Set<pid_t> = []
+    /// Review 2026-10-24: apps FairPlay hid during this lock (pid -> app), shown again at unlock.
+    private var hiddenByUs: [pid_t: NSRunningApplication] = [:]
+    /// When reclaimFront last hid the app in front: macOS then activates the next visible
+    /// app by itself (often Finder), which the student did not choose.
+    private var lastOwnHide: Date?
+
+    /// Records that FairPlay hid `app` (only when it was visible before), for unlock().
+    private func noteHidden(_ app: NSRunningApplication, wasHidden: Bool, ok: Bool) {
+        if ok && !wasHidden { hiddenByUs[app.processIdentifier] = app }
+    }
+
+    /// Review 2026-10-24 (pure, for the tests): an activation `sinceOwnHide` seconds after
+    /// reclaimFront hid the app in front is macOS picking the next app, not the student:
+    /// within 1 s for any app, within 3 s for Finder (macOS's usual pick).
+    static func activationFollowsOwnHide(bundleId: String?, sinceOwnHide: TimeInterval?) -> Bool {
+        guard let t = sinceOwnHide, t >= 0 else { return false }
+        return t < 1 || (bundleId == Allowlist.finder && t < 3)
+    }
 
     private func installFocusGuard() {
         let t = Timer(timeInterval: 0.3, repeats: true) { [weak self] _ in
@@ -254,9 +302,17 @@ final class LockdownController {
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.processIdentifier != me,
                   !Allowlist.isSystemDialog(app) else { return }
-            EventLog.shared.record(.otherAppForeground(app.localizedName ?? app.bundleIdentifier ?? "unknown"))
+            // Review 2026-10-24: right after reclaimFront hid the app in front, macOS activates
+            // the next visible app itself (often Finder): not the student's doing, not reported.
+            let since = self.lastOwnHide.map { Date().timeIntervalSince($0) }
+            if LockdownController.activationFollowsOwnHide(bundleId: app.bundleIdentifier, sinceOwnHide: since) {
+                DebugLog.log("lock", "activation right after our own hide, not reported: \(DebugLog.describe(app))")
+            } else {
+                EventLog.shared.record(.otherAppForeground(app.localizedName ?? app.bundleIdentifier ?? "unknown"))
+            }
             // Hide it and take the front back (any build; activation alone is ignored on
-            // macOS 14+). A dev-build kept terminal/browser is hidden like any other.
+            // macOS 14+). A dev-build kept terminal/browser is hidden like any other; VPN
+            // clients, teacher-allowed apps and Apple agents are not hidden (reclaimFront).
             self.reclaimFront(from: app)
         })
 
@@ -274,7 +330,14 @@ final class LockdownController {
             // allowed may run; anything else opened during the exam is closed.
             let finder = app.bundleIdentifier == Allowlist.finder
             DebugLog.log("quit", "app opened during lock -> \(denied ? "force quit" : finder ? "hidden" : "quit"): \(DebugLog.describe(app))")
-            if denied { LockdownController.forceQuit(app) } else if finder { app.hide() } else { app.terminate() }
+            if denied {
+                LockdownController.forceQuit(app)
+            } else if finder {
+                let wasHidden = app.isHidden
+                self.noteHidden(app, wasHidden: wasHidden, ok: app.hide())
+            } else {
+                app.terminate()
+            }
             self.bringToFront()
         })
 
@@ -421,7 +484,7 @@ final class LockdownController {
             && !Allowlist.permits(app) && !app.isTerminated {
             let name = app.localizedName ?? app.bundleIdentifier ?? "app"
             if app.bundleIdentifier == Allowlist.finder {
-                if !app.isHidden { _ = app.hide() }
+                if !app.isHidden { noteHidden(app, wasHidden: false, ok: app.hide()) }
                 continue
             }
             if let asked = quitting[app.processIdentifier] {
@@ -594,6 +657,7 @@ final class LockdownController {
     private func hideDevKept(_ app: NSRunningApplication) {
         guard !app.isHidden else { return }
         let ok = app.hide()
+        noteHidden(app, wasHidden: false, ok: ok)
         DebugLog.log("quit", "dev build: kept but hidden (\(ok ? "ok" : "REFUSED")): \(DebugLog.describe(app))")
     }
 

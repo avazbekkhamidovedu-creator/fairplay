@@ -136,6 +136,36 @@ enum Allowlist {
         return CodeSign.isApple(pid: app.processIdentifier)
     }
 
+    /// Review 2026-10-24: Apple system agents that put up a prompt of their own (permission
+    /// warnings, "app downloaded from the internet", Wi-Fi / Bluetooth sign-in). Lowercase; exact ids, plus every id under `systemAgentPrefixes`.
+    private static let systemAgents: Set<String> = [
+        "com.apple.coreservicesuiagent", "com.apple.coreservices.uiagent",
+        // Not the Captive Network Assistant: it is a small web browser (a way out of the lock).
+        "com.apple.wifi.wifiagent",
+        "com.apple.bluetoothuiserver", "com.apple.netauthagent"
+    ]
+    private static let systemAgentPrefixes: [String] = ["com.apple.accessibility."]
+
+    /// The name test alone (unit-testable).
+    static func isSystemAgentId(_ id: String) -> Bool {
+        let lower = id.lowercased()
+        return systemAgents.contains(lower) || systemAgentPrefixes.contains { lower.hasPrefix($0) }
+    }
+
+    /// An Apple system agent's prompt (by bundle id AND Apple's signature, never by name).
+    static func isSystemAgent(_ app: NSRunningApplication) -> Bool {
+        guard let id = app.bundleIdentifier, isSystemAgentId(id) else { return false }
+        return CodeSign.isApple(pid: app.processIdentifier)
+    }
+
+    /// Review 2026-10-24: in front while locked, the lock takes the front back but does NOT
+    /// hide these: VPN clients (a sign-in popup mid-exam), the apps the teacher allowed and
+    /// Apple system agents. Dev-build kept terminals/browsers are hidden like any other app.
+    static func mayStayVisible(_ app: NSRunningApplication) -> Bool {
+        if isDevKept(app) { return false }
+        return keeps(app) || isTeacherAllowed(app) || isSystemAgent(app)
+    }
+
     /// May this app keep running while locked? Windowed (.regular) apps: macOS itself,
     /// VPN clients and the apps the teacher allowed for this exam. Everything else is
     /// closed (2026-10-14). Background/menu-bar apps unless on the deny list
@@ -143,7 +173,9 @@ enum Allowlist {
     static func permits(_ app: NSRunningApplication) -> Bool {
         guard let id = app.bundleIdentifier else { return app.activationPolicy != .regular }
         if id == Bundle.main.bundleIdentifier { return true }
-        if system.contains(id) || systemDialogs.contains(id) { return CodeSign.isApple(pid: app.processIdentifier) }
+        if system.contains(id) || systemDialogs.contains(id) || isSystemAgentId(id) {
+            return CodeSign.isApple(pid: app.processIdentifier)
+        }
         if keeps(app) || isTeacherAllowed(app) { return true }
         return app.activationPolicy != .regular
     }

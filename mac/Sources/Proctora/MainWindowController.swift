@@ -626,7 +626,9 @@ final class MainWindowController: NSWindowController, LockSurface,
         if ownLocalPage || isServerURL(url) || external.allows(url) {
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 external.checkFinishURL(url)
-                eventsReady = false            // the new page asks again when it listens
+                // Review 2026-10-24: eventsReady is reset in didCommit, not here. A navigation
+                // that never commits (a cancelled download, a 204, a fragment link) left the
+                // page that is still on screen without events until it was reloaded.
             }
             decisionHandler(.allow)
         } else {
@@ -730,6 +732,9 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         committedURL = webView.url
+        // A new document replaced the old one (main frame only: WebKit reports commits for
+        // the main frame). Events wait until the new page asks for them ("flushEvents").
+        eventsReady = false
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -739,6 +744,7 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         DebugLog.log("crash", "exam page process crashed; reloading")
+        eventsReady = false                  // review 2026-10-24: no page listens until the reload asks
         reload()
     }
 

@@ -74,8 +74,10 @@ final class EventTap {
 
     /// NX_SYSDEFINED: media keys, dictation/Siri keys and the like.
     private static let systemDefinedType = CGEventType(rawValue: 14)!
-    /// Aux keys that stay usable: volume, mute, brightness, keyboard backlight.
-    private static let allowedAuxKeys: Set<Int> = [0, 1, 2, 3, 7, 21, 22, 23]
+    /// Aux keys that stay usable: volume, mute, brightness, keyboard backlight, and (review
+    /// 2026-10-24) 4 = NX_KEYTYPE_CAPS_LOCK: Caps Lock and "Use Caps Lock to switch to and
+    /// from <input source>" must always work (students switch ABC / Russian / Pinyin with it).
+    private static let allowedAuxKeys: Set<Int> = [0, 1, 2, 3, 4, 7, 21, 22, 23]
 
     func start() -> Bool {
         guard !isRunning else { return true }
@@ -248,9 +250,31 @@ final class EventTap {
     /// with clicks), so typing/clicking in the essay box after a Caps Lock language switch
     /// was enough.
     /// Now the NSEvent is only ever made on the main thread (see systemDefinedFields).
+    ///
+    /// Review 2026-10-24: most system-defined events are not keys at all (the mouse-button
+    /// state, subtype 7, comes with every click) and need no decision, so they are no longer
+    /// decoded: fewer events run through AppKit/HIToolbox twice (our NSEvent here plus
+    /// AppKit's own delivery), which fed Text Services Manager's Caps Lock state machine
+    /// extra transitions. See mayBeAuxKey for how they are told apart without AppKit.
     static func allowSystemDefined(_ event: CGEvent) -> Bool {
+        guard mayBeAuxKey(flags: event.flags.rawValue) else { return true }
         guard let fields = systemDefinedFields(event) else { return true }
         return allowSystemDefined(subtype: fields.subtype, data1: fields.data1)
+    }
+
+    /// Review 2026-10-24: could this system-defined event be an aux key (subtype 8,
+    /// NX_SUBTYPE_AUX_CONTROL_BUTTONS)? CoreGraphics has no public field for the subtype or
+    /// data1 of these events (and no undocumented CGEventField is used anywhere in this app,
+    /// nor is one safe to rely on), so this reads the event's flags instead: for aux keys
+    /// IOHIDSystem puts the key state into bits 8-11 of the flags, 0xA = key down and
+    /// 0xB = key up (NSEvent shows them as flags=0xa00 / 0xb00, the same nibble as data1
+    /// bits 8-15). No modifier flag uses bits 9-11 (bit 8 is "non-coalesced", which only
+    /// turns 0xA into 0xB), so mouse-button and other system-defined events never match.
+    /// Only matching events are decoded on the main thread; the rest pass untouched, as
+    /// they always did (the policy lets every non-aux subtype pass).
+    static func mayBeAuxKey(flags: UInt64) -> Bool {
+        let state = (flags >> 8) & 0xF
+        return state == 0xA || state == 0xB
     }
 
     /// The policy alone (pure, for the tests). Subtype 8 = NX_SUBTYPE_AUX_CONTROL_BUTTONS
@@ -267,7 +291,17 @@ final class EventTap {
     static let mainThreadWait: TimeInterval = 0.25
     private static var lastSlowMainLog = Date.distantPast   // tap thread only
 
-    private final class FieldsBox { var value: (subtype: Int, data1: Int)? }
+    /// Shared by the tap thread and the main-queue block that decodes for it. `value` is
+    /// read by the tap thread only after the semaphore said the block finished.
+    private final class FieldsBox {
+        var value: (subtype: Int, data1: Int)?
+        private let lock = NSLock()
+        private var abandoned = false
+        /// Tap thread, after its wait timed out: the block must not decode any more.
+        func abandon() { lock.lock(); abandoned = true; lock.unlock() }
+        /// Main thread, before decoding: false once the tap thread gave up on this event.
+        func shouldDecode() -> Bool { lock.lock(); defer { lock.unlock() }; return !abandoned }
+    }
 
     /// subtype and data1 of a system-defined event, or nil when it is not one (or the
     /// main thread did not answer in time: then the event passes, as a failed NSEvent
@@ -280,10 +314,14 @@ final class EventTap {
         let box = FieldsBox()
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.main.async {
-            box.value = EventTap.decodeOnMain(event)
+            // Review 2026-10-24: a decode the tap thread stopped waiting for is skipped. The
+            // event has already gone on, so decoding it late would only feed HIToolbox's Caps
+            // Lock state machine a stale event (a backlog of them after a busy moment).
+            if box.shouldDecode() { box.value = EventTap.decodeOnMain(event) }
             done.signal()
         }
         guard done.wait(timeout: .now() + mainThreadWait) == .success else {
+            box.abandon()
             let now = Date()
             if now.timeIntervalSince(lastSlowMainLog) > 5 {
                 lastSlowMainLog = now

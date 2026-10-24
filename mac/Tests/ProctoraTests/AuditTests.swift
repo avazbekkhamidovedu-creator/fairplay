@@ -114,14 +114,28 @@ import Carbon.HIToolbox
     // (which must run on the main thread). data1 = key << 16 | state << 8.
     @Test func mediaKeyPolicy() {
         func aux(_ key: Int) -> Int { (key << 16) | (0x0A << 8) }      // 0x0A = key down
-        for key in [0, 1, 2, 3, 7, 21, 22, 23] {                         // volume, brightness, mute, backlight
+        // volume, brightness, Caps Lock (review 2026-10-24: input-source switching), mute, backlight
+        for key in [0, 1, 2, 3, 4, 7, 21, 22, 23] {
             #expect(EventTap.allowSystemDefined(subtype: 8, data1: aux(key)))
         }
-        for key in [4, 5, 6, 16, 17, 18, 19, 20] {                       // caps-lock aux, help, power, play, next ...
+        for key in [5, 6, 16, 17, 18, 19, 20] {                          // help, power, play, next ...
             #expect(!EventTap.allowSystemDefined(subtype: 8, data1: aux(key)))
         }
         #expect(EventTap.allowSystemDefined(subtype: 7, data1: 1))        // mouse-button state
         #expect(EventTap.mainThreadWait < 1)                              // macOS disables slow taps
+    }
+
+    // Review 2026-10-24: only system-defined events whose flags carry an aux key state
+    // (0xA down / 0xB up in bits 8-11) are decoded on the main thread.
+    @Test func onlyAuxKeyEventsAreDecoded() {
+        #expect(EventTap.mayBeAuxKey(flags: 0xA00))                       // key down
+        #expect(EventTap.mayBeAuxKey(flags: 0xB00))                       // key up
+        #expect(EventTap.mayBeAuxKey(flags: 0x10A00))                     // Caps Lock on
+        let rightCtrlShift: UInt64 = CGEventFlags.maskControl.rawValue | CGEventFlags.maskShift.rawValue | 0x2002
+        #expect(EventTap.mayBeAuxKey(flags: rightCtrlShift | 0xA00))      // modifiers held
+        #expect(!EventTap.mayBeAuxKey(flags: 0))                          // mouse-button state
+        #expect(!EventTap.mayBeAuxKey(flags: 0x100))                      // non-coalesced only
+        #expect(!EventTap.mayBeAuxKey(flags: rightCtrlShift | 0x100))     // click with modifiers
     }
 
     @Test func voiceOverChordsPassOnlyWithVoiceOver() {

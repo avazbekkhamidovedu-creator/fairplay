@@ -710,7 +710,9 @@ final class ExamViewController: UIViewController, LockSurface,
         if ownLocalPage || isServerURL(url) || external.allows(url) || (isLocal && !mainFrame && url.absoluteString == "about:blank") {
             if mainFrame {
                 external.checkFinishURL(url)
-                eventsReady = false
+                // Review 2026-10-24 (as on the Mac): eventsReady is reset in didCommit. A
+                // navigation that never commits (a cancelled download, a 204, a fragment
+                // link) left the page on screen without events.
             }
             decisionHandler(ExamViewController.allowInPlace)
         } else {
@@ -769,7 +771,9 @@ final class ExamViewController: UIViewController, LockSurface,
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         committedURL = webView.url
+        eventsReady = false                  // the new page asks for them ("flushEvents")
         hideConnecting()
+        hidePageCrashed()                    // a page is back
         if LockdownController.shared.isLocked, let u = webView.url, isServerURL(u) || external.allows(u) {
             ExamViewController.lastLockedPage = u
         }
@@ -784,8 +788,97 @@ final class ExamViewController: UIViewController, LockSurface,
         pushBattery()
     }
 
+    /// Review 2026-10-24: when the exam page's process crashed (last `crashWindow` seconds).
+    private var pageCrashes: [Date] = []
+    private var pageCrashedView: UIView?
+    static let crashLimit = 3
+    static let crashWindow: TimeInterval = 60
+
+    /// Pure: the crash times still inside the window, plus the one at `now`.
+    static func recentCrashes(_ earlier: [Date], adding now: Date) -> [Date] {
+        earlier.filter { now.timeIntervalSince($0) < crashWindow && $0 <= now } + [now]
+    }
+
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        DebugLog.log("crash", "exam page process crashed; reloading")
+        // Review 2026-10-24: reloaded every time, without limit, a page that crashes at once
+        // (memory, a bad page) looped forever. After `crashLimit` crashes within
+        // `crashWindow` a native screen asks the student to retry or get the invigilator.
+        // The lock is untouched; the lock bar (invigilator hold) stays above it.
+        eventsReady = false                  // no page listens now: queue until one asks again
+        pageCrashes = Self.recentCrashes(pageCrashes, adding: Date())
+        let n = pageCrashes.count
+        EventLog.shared.record("page_crashed", "the exam page stopped (\(n)x in \(Int(Self.crashWindow)) s)")
+        if n >= Self.crashLimit {
+            DebugLog.log("crash", "exam page process crashed \(n)x in \(Int(Self.crashWindow)) s; showing the retry screen")
+            showPageCrashed()
+        } else {
+            DebugLog.log("crash", "exam page process crashed; reloading")
+            reload()
+        }
+    }
+
+    private func showPageCrashed() {
+        guard pageCrashedView == nil else { return }
+        hideConnecting()
+        let v = UIView()
+        v.backgroundColor = view.backgroundColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.accessibilityViewIsModal = true
+        v.accessibilityIdentifier = "pageCrashedScreen"
+        let title = UILabel()
+        title.text = "Something went wrong"
+        title.font = .systemFont(ofSize: 22, weight: .semibold)
+        title.textColor = UIColor(red: 0.067, green: 0.094, blue: 0.153, alpha: 1)
+        title.textAlignment = .center
+        title.numberOfLines = 0
+        let detail = UILabel()
+        detail.text = "The exam page stopped several times. Tap Try again. If it keeps happening, ask the invigilator. "
+            + "Answers you already typed are saved on this iPad."
+        detail.font = .systemFont(ofSize: 17)
+        detail.textColor = UIColor(red: 0.29, green: 0.33, blue: 0.39, alpha: 1)
+        detail.textAlignment = .center
+        detail.numberOfLines = 0
+        let b = UIButton(type: .system)
+        var cfg = UIButton.Configuration.filled()
+        cfg.baseBackgroundColor = UIColor(red: 0.184, green: 0.294, blue: 0.851, alpha: 1)
+        cfg.baseForegroundColor = .white
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 22, bottom: 12, trailing: 22)
+        b.configuration = cfg
+        b.setTitle("Try again", for: .normal)
+        b.accessibilityIdentifier = "pageCrashedRetry"
+        b.addTarget(self, action: #selector(pageCrashedRetryTapped), for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [title, detail, b])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(stack)
+        // Over the web view (it swallows touches there), under the lock bar, the red
+        // blocking screen and the privacy cover (same order as the connecting screen).
+        shield.content.insertSubview(v, aboveSubview: webView)
+        shield.content.bringSubviewToFront(bar)
+        if let blockingView { shield.content.bringSubviewToFront(blockingView) }
+        if let privacyCover { shield.content.bringSubviewToFront(privacyCover) }
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: webView.leadingAnchor), v.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
+            v.topAnchor.constraint(equalTo: webView.topAnchor), v.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+            stack.centerXAnchor.constraint(equalTo: v.centerXAnchor), stack.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: v.widthAnchor, constant: -80),
+        ])
+        pageCrashedView = v
+        UIAccessibility.post(notification: .screenChanged, argument: title)
+    }
+
+    private func hidePageCrashed() {
+        pageCrashedView?.removeFromSuperview()
+        pageCrashedView = nil
+    }
+
+    /// One reload per tap. The crash times are kept: a page that crashes again at once
+    /// brings this screen straight back instead of looping.
+    @objc private func pageCrashedRetryTapped() {
+        DebugLog.log("click", "\"Try again\" after the exam page crashed")
+        hidePageCrashed()
         reload()
     }
 

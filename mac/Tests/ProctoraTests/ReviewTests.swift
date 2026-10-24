@@ -130,6 +130,32 @@ import AppKit
         }
     }
 
+    // Review 2026-10-24: Apple agents' prompts are not hidden by the lock (names only here;
+    // the real check also needs Apple's signature).
+    @Test func appleSystemAgentsByName() {
+        #expect(Allowlist.isSystemAgentId("com.apple.accessibility.universalAccessAuthWarn"))
+        #expect(Allowlist.isSystemAgentId("com.apple.CoreServicesUIAgent"))
+        #expect(Allowlist.isSystemAgentId("com.apple.coreservices.uiagent"))
+        #expect(!Allowlist.isSystemAgentId("com.apple.CaptiveNetworkAssistant"))   // a browser: never kept
+        #expect(Allowlist.isSystemAgentId("com.apple.wifi.WiFiAgent"))
+        #expect(!Allowlist.isSystemAgentId("com.apple.accessibilityx"))            // prefix needs the dot
+        #expect(!Allowlist.isSystemAgentId("com.apple.Terminal"))
+        #expect(!Allowlist.isSystemAgentId("com.example.accessibility.helper"))
+        #expect(!Allowlist.isSystemAgentId(""))
+    }
+
+    // Review 2026-10-24: hiding the app in front makes macOS activate the next one (often
+    // Finder); that activation is not reported as the student's.
+    @Test func activationRightAfterOwnHideIsNotReported() {
+        typealias L = LockdownController
+        #expect(L.activationFollowsOwnHide(bundleId: "com.apple.Safari", sinceOwnHide: 0.2))
+        #expect(!L.activationFollowsOwnHide(bundleId: "com.apple.Safari", sinceOwnHide: 1.5))
+        #expect(L.activationFollowsOwnHide(bundleId: Allowlist.finder, sinceOwnHide: 2.5))
+        #expect(!L.activationFollowsOwnHide(bundleId: Allowlist.finder, sinceOwnHide: 5))
+        #expect(!L.activationFollowsOwnHide(bundleId: Allowlist.finder, sinceOwnHide: nil))   // never hid
+        #expect(!L.activationFollowsOwnHide(bundleId: nil, sinceOwnHide: -1))               // clock went back
+    }
+
     @Test func orphanRules() {
         let me: uid_t = 501, since = Date().addingTimeInterval(-600)
         let recent = Date(), old = Date().addingTimeInterval(-3600)
