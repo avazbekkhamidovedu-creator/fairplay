@@ -92,7 +92,10 @@ final class LockdownController {
         ]
 
         surface?.enterLockedMode()
-        bringToFront()
+        // The student may have switched to another app during "Close them and start"
+        // (2026-10-24): hide it so FairPlay really comes to the front (reclaimFront).
+        hideRefusedLogged.removeAll()
+        reclaimFront(from: NSWorkspace.shared.frontmostApplication)
         installWorkspaceWatchers()
         installFocusGuard()
         clearAndGuardPasteboard()
@@ -199,13 +202,33 @@ final class LockdownController {
         surface?.takeFocus()
     }
 
+    /// 2026-10-24: another app is in front while locked (pre-exam or exam lock). Since
+    /// macOS 14 activation is cooperative: a background app asking to activate (the call in
+    /// bringToFront) is usually IGNORED while the student uses the app in front, so the
+    /// lock stayed behind Chrome (and the kiosk options, which apply only while FairPlay is
+    /// active, were off) until Chrome was quit by hand. Hiding the app in front always
+    /// works and hands activation back to us; then we ask for it as before. System
+    /// security dialogs are never touched. Apps that must go are still closed by the checks.
+    private func reclaimFront(from front: NSRunningApplication?) {
+        if let front, front.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+           !Allowlist.isSystemDialog(front), !front.isHidden, !front.isTerminated {
+            let ok = front.hide()
+            if ok || !hideRefusedLogged.contains(front.processIdentifier) {
+                if !ok { hideRefusedLogged.insert(front.processIdentifier) }
+                DebugLog.log("lock", "other app in front while locked -> hidden (\(ok ? "ok" : "REFUSED")): \(DebugLog.describe(front))")
+            }
+        }
+        bringToFront()
+    }
+    private var hideRefusedLogged: Set<pid_t> = []
+
     private func installFocusGuard() {
         let t = Timer(timeInterval: 0.3, repeats: true) { [weak self] _ in
             guard let self, self.isLocked else { return }
             guard let front = NSWorkspace.shared.frontmostApplication else { return }
             if front.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
             if Allowlist.isSystemDialog(front) { return }
-            self.bringToFront()
+            self.reclaimFront(from: front)
         }
         RunLoop.main.add(t, forMode: .common)
         focusTimer = t
@@ -232,10 +255,9 @@ final class LockdownController {
                   app.processIdentifier != me,
                   !Allowlist.isSystemDialog(app) else { return }
             EventLog.shared.record(.otherAppForeground(app.localizedName ?? app.bundleIdentifier ?? "unknown"))
-            // Dev builds only: a kept terminal/browser (Allowlist.devKeep) is not closed, so
-            // put it out of sight again. Release builds never keep one (it was closed).
-            if Allowlist.isDevKept(app) { self.hideDevKept(app) }
-            self.bringToFront()
+            // Hide it and take the front back (any build; activation alone is ignored on
+            // macOS 14+). A dev-build kept terminal/browser is hidden like any other.
+            self.reclaimFront(from: app)
         })
 
         observers.append(ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
@@ -272,7 +294,8 @@ final class LockdownController {
             guard let self, self.isLocked else { return }
             EventLog.shared.record(.spaceChanged)
             self.surface?.coverAllScreens()
-            self.bringToFront()
+            // A Space switch usually means another app's (full-screen) Space: hide that app.
+            self.reclaimFront(from: NSWorkspace.shared.frontmostApplication)
         })
 
         observers.append(nc.addObserver(forName: NSApplication.didChangeScreenParametersNotification,

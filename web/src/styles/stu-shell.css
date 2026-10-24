@@ -138,16 +138,21 @@
   color: var(--s-text);
   font: inherit;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
   transition: border-color 0.12s, box-shadow 0.12s;
+}
+.stu a.stu-course-card,
+.stu a.stu-course-card:hover {
+  color: var(--s-text);
 }
 .stu-course-card:hover {
   border-color: var(--s-primary-soft);
   box-shadow: var(--shadow-paper);
 }
-.stu-course-card.selected {
-  border-color: var(--s-primary);
-  box-shadow: 0 0 0 1px var(--s-primary);
+.stu-course-card:focus-visible {
+  outline: 3px solid var(--s-primary-soft);
+  outline-offset: 2px;
 }
 .stu-course-top {
   display: flex;
@@ -207,15 +212,25 @@
 .stu-courses-empty {
   flex: none;
 }
+/* phone width: the first few cards, then "Show all" */
+.stu-narrow-only {
+  display: none;
+}
+@media (max-width: 640px) {
+  .stu-course-grid.limited > .stu-course-cell:nth-child(n + 4) {
+    display: none;
+  }
+  .stu-narrow-only {
+    display: inline-flex;
+  }
+  .stu-course-card {
+    padding: 14px 16px;
+  }
+  .stu-course-title {
+    min-height: 0;
+  }
+}
 
-/* one course's exams */
-.stu-course-exams {
-  gap: 16px;
-  min-width: 0;
-}
-.stu-course-exams h2:focus {
-  outline: none;
-}
 .stu-exam-group {
   display: flex;
   flex-direction: column;
@@ -304,4 +319,248 @@
 .stu-join-ok {
   color: var(--s-success);
   font-weight: 600;
+}
+
+/* ---------- 2026-10-24: "Your tests [Active | Past]" (home page and course page) ---------- */
+
+.stu-tests {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.stu-tests-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.stu-tests-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.stu-tests-panel:focus-visible {
+  outline: 3px solid var(--s-primary-soft);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.stu-tests-empty {
+  padding: 28px;
+  border-radius: 14px;
+  background: var(--s-surface);
+  border: 1px dashed var(--s-border-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stu-tests-empty h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.stu-tests-empty p {
+  margin: 0;
+}
+
+/* segmented switch */
+.stu-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 10px;
+  background: #e7eaef;
+  max-width: 100%;
+}
+.stu-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s-text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.stu-seg-btn:hover {
+  color: var(--s-text);
+}
+.stu-seg-btn[aria-selected="true"] {
+  background: var(--s-surface);
+  color: var(--s-primary-hover);
+  box-shadow: 0 1px 2px rgba(27, 37, 51, 0.1);
+}
+.stu-seg-btn:focus-visible {
+  outline: 2px solid var(--s-primary);
+  outline-offset: 1px;
+}
+.stu-seg-check {
+  display: inline-flex;
+  width: 15px;
+  justify-content: center;
+}
+.stu-seg-n {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: rgba(27, 37, 51, 0.07);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--s-text-2);
+}
+.stu-seg-btn[aria-selected="true"] .stu-seg-n {
+  background: var(--s-primary-tint);
+  color: var(--s-primary-hover);
+}
+
+/* a scheduled exam (not open yet) */
+.stu-exam-item.scheduled .stu-exam-item-when {
+  color: var(--s-text-2);
+}
+.stu-exam-item.scheduled > .stu-pill {
+  flex: 0 0 auto;
+}
+@media (max-width: 640px) {
+  .stu-exam-item.scheduled > .stu-pill {
+    margin-left: 64px; /* under the text, past the date tile */
+  }
+}
+
+/* past results */
+.stu-past-card {
+  padding: 8px 24px 12px;
+  gap: 4px;
+}
+.stu-past-more {
+  align-self: flex-start;
+  padding: 8px 0 2px;
+}
+.stu-result-title .stu-clamp-2 {
+  font-weight: 600;
+}
+.stu-result-title {
+  min-width: 0;
+}
+.stu-result-score {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.stu-result-points {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--s-text-2);
+}
+@media (max-width: 640px) {
+  .stu-past-card {
+    padding: 4px 16px 10px;
+  }
+  .stu-result-row {
+    gap: 6px 14px;
+  }
+  .stu-result-title {
+    flex-basis: 100%;
+  }
+  .stu-result-score {
+    min-width: 0;
+    text-align: left;
+  }
+}
+
+/* the home page's open-exam heroes inside "Your tests" */
+.stu-exam-hero h3 {
+  margin: 4px 0 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.stu-tests .stu-hero-col {
+  flex: none;
+}
+
+/* ---------- 2026-10-24: a course's own page ---------- */
+
+.stu-course-page {
+  gap: 24px;
+}
+.stu-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 10px 0 6px;
+  margin: -12px 0 -8px -6px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.stu-back:hover {
+  background: var(--s-primary-tint);
+}
+.stu-back:focus-visible {
+  outline: 2px solid var(--s-primary);
+  outline-offset: 1px;
+}
+.stu-course-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 24px;
+  border-radius: 14px;
+  background: var(--s-surface);
+  border: 1px solid var(--s-border);
+}
+.stu-course-head .stu-h1 {
+  max-width: 100%;
+}
+.stu-course-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 4px 0 0;
+  min-width: 0;
+  max-width: 100%;
+}
+.stu-course-facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.stu-course-facts dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-muted);
+}
+.stu-course-facts dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s-text);
+}
+@media (max-width: 640px) {
+  .stu-course-head {
+    padding: 18px 16px;
+  }
+  .stu-course-head .stu-h1 {
+    font-size: 24px;
+  }
 }

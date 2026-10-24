@@ -6,6 +6,7 @@ import JoinLinkPage from "./JoinLinkPage";
 import LoginPage from "../LoginPage";
 import StudentHome from "./StudentHome";
 import ExamsPage from "./ExamsPage";
+import CoursePage from "./CoursePage";
 import CheckInPage from "./CheckInPage";
 import BeforeStartPage from "./BeforeStartPage";
 import ExamTakingPage from "./ExamTakingPage";
@@ -21,6 +22,8 @@ export default function StudentRoutes() {
     <Routes>
       <Route path="login" element={<LoginPage role="student" />} />
       <Route index element={<RequireAuth role="student"><StudentHome /></RequireAuth>} />
+      {/* 2026-10-24: a course's own page (course cards on the home page) */}
+      <Route path="courses/:classId" element={<RequireAuth role="student"><CoursePage /></RequireAuth>} />
       <Route path="exams" element={<RequireAuth role="student"><ExamsPage /></RequireAuth>} />
       <Route path="exams/:examId/start" element={<RequireAuth role="student"><BeforeStartPage /></RequireAuth>} />
       <Route path="exams/:examId/checkin" element={<RequireAuth role="student"><CheckInPage /></RequireAuth>} />
