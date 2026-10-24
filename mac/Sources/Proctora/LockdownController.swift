@@ -71,6 +71,10 @@ final class LockdownController {
             return false
         }
         DebugLog.log("lock", "locking")
+        let devKept = LockdownController.names(LockdownController.devKeptApps())
+        if !devKept.isEmpty {
+            DebugLog.log("lock", "dev build: left running (Allowlist.devKeep, hidden): " + devKept.joined(separator: ", "))
+        }
         isLocked = true
         problems.removeAll(); reported.removeAll(); quitting.removeAll()
         // Audit M-09 (review 2026-10-14: the flag was never set, so VoiceOver chords were
@@ -228,6 +232,9 @@ final class LockdownController {
                   app.processIdentifier != me,
                   !Allowlist.isSystemDialog(app) else { return }
             EventLog.shared.record(.otherAppForeground(app.localizedName ?? app.bundleIdentifier ?? "unknown"))
+            // Dev builds only: a kept terminal/browser (Allowlist.devKeep) is not closed, so
+            // put it out of sight again. Release builds never keep one (it was closed).
+            if Allowlist.isDevKept(app) { self.hideDevKept(app) }
             self.bringToFront()
         })
 
@@ -406,6 +413,11 @@ final class LockdownController {
             }
             still.append(name)
         }
+        // Dev builds only: terminals/browsers kept for local testing stay open but hidden.
+        for app in NSWorkspace.shared.runningApplications
+        where app.processIdentifier != me && !app.isTerminated && !app.isHidden && Allowlist.isDevKept(app) {
+            hideDevKept(app)
+        }
         // Teacher-allowed apps that are open: noted once so the teacher sees them.
         for app in NSWorkspace.shared.runningApplications where Allowlist.isTeacherAllowed(app) {
             let name = app.localizedName ?? app.bundleIdentifier ?? "app"
@@ -513,6 +525,10 @@ final class LockdownController {
     func quitAppsBeforeLock(_ done: @escaping ([String]) -> Void) {
         let apps = appsToClose()
         DebugLog.log("quit", "before lock: closing " + LockdownController.names(apps).joined(separator: ", "))
+        let kept = LockdownController.names(LockdownController.devKeptApps())
+        if !kept.isEmpty {
+            DebugLog.log("quit", "before lock: dev build keeps (not closed, hidden while locked): " + kept.joined(separator: ", "))
+        }
         for app in apps { app.terminate() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             for app in apps where !app.isTerminated { LockdownController.forceQuit(app) }
@@ -549,6 +565,18 @@ final class LockdownController {
             guard let self, self.isLocked else { return }
             self.runChecks(atLock: false)
         }
+    }
+
+    /// Dev builds only (Allowlist.devKeep): hide a kept terminal/browser behind the exam.
+    private func hideDevKept(_ app: NSRunningApplication) {
+        guard !app.isHidden else { return }
+        let ok = app.hide()
+        DebugLog.log("quit", "dev build: kept but hidden (\(ok ? "ok" : "REFUSED")): \(DebugLog.describe(app))")
+    }
+
+    /// Dev builds only: the apps kept running for local testing (empty in release builds).
+    static func devKeptApps() -> [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter { !$0.isTerminated && Allowlist.isDevKept($0) }
     }
 
     /// forceTerminate() can return false (or be ignored) for some apps; SIGKILL on our own

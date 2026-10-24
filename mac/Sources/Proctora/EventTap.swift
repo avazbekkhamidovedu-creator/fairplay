@@ -129,6 +129,8 @@ final class EventTap {
                 return nil
             }
             if type == EventTap.systemDefinedType {
+                // This callback runs on the "fairplay.eventtap" thread: no AppKit/HIToolbox
+                // calls here (crash 2026-10-24, see allowSystemDefined).
                 return EventTap.allowSystemDefined(event) ? Unmanaged.passUnretained(event) : nil
             }
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
@@ -234,12 +236,68 @@ final class EventTap {
         return state != Int64(CGEventSourceStateID.hidSystemState.rawValue)
     }
 
-    /// Media / special keys: only volume, mute and brightness pass.
+    /// Media / special keys: only volume, mute, brightness and keyboard backlight pass.
+    ///
+    /// Crash fix 2026-10-24 (macOS 26.5, several input sources, Caps Lock switches them):
+    /// this used to build `NSEvent(cgEvent:)` right here, on the tap thread. AppKit then
+    /// runs HIToolbox's Text Services Manager on the event (CreateEventWithCGEvent ->
+    /// TSMSetCapsLockKeyTransitionDetected -> ProcessCapsLockSequenceKeyUp -> input source
+    /// list), and TSM asserts it is on the main queue: `dispatch_assert_queue` failed and
+    /// the app died with SIGTRAP mid-exam (the watchdog reopened it). Every system-defined
+    /// event goes through here (media keys, Caps Lock, the mouse-button state that comes
+    /// with clicks), so typing/clicking in the essay box after a Caps Lock language switch
+    /// was enough.
+    /// Now the NSEvent is only ever made on the main thread (see systemDefinedFields).
     static func allowSystemDefined(_ event: CGEvent) -> Bool {
-        guard let ns = NSEvent(cgEvent: event), ns.type == .systemDefined else { return true }
-        guard ns.subtype.rawValue == 8 else { return true }        // 8 = aux control buttons
-        let key = Int((ns.data1 & 0xFFFF_0000) >> 16)
+        guard let fields = systemDefinedFields(event) else { return true }
+        return allowSystemDefined(subtype: fields.subtype, data1: fields.data1)
+    }
+
+    /// The policy alone (pure, for the tests). Subtype 8 = NX_SUBTYPE_AUX_CONTROL_BUTTONS
+    /// (media keys); the key is the high 16 bits of data1. Other subtypes (mouse-button
+    /// state, power ...) pass, as before.
+    static func allowSystemDefined(subtype: Int, data1: Int) -> Bool {
+        guard subtype == 8 else { return true }
+        let key = (data1 & 0xFFFF_0000) >> 16
         return allowedAuxKeys.contains(key)
+    }
+
+    /// How long the tap thread waits for the main thread to decode one system-defined
+    /// event. Well under the time after which macOS switches a slow tap off.
+    static let mainThreadWait: TimeInterval = 0.25
+    private static var lastSlowMainLog = Date.distantPast   // tap thread only
+
+    private final class FieldsBox { var value: (subtype: Int, data1: Int)? }
+
+    /// subtype and data1 of a system-defined event, or nil when it is not one (or the
+    /// main thread did not answer in time: then the event passes, as a failed NSEvent
+    /// conversion always did). NSEvent(cgEvent:) (AppKit + Text Services Manager) runs
+    /// on the main thread only: directly when called there, otherwise the tap thread
+    /// hands it to the main queue and waits at most `mainThreadWait`. The wait never
+    /// deadlocks: nothing on the main thread waits for the tap thread, and it has a limit.
+    private static func systemDefinedFields(_ event: CGEvent) -> (subtype: Int, data1: Int)? {
+        if Thread.isMainThread { return EventTap.decodeOnMain(event) }
+        let box = FieldsBox()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            box.value = EventTap.decodeOnMain(event)
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + mainThreadWait) == .success else {
+            let now = Date()
+            if now.timeIntervalSince(lastSlowMainLog) > 5 {
+                lastSlowMainLog = now
+                DebugLog.log("lock", "system-defined key passed unchecked: main thread busy > \(Int(mainThreadWait * 1000)) ms")
+            }
+            return nil
+        }
+        return box.value
+    }
+
+    /// Main thread only (AppKit / HIToolbox).
+    private static func decodeOnMain(_ event: CGEvent) -> (subtype: Int, data1: Int)? {
+        guard let ns = NSEvent(cgEvent: event), ns.type == .systemDefined else { return nil }
+        return (Int(ns.subtype.rawValue), ns.data1)
     }
 
     /// Ctrl-Opt-Cmd-E: invigilator emergency exit (asks for the invigilator code).

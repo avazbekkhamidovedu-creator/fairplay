@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime, isToday, shortDate } from "../../components/student/format";
-import { CourseExams, CourseGrid, classKey, useStudentClasses } from "../../components/student/Courses";
+import { CourseGrid, useStudentClasses } from "../../components/student/Courses";
 import { UpcomingExamCard } from "../../components/student/ExamCard";
+import { ActiveList, PastList, TestsSection, scheduledExams, useExamTab, useStudentGrades } from "../../components/student/ExamTabs";
 import { JoinClass } from "../../components/student/JoinClass";
-import { PastExamRow } from "../../components/student/ResultRow";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import { TrialCard } from "../../components/student/TrialCard";
@@ -15,6 +15,8 @@ import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, useStudentExams } from "./u
 
 /** 2026-10-24: open exams listed on the home page; the rest are on the Exams page. */
 export const HOME_OPEN_SHOWN = 6;
+/** 2026-10-24: results on the home page's Past tab; the rest are on the Grades page. */
+export const HOME_PAST_SHOWN = 5;
 
 export default function StudentHome() {
   const me = useMe("student");
@@ -23,20 +25,14 @@ export default function StudentHome() {
   // 2026-10-22: back from the sample exam (DonePage sends this once the computer unlocked).
   const trialDone = (useLocation().state as { trialDone?: string } | null)?.trialDone;
   const [trialNote, setTrialNote] = useState(!!trialDone);
-  // 2026-10-24: course cards; a picked course shows its own exam list under the cards
+  // 2026-10-24: course cards (each opens its course page) above "Your tests [Active | Past]"
   const courses = useStudentClasses();
-  const [courseKey, setCourseKey] = useState<string | null>(null);
-  const courseRef = useRef<HTMLElement>(null);
-  const selectedCourse = courses.classes?.find((k) => classKey(k) === courseKey) ?? null;
-  useEffect(() => {
-    if (!courseKey) return;
-    const el = courseRef.current;
-    el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    el?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
-  }, [courseKey]);
+  const grades = useStudentGrades();
+  const [tab, setTab] = useExamTab();
 
   const upcoming = exams ? upcomingExams(exams) : [];
   const past = exams ? pastExams(exams) : [];
+  const scheduled = scheduledExams(courses.classes ?? []);
   const name = firstName(me?.name);
 
   const summary =
@@ -49,6 +45,36 @@ export default function StudentHome() {
             ? "You have an exam in progress."
             : "One exam is open now."
           : `${upcoming.length} exams are open now.`;
+
+  const renderLive = (live: StudentExamSummary[]) =>
+    live.length <= 2 ? (
+      <div className="stu-hero-col">
+        {live.map((exam) => (
+          <ExamHero
+            key={exam.id}
+            exam={exam}
+            active={activeId === exam.id}
+            onActivate={() => setActiveId(exam.id)}
+            onCancel={() => setActiveId(null)}
+            onChanged={reload}
+          />
+        ))}
+      </div>
+    ) : (
+      // 2026-10-24: many open exams -> compact cards instead of big heroes
+      <>
+        <div className="stu-exam-list">
+          {live.slice(0, HOME_OPEN_SHOWN).map((exam) => (
+            <UpcomingExamCard key={exam.id} exam={exam} headingLevel={3} />
+          ))}
+        </div>
+        {live.length > HOME_OPEN_SHOWN && (
+          <Link to="/student/exams" className="stu-link">
+            See all {live.length} open exams →
+          </Link>
+        )}
+      </>
+    );
 
   return (
     <>
@@ -81,49 +107,6 @@ export default function StudentHome() {
             </div>
           )}
 
-          {exams === null ? (
-            <StuLoading label="Loading your exams…" />
-          ) : (
-            <div className="stu-home-grid">
-              {upcoming.length === 0 ? (
-                <section className="stu-empty" aria-labelledby="none-h">
-                  <h2 id="none-h">No open exams</h2>
-                  <p className="stu-muted">When your teacher opens an exam, it shows up here. This page checks every few seconds.</p>
-                </section>
-              ) : upcoming.length <= 2 ? (
-                <div className="stu-hero-col">
-                  {upcoming.map((exam) => (
-                    <ExamHero
-                      key={exam.id}
-                      exam={exam}
-                      active={activeId === exam.id}
-                      onActivate={() => setActiveId(exam.id)}
-                      onCancel={() => setActiveId(null)}
-                      onChanged={reload}
-                    />
-                  ))}
-                </div>
-              ) : (
-                // 2026-10-24: many open exams -> compact cards instead of big heroes
-                <section className="stu-hero-col" aria-labelledby="open-h">
-                  <h2 id="open-h" className="stu-section-title">
-                    Open now · {upcoming.length}
-                  </h2>
-                  <div className="stu-exam-list">
-                    {upcoming.slice(0, HOME_OPEN_SHOWN).map((exam) => (
-                      <UpcomingExamCard key={exam.id} exam={exam} headingLevel={3} />
-                    ))}
-                  </div>
-                  {upcoming.length > HOME_OPEN_SHOWN && (
-                    <Link to="/student/exams" className="stu-link">
-                      See all {upcoming.length} open exams →
-                    </Link>
-                  )}
-                </section>
-              )}
-            </div>
-          )}
-
           <section className="stu-courses" aria-labelledby="courses-h" data-testid="courses">
             <div className="stu-row">
               <h2 id="courses-h" className="stu-section-title">
@@ -148,17 +131,53 @@ export default function StudentHome() {
                 </p>
               </div>
             ) : (
-              <CourseGrid
-                classes={courses.classes}
-                exams={exams}
-                selectedKey={courseKey}
-                onSelect={(k) => setCourseKey(k ? classKey(k) : null)}
-              />
-            )}
-            {selectedCourse && (
-              <CourseExams ref={courseRef} k={selectedCourse} exams={exams ?? []} onClose={() => setCourseKey(null)} />
+              <CourseGrid classes={courses.classes} exams={exams} />
             )}
           </section>
+
+          <TestsSection
+            idPrefix="home-tests"
+            tab={tab}
+            onTab={setTab}
+            activeCount={upcoming.length + scheduled.length}
+            pastCount={past.length}
+          >
+            {exams === null ? (
+              <StuLoading label="Loading your exams…" />
+            ) : tab === "active" ? (
+              <ActiveList
+                live={upcoming}
+                scheduled={scheduled}
+                renderLive={renderLive}
+                showCourse
+                empty={
+                  <>
+                    <h3>No open or upcoming exams</h3>
+                    <p className="stu-muted">
+                      When your teacher schedules or opens an exam, it shows up here. This page checks every few seconds.
+                    </p>
+                  </>
+                }
+              />
+            ) : (
+              <PastList
+                past={past}
+                grades={grades}
+                shown={HOME_PAST_SHOWN}
+                empty={
+                  <>
+                    <h3>No results yet</h3>
+                    <p className="stu-muted">Exams you hand in show up here, with your grade once your teacher releases it.</p>
+                  </>
+                }
+                footer={
+                  <Link to="/student/grades" className="stu-link stu-past-more">
+                    All grades →
+                  </Link>
+                }
+              />
+            )}
+          </TestsSection>
 
           <JoinClass
             hasClasses={!!courses.classes && courses.classes.length > 0}
@@ -167,23 +186,6 @@ export default function StudentHome() {
               void reload();
             }}
           />
-
-          {past.length > 0 && (
-            <section className="stu-card" aria-labelledby="recent-h" style={{ gap: 6 }}>
-              <div className="stu-row" style={{ marginBottom: 6 }}>
-                <h2 id="recent-h">Recent results</h2>
-                <span className="stu-spacer" />
-                <Link to="/student/grades" className="stu-link">
-                  All grades →
-                </Link>
-              </div>
-              <div className="stu-rows">
-                {past.slice(0, 4).map((e) => (
-                  <PastExamRow key={e.id} exam={e} />
-                ))}
-              </div>
-            </section>
-          )}
         </main>
       </StudentLayout>
     </>
@@ -225,7 +227,7 @@ function ExamHero({
   return (
     <section className="stu-exam-hero" aria-labelledby={headId}>
       <span className="stu-eyebrow">{when}</span>
-      <h2 id={headId}>{examName(exam.course, exam.title)}</h2>
+      <h3 id={headId}>{examName(exam.course, exam.title)}</h3>
       <span className="stu-exam-hero-meta">{meta}</span>
 
       {notForMe ? (

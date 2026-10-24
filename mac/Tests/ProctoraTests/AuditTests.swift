@@ -110,6 +110,20 @@ import Carbon.HIToolbox
         #expect(!EventTap.shouldSwallow(key(kVK_ANSI_K, .maskShift), type: .keyDown))
     }
 
+    // 2026-10-24: the media-key policy, now decided apart from the NSEvent conversion
+    // (which must run on the main thread). data1 = key << 16 | state << 8.
+    @Test func mediaKeyPolicy() {
+        func aux(_ key: Int) -> Int { (key << 16) | (0x0A << 8) }      // 0x0A = key down
+        for key in [0, 1, 2, 3, 7, 21, 22, 23] {                         // volume, brightness, mute, backlight
+            #expect(EventTap.allowSystemDefined(subtype: 8, data1: aux(key)))
+        }
+        for key in [4, 5, 6, 16, 17, 18, 19, 20] {                       // caps-lock aux, help, power, play, next ...
+            #expect(!EventTap.allowSystemDefined(subtype: 8, data1: aux(key)))
+        }
+        #expect(EventTap.allowSystemDefined(subtype: 7, data1: 1))        // mouse-button state
+        #expect(EventTap.mainThreadWait < 1)                              // macOS disables slow taps
+    }
+
     @Test func voiceOverChordsPassOnlyWithVoiceOver() {
         let chord = key(kVK_ANSI_A, [.maskControl, .maskAlternate])
         #expect(EventTap.shouldSwallow(chord, type: .keyDown))

@@ -117,6 +117,19 @@ import AppKit
         #expect(Allowlist.parseTeacherAllowed(nil).isEmpty)
     }
 
+    // 2026-10-24: Chrome and Terminal stayed open through a dev-build lock (Allowlist.devKeep).
+    // `swift test` builds like a release build: there nothing may keep them, so they are in
+    // "Close them and start" and closed while locked.
+    @Test func releaseBuildsKeepNoTerminalsOrBrowsers() {
+        #expect(!Config.isDevBuild)
+        #expect(Allowlist.devKeep.isEmpty)
+        for id in ["com.google.Chrome", "com.apple.Terminal", "com.apple.Safari", "com.googlecode.iterm2",
+                   "org.mozilla.firefox", "company.thebrowser.Browser"] {
+            #expect(!Allowlist.keepsId(id))
+            #expect(!Allowlist.isDevKeptId(id))
+        }
+    }
+
     @Test func orphanRules() {
         let me: uid_t = 501, since = Date().addingTimeInterval(-600)
         let recent = Date(), old = Date().addingTimeInterval(-3600)

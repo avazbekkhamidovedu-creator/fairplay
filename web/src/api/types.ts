@@ -1091,6 +1091,9 @@ export interface StudentClassNextExam {
   title: string;
   starts_at: string | null;
   status: "draft" | "live" | "closed" | string;
+  /** 2026-10-24 (newer servers) */
+  duration_min?: number | null;
+  question_count?: number | null;
 }
 
 export interface StudentClass {

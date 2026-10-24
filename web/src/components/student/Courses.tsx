@@ -1,16 +1,22 @@
 // 2026-10-24: the student's courses as cards on the home page (FairPlay classes and DKU OJ
-// classes from GET /api/student/classes), and a course's own exam list.
-import { forwardRef, useCallback, useEffect, useState } from "react";
+// classes from GET /api/student/classes). A card opens the course's own page
+// (/student/courses/:classId, CoursePage).
+import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, studentClassesApi } from "../../api/client";
 import type { StudentClass, StudentExamSummary } from "../../api/types";
-import { UpcomingExamCard } from "./ExamCard";
 import { plural, shortDate, shortTime } from "./format";
-import { PastExamRow } from "./ResultRow";
 
-/** Courses beyond this many sit behind "Show all". */
-export const COURSES_SHOWN = 9;
-/** Finished exams of one course beyond this many sit behind "Show all". */
-export const COURSE_PAST_SHOWN = 5;
+/** Courses beyond this many sit behind "Show all" (two rows of three on a computer). */
+export const COURSES_SHOWN = 6;
+/** On a phone-width screen only this many show before "Show all" (CSS hides the rest). */
+export const COURSES_SHOWN_NARROW = 3;
+
+/** The course page of a course card. */
+export function coursePath(k: StudentClass | string | number): string {
+  const id = typeof k === "object" ? k.id : k;
+  return `/student/courses/${encodeURIComponent(String(id))}`;
+}
 
 export function classKey(k: StudentClass): string {
   return String(k.id);
@@ -95,27 +101,14 @@ function nextExamLine(k: StudentClass): { text: string; live: boolean } | null {
   return { text: when ? `${n.title} · ${when}` : n.title, live: false };
 }
 
-export function CourseCard({
-  k,
-  upcoming,
-  selected,
-  onSelect,
-}: {
-  k: StudentClass;
-  /** Upcoming exams: the server's count, else the open exams found in the list. */
-  upcoming: number;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+export function CourseCard({ k, upcoming }: { k: StudentClass; upcoming: number }) {
   const title = courseTitle(k);
   const sub = courseSubtitle(k);
   const next = nextExamLine(k);
   return (
-    <button
-      type="button"
-      className={`stu-course-card${selected ? " selected" : ""}`}
-      aria-pressed={selected}
-      onClick={onSelect}
+    <Link
+      to={coursePath(k)}
+      className="stu-course-card"
       data-testid="course-card"
       data-source={k.source === "dkuoj" ? "dkuoj" : "fairplay"}
     >
@@ -129,7 +122,7 @@ export function CourseCard({
         {title}
       </span>
       <span className="stu-course-sub stu-ellipsis" title={sub || undefined}>
-        {sub || " "}
+        {sub || "\u00a0"}
       </span>
       <span className="stu-course-next" title={next?.text}>
         {next ? (
@@ -141,124 +134,41 @@ export function CourseCard({
           <span className="stu-muted">No exam planned yet</span>
         )}
       </span>
-    </button>
+    </Link>
   );
 }
 
-export function CourseGrid({
-  classes,
-  exams,
-  selectedKey,
-  onSelect,
-}: {
-  classes: StudentClass[];
-  exams: StudentExamSummary[] | null;
-  selectedKey: string | null;
-  onSelect: (k: StudentClass | null) => void;
-}) {
+/** Upcoming exams of a course: the server's count, at least the open exams found in the list. */
+export function upcomingCount(k: StudentClass, exams: StudentExamSummary[] | null): number {
+  const openHere = (exams ?? []).filter((e) => isLive(e) && examInCourse(e, k)).length;
+  return typeof k.upcoming_exams === "number" ? Math.max(k.upcoming_exams, openHere) : openHere;
+}
+
+export function CourseGrid({ classes, exams }: { classes: StudentClass[]; exams: StudentExamSummary[] | null }) {
   const [all, setAll] = useState(false);
   const sorted = sortCourses(classes, exams);
-  // the selected course always stays visible
-  let shown = all ? sorted : sorted.slice(0, COURSES_SHOWN);
-  const sel = sorted.find((k) => classKey(k) === selectedKey);
-  if (sel && !shown.includes(sel)) shown = [...shown, sel];
+  const shown = all ? sorted : sorted.slice(0, COURSES_SHOWN);
+  // phone width: fewer cards before "Show all" (the button then shows from 4 courses on)
+  const onlyNarrow = sorted.length <= COURSES_SHOWN;
   return (
     <>
-      <div className="stu-course-grid" role="list" aria-label="Your courses">
-        {shown.map((k) => {
-          const openHere = (exams ?? []).filter((e) => isLive(e) && examInCourse(e, k)).length;
-          const upcoming = typeof k.upcoming_exams === "number" ? Math.max(k.upcoming_exams, openHere) : openHere;
-          return (
-            <div role="listitem" key={classKey(k)} className="stu-course-cell">
-              <CourseCard
-                k={k}
-                upcoming={upcoming}
-                selected={classKey(k) === selectedKey}
-                onSelect={() => onSelect(classKey(k) === selectedKey ? null : k)}
-              />
-            </div>
-          );
-        })}
+      <div className={`stu-course-grid${all ? "" : " limited"}`} role="list" aria-label="Your courses">
+        {shown.map((k) => (
+          <div role="listitem" key={classKey(k)} className="stu-course-cell">
+            <CourseCard k={k} upcoming={upcomingCount(k, exams)} />
+          </div>
+        ))}
       </div>
-      {sorted.length > COURSES_SHOWN && (
-        <button type="button" className="stu-btn quiet stu-show-all" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+      {sorted.length > COURSES_SHOWN_NARROW && (
+        <button
+          type="button"
+          className={`stu-btn quiet stu-show-all${onlyNarrow ? " stu-narrow-only" : ""}`}
+          aria-expanded={all}
+          onClick={() => setAll((v) => !v)}
+        >
           {all ? "Show fewer courses" : `Show all ${sorted.length} courses`}
         </button>
       )}
     </>
   );
 }
-
-/** One course's exams: open now, coming up (from the class info), finished. */
-export const CourseExams = forwardRef<HTMLElement, { k: StudentClass; exams: StudentExamSummary[]; onClose: () => void }>(
-  function CourseExams({ k, exams, onClose }, ref) {
-    const [allPast, setAllPast] = useState(false);
-    const mine = exams.filter((e) => examInCourse(e, k));
-    const live = mine.filter(isLive);
-    const past = mine
-      .filter((e) => e.attempt?.status === "submitted")
-      .sort((a, b) => (b.attempt?.submitted_at ?? "").localeCompare(a.attempt?.submitted_at ?? ""));
-    const coming = k.next_exam && k.next_exam.status !== "live" && k.next_exam.status !== "closed" ? k.next_exam : null;
-    const headId = `course-exams-${classKey(k).replace(/[^A-Za-z0-9_-]/g, "-")}`;
-    const empty = live.length === 0 && past.length === 0 && !coming;
-    return (
-      <section ref={ref} className="stu-card stu-course-exams" aria-labelledby={headId} id="course-exams" data-testid="course-exams">
-        <div className="stu-row" style={{ alignItems: "flex-start" }}>
-          <div style={{ flex: "1 1 200px", minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-            <h2 id={headId} tabIndex={-1} className="stu-clamp-2" title={courseTitle(k)}>
-              {courseTitle(k)}
-            </h2>
-            {courseSubtitle(k) && <span className="stu-muted stu-small">{courseSubtitle(k)}</span>}
-          </div>
-          <button type="button" className="stu-btn quiet sm" onClick={onClose}>
-            Show all courses
-          </button>
-        </div>
-        {empty && (
-          <p className="stu-muted" style={{ margin: 0 }}>
-            No exams for this course yet. When your teacher opens one, it shows up here.
-          </p>
-        )}
-        {live.length > 0 && (
-          <div className="stu-exam-group">
-            <h3 className="stu-group-title">Live now · {live.length}</h3>
-            <div className="stu-exam-list">
-              {live.map((e) => (
-                <UpcomingExamCard key={e.id} exam={e} headingLevel={3} />
-              ))}
-            </div>
-          </div>
-        )}
-        {coming && (
-          <div className="stu-exam-group">
-            <h3 className="stu-group-title">Coming up</h3>
-            <p style={{ margin: 0 }} className="stu-ellipsis" title={coming.title}>
-              <strong>{coming.title}</strong>
-              {coming.starts_at && (
-                <span className="stu-muted">
-                  {" "}
-                  · {shortDate(coming.starts_at)} {shortTime(coming.starts_at)}
-                </span>
-              )}
-            </p>
-          </div>
-        )}
-        {past.length > 0 && (
-          <div className="stu-exam-group">
-            <h3 className="stu-group-title">Finished · {past.length}</h3>
-            <div className="stu-rows">
-              {(allPast ? past : past.slice(0, COURSE_PAST_SHOWN)).map((e) => (
-                <PastExamRow key={e.id} exam={e} />
-              ))}
-            </div>
-            {past.length > COURSE_PAST_SHOWN && (
-              <button type="button" className="stu-btn quiet sm stu-show-all" aria-expanded={allPast} onClick={() => setAllPast((v) => !v)}>
-                {allPast ? "Show fewer" : `Show all ${past.length}`}
-              </button>
-            )}
-          </div>
-        )}
-      </section>
-    );
-  },
-);

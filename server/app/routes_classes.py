@@ -241,7 +241,9 @@ def _upcoming(exams: list[Exam]) -> tuple[int, dict | None]:
         return 0, None
     far = datetime.max
     first = min(exams, key=lambda e: (e.status != "live", e.scheduled_at or far, e.title or ""))
-    return len(exams), {"title": first.title, "starts_at": iso(first.scheduled_at), "status": first.status}
+    # 2026-10-24: duration and question count for the student's course page ("Coming up" cards)
+    return len(exams), {"title": first.title, "starts_at": iso(first.scheduled_at), "status": first.status,
+                        "duration_min": first.duration_min, "question_count": first.question_count}
 
 
 @student_router.get("")

@@ -20,10 +20,14 @@ enum Allowlist {
     /// the exam instead (the focus guard never lets it in front).
     static let finder = "com.apple.finder"
 
-    /// Dev builds only: terminals (local server) and browsers (teacher dashboard) stay
-    /// running while you test the lock on one Mac. They stay hidden behind the locked
-    /// window. Release builds close them like any other app the teacher didn't allow.
-    /// More bundle ids for this Mac only:
+    /// Dev builds only (build.sh default, FAIRPLAY_BUILD=dev -> -DFAIRPLAY_DEV): terminals
+    /// (local server) and browsers (teacher dashboard, DKU OJ) stay running while you test
+    /// the lock on one Mac, so they are NOT in the "Close them and start" list and are not
+    /// closed while locked. While locked they are hidden behind the exam (each check round
+    /// and whenever one comes to the front, LockdownController); the focus guard brings
+    /// FairPlay back at once. Release builds have an empty list: Chrome, Terminal etc. are
+    /// in "Close them and start" and are closed like any other app the teacher didn't
+    /// allow (the tests check this). More bundle ids for this Mac only:
     ///   defaults write ai.proctora.student DevKeep -array com.example.app
     #if FAIRPLAY_DEV
     static let devKeep: Set<String> = Set([
@@ -99,6 +103,16 @@ enum Allowlist {
         let lower = id.lowercased()
         guard !lower.isEmpty else { return false }
         return matches(lower, Array(devKeep)) || matches(lower, alwaysPrefixes)
+    }
+
+    /// Kept only because this is a dev build (always false in release builds).
+    static func isDevKeptId(_ id: String) -> Bool {
+        !devKeep.isEmpty && matches(id.lowercased(), Array(devKeep))
+    }
+
+    static func isDevKept(_ app: NSRunningApplication) -> Bool {
+        guard let id = app.bundleIdentifier else { return false }
+        return isDevKeptId(id)
     }
 
     /// Kept running regardless of the deny lists: VPN clients (and dev-build tools).
