@@ -8,6 +8,7 @@ import {
   ActiveList,
   PastList,
   TestsSection,
+  activeCount,
   moreScheduled,
   scheduledExams,
   useExamTab,
@@ -16,7 +17,7 @@ import {
 import { ArrowLeftIcon } from "../../components/student/icons";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import type { StudentClass } from "../../api/types";
-import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+import { pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
 
 /** "Shuai Dong" -> Instructor; "A, B" / "A and B" / "A; B" -> Instructors. */
 export function instructorLabel(teacher: string): string {
@@ -39,6 +40,7 @@ export default function CoursePage() {
 
   const mine = k && exams ? exams.filter((e) => examInCourse(e, k)) : [];
   const live = upcomingExams(mine);
+  const uploads = uploadWindowExams(mine);
   const past = pastExams(mine);
   const scheduled = k ? scheduledExams([k]) : [];
   const more = k && exams ? moreScheduled(k, exams) : 0;
@@ -108,7 +110,7 @@ export default function CoursePage() {
                 idPrefix="course-tests"
                 tab={tab}
                 onTab={setTab}
-                activeCount={live.length + scheduled.length}
+                activeCount={activeCount(live, uploads, scheduled)}
                 pastCount={past.length}
               >
                 {exams === null ? (
@@ -116,6 +118,7 @@ export default function CoursePage() {
                 ) : tab === "active" ? (
                   <ActiveList
                     live={live}
+                    uploads={uploads}
                     scheduled={scheduled}
                     more={more}
                     empty={

@@ -5,13 +5,13 @@ import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime, isToday, shortDate } from "../../components/student/format";
 import { CourseGrid, useStudentClasses } from "../../components/student/Courses";
 import { UpcomingExamCard } from "../../components/student/ExamCard";
-import { ActiveList, PastList, TestsSection, scheduledExams, useExamTab, useStudentGrades } from "../../components/student/ExamTabs";
+import { ActiveList, PastList, TestsSection, activeCount, scheduledExams, useExamTab, useStudentGrades } from "../../components/student/ExamTabs";
 import { JoinClass } from "../../components/student/JoinClass";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import { TrialCard } from "../../components/student/TrialCard";
 import { useMe } from "../../lib/useMe";
-import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
 
 /** 2026-10-24: open exams listed on the home page; the rest are on the Exams page. */
 export const HOME_OPEN_SHOWN = 6;
@@ -31,6 +31,7 @@ export default function StudentHome() {
   const [tab, setTab] = useExamTab();
 
   const upcoming = exams ? upcomingExams(exams) : [];
+  const uploads = exams ? uploadWindowExams(exams) : [];
   const past = exams ? pastExams(exams) : [];
   const scheduled = scheduledExams(courses.classes ?? []);
   const name = firstName(me?.name);
@@ -139,7 +140,7 @@ export default function StudentHome() {
             idPrefix="home-tests"
             tab={tab}
             onTab={setTab}
-            activeCount={upcoming.length + scheduled.length}
+            activeCount={activeCount(upcoming, uploads, scheduled)}
             pastCount={past.length}
           >
             {exams === null ? (
@@ -147,6 +148,7 @@ export default function StudentHome() {
             ) : tab === "active" ? (
               <ActiveList
                 live={upcoming}
+                uploads={uploads}
                 scheduled={scheduled}
                 renderLive={renderLive}
                 showCourse

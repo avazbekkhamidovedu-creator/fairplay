@@ -7,6 +7,7 @@ import { ApiError, NetworkError, materialsApi } from "../../api/client";
 import type { MaterialsInfo } from "../../api/types";
 import { ACCEPT, MAX_BYTES, MAX_FILES, MAX_LABEL, checkFile, formatBytes } from "../../lib/materials";
 import { pdfNeedsPassword } from "../../lib/pdf";
+import { dateTime, timeLeft } from "./format";
 import { FileIcon, UploadIcon } from "./icons";
 import "../../styles/tools.css";
 
@@ -89,6 +90,20 @@ export function MaterialsUpload({ examId, compact = false }: { examId: string; c
     if (info?.can_change && !busy) void add(e.dataTransfer?.files ?? null);
   };
 
+  // 2026-10-24: the early upload window: "Uploads close Oct 26, 14:00 · in 2 days 3 h", ticking;
+  // when it closes, the list is asked again (the server then says the files are fixed)
+  const closesAt = info?.upload_closes_at ?? null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!closesAt || !info?.can_change) return;
+    const t = setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n >= new Date(closesAt).getTime()) void reload();
+    }, 30_000);
+    return () => clearInterval(t);
+  }, [closesAt, info?.can_change, reload]);
+
   const used = info?.used_bytes ?? 0;
   const canChange = !!info?.can_change;
   const full = !!info && info.files.length >= (info.max_files || MAX_FILES);
@@ -99,6 +114,12 @@ export function MaterialsUpload({ examId, compact = false }: { examId: string; c
         <h2 id={`mat-h-${examId}`}>Your materials</h2>
         <span className="stu-muted stu-small">Open book: bring up to {MAX_FILES} files (PDF, PNG, JPEG, TXT, MD), {MAX_LABEL} in all.</span>
       </div>
+      {info && closesAt && canChange && (
+        <p className="stu-upload-window" data-testid="upload-window">
+          <b>Uploads close {dateTime(closesAt)}</b>
+          {timeLeft(closesAt, now) && <span className="stu-muted"> · in {timeLeft(closesAt, now)}</span>}
+        </p>
+      )}
       {loadError && (
         <p className="stu-alert warn" role="alert" style={{ margin: 0 }}>
           {loadError}

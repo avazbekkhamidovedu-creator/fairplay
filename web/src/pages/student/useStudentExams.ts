@@ -53,3 +53,11 @@ export function pastExams(exams: StudentExamSummary[]): StudentExamSummary[] {
     .filter((e) => e.attempt?.status === "submitted")
     .sort((a, b) => (b.attempt?.submitted_at ?? "").localeCompare(a.attempt?.submitted_at ?? ""));
 }
+
+/** 2026-10-24: draft exams whose early upload window is open ("Upcoming — upload your files"),
+ *  soonest close first. Only uploading is possible (no questions, no start). */
+export function uploadWindowExams(exams: StudentExamSummary[]): StudentExamSummary[] {
+  return exams
+    .filter((e) => !!e.upload_window && !e.attempt && e.status === "draft")
+    .sort((a, b) => (a.upload_window!.closes_at ?? "").localeCompare(b.upload_window!.closes_at ?? ""));
+}

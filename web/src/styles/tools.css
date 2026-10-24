@@ -938,3 +938,26 @@ button.stu-filerow:hover {
     transform: none;
   }
 }
+
+/* 2026-10-24: the early upload window ("Uploads close Oct 26, 14:00 · in 2 days") */
+.stu-upload-window {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--s-primary-tint, #eef1fd);
+  color: var(--s-primary-hover, #2339b5);
+  font-size: 14px;
+}
+.stu-upload-window .stu-muted {
+  color: var(--s-text-2, #4a5568);
+}
+/* 2026-10-24: a website start page: its link under the title */
+.stu-filerow-detail {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--s-muted, #6b7686);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

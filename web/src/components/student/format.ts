@@ -75,3 +75,25 @@ export function toolsLine(tools: { calculator: string; open_book: boolean; websi
   if (tools.websites.length > 0) parts.push(plural(tools.websites.length, "website"));
   return parts.join(" · ");
 }
+
+/** 2026-10-24: "Oct 26, 14:00" */
+export function dateTime(iso: string | null | undefined): string {
+  const d = shortDate(iso);
+  return d ? `${d}, ${shortTime(iso)}` : "";
+}
+
+/** 2026-10-24: time left until `iso`: "2 days 3 h", "5 h 10 min", "12 min", "less than a minute"; "" when past. */
+export function timeLeft(iso: string | null | undefined, now: number = Date.now()): string {
+  const d = date(iso);
+  if (!d) return "";
+  const ms = d.getTime() - now;
+  if (ms <= 0) return "";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "less than a minute";
+  const days = Math.floor(min / 1440);
+  const h = Math.floor((min % 1440) / 60);
+  const m = min % 60;
+  if (days > 0) return h > 0 ? `${plural(days, "day")} ${h} h` : plural(days, "day");
+  if (h > 0) return m > 0 ? `${h} h ${m} min` : `${h} h`;
+  return `${m} min`;
+}

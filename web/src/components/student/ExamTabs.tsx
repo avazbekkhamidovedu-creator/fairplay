@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { useSearchParams } from "react-router-dom";
 import { studentApi } from "../../api/client";
 import type { StudentClass, StudentExamSummary, StudentGradeSummary } from "../../api/types";
-import { UpcomingExamCard } from "./ExamCard";
+import { UpcomingExamCard, UploadWindowCard } from "./ExamCard";
 import { courseTitle, examInCourse } from "./Courses";
 import { examName, monthDay, plural, shortDate, shortTime } from "./format";
 import { CheckIcon } from "./icons";
@@ -233,9 +233,17 @@ export function ScheduledExamCard({ item, showCourse }: { item: ScheduledExam; s
 }
 
 /** Active: exams open now (own renderer allowed: the home page's big cards), then coming up. */
+/** 2026-10-24: a course's next exam that is listed already as an upload-window exam. */
+function sameExam(s: ScheduledExam, e: StudentExamSummary): boolean {
+  if (s.title !== e.title) return false;
+  if (!s.starts_at || !e.scheduled_at) return !s.starts_at && !e.scheduled_at;
+  return new Date(s.starts_at).getTime() === new Date(e.scheduled_at).getTime();
+}
+
 export function ActiveList({
   live,
-  scheduled,
+  uploads = [],
+  scheduled: scheduledAll,
   renderLive,
   scheduledShown = 5,
   more = 0,
@@ -243,6 +251,8 @@ export function ActiveList({
   empty,
 }: {
   live: StudentExamSummary[];
+  /** 2026-10-24: not open yet, early upload window open ("Upload your files") */
+  uploads?: StudentExamSummary[];
   scheduled: ScheduledExam[];
   renderLive?: (live: StudentExamSummary[]) => ReactNode;
   scheduledShown?: number;
@@ -252,7 +262,8 @@ export function ActiveList({
   empty: ReactNode;
 }) {
   const [all, setAll] = useState(false);
-  if (live.length === 0 && scheduled.length === 0) {
+  const scheduled = scheduledAll.filter((x) => !uploads.some((e) => sameExam(x, e)));
+  if (live.length === 0 && uploads.length === 0 && scheduled.length === 0) {
     return (
       <div className="stu-tests-empty" data-testid="tests-empty">
         {empty}
@@ -275,6 +286,16 @@ export function ActiveList({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {uploads.length > 0 && (
+        <div className="stu-exam-group" data-testid="active-uploads">
+          <h3 className="stu-group-title">Upload your files · {uploads.length}</h3>
+          <div className="stu-exam-list">
+            {uploads.map((e) => (
+              <UploadWindowCard key={e.id} exam={e} showCourse={!!showCourse} />
+            ))}
+          </div>
         </div>
       )}
       {scheduled.length > 0 && (
@@ -339,4 +360,10 @@ export function PastList({
       {footer}
     </div>
   );
+}
+
+/** 2026-10-24: the Active count: open now + upload windows + coming up (an upload-window exam
+ *  that is also a course's next exam counts once). */
+export function activeCount(live: StudentExamSummary[], uploads: StudentExamSummary[], scheduled: ScheduledExam[]): number {
+  return live.length + uploads.length + scheduled.filter((x) => !uploads.some((e) => sameExam(x, e))).length;
 }

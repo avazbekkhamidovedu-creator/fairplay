@@ -1,9 +1,9 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { NotLockedBanner } from "../../components/LockBanner";
-import { UpcomingExamCard } from "../../components/student/ExamCard";
+import { UpcomingExamCard, UploadWindowCard } from "../../components/student/ExamCard";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
-import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+import { pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
 
 /** 2026-10-24: past results beyond this many sit behind "Show all". */
 export const PAST_SHOWN = 20;
@@ -17,9 +17,10 @@ export default function ExamsPage() {
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ upcoming: null, past: null });
 
   const upcoming = exams ? upcomingExams(exams) : [];
+  const uploads = exams ? uploadWindowExams(exams) : [];
   const past = exams ? pastExams(exams) : [];
   const tabs: { id: Tab; label: string }[] = [
-    { id: "upcoming", label: `Upcoming · ${upcoming.length}` },
+    { id: "upcoming", label: `Upcoming · ${upcoming.length + uploads.length}` },
     { id: "past", label: `Past · ${past.length}` },
   ];
 
@@ -69,13 +70,21 @@ export default function ExamsPage() {
             <StuLoading label="Loading exams…" />
           ) : tab === "upcoming" ? (
             <section id="panel-upcoming" role="tabpanel" aria-labelledby="tab-upcoming" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {upcoming.length === 0 ? (
+              {upcoming.length === 0 && uploads.length === 0 ? (
                 <div className="stu-card">
                   <h2>No open exams</h2>
                   <p className="stu-muted">When your teacher opens an exam, it shows up here.</p>
                 </div>
               ) : (
-                upcoming.map((e) => <UpcomingExamCard key={e.id} exam={e} />)
+                <>
+                  {upcoming.map((e) => (
+                    <UpcomingExamCard key={e.id} exam={e} />
+                  ))}
+                  {/* 2026-10-24: not open yet, but files can be uploaded now */}
+                  {uploads.map((e) => (
+                    <UploadWindowCard key={e.id} exam={e} headingLevel={2} />
+                  ))}
+                </>
               )}
             </section>
           ) : (

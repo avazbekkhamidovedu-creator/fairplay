@@ -568,3 +568,27 @@
     font-size: 24px;
   }
 }
+
+/* 2026-10-24: not open yet, but the early upload window is: "Upcoming — upload your files" */
+.stu-exam-item.upload {
+  border-color: var(--s-primary-soft);
+}
+.stu-exam-item.upload .stu-exam-item-when {
+  color: var(--s-primary-hover);
+}
+.stu-date-tile.upload {
+  background: var(--s-primary-tint);
+  color: var(--s-primary-hover);
+}
+.stu-exam-item.upload .stu-exam-item-meta b {
+  font-weight: 600;
+  color: var(--s-text);
+}
+.stu-upload-page {
+  max-width: 720px;
+}
+.stu-upload-page .stu-upload-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

@@ -3,7 +3,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NOT_OPEN_FOR_YOU } from "../../pages/student/useStudentExams";
-import { examName, isToday, monthDay, plural, shortDate, shortTime } from "./format";
+import { dateTime, examName, isToday, monthDay, plural, shortDate, shortTime } from "./format";
 
 export function UpcomingExamCard({
   exam,
@@ -68,6 +68,60 @@ export function UpcomingExamCard({
           Check in
         </Link>
       )}
+    </article>
+  );
+}
+
+/** 2026-10-24: an exam not open yet whose early upload window is open: "Upcoming — upload your
+ *  files". Only "Upload files" (no start, nothing about the questions). */
+export function UploadWindowCard({
+  exam,
+  headingLevel = 3,
+  showCourse = true,
+}: {
+  exam: StudentExamSummary;
+  headingLevel?: 2 | 3;
+  showCourse?: boolean;
+}) {
+  const md = monthDay(exam.scheduled_at);
+  const name = showCourse ? examName(exam.course, exam.title) : exam.title;
+  const H = headingLevel === 2 ? "h2" : "h3";
+  const meta = [
+    exam.scheduled_at && `Exam ${shortDate(exam.scheduled_at)} · ${shortTime(exam.scheduled_at)}`,
+    exam.duration_min > 0 && `${exam.duration_min} min`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <article className="stu-exam-item upload" data-testid="upload-card">
+      <div className="stu-date-tile upload" aria-hidden="true">
+        {md ? (
+          <>
+            <span className="m">{md.m}</span>
+            <span className="d">{md.d}</span>
+          </>
+        ) : (
+          <span className="m">Soon</span>
+        )}
+      </div>
+      <div className="stu-exam-item-body">
+        <span className="stu-exam-item-when">Upcoming — upload your files</span>
+        <H className="stu-clamp-2" title={name}>
+          {name}
+        </H>
+        <span className="stu-exam-item-meta">
+          {meta}
+          {exam.upload_window && (
+            <>
+              {meta ? " · " : ""}
+              <b data-testid="upload-closes">Uploads close {dateTime(exam.upload_window.closes_at)}</b>
+            </>
+          )}
+        </span>
+      </div>
+      <Link to={`/student/exams/${encodeURIComponent(exam.id)}/upload`} className="stu-btn primary">
+        Upload files
+      </Link>
     </article>
   );
 }
