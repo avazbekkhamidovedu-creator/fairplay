@@ -66,10 +66,16 @@ The receiver:
 2. `|now - timestamp| > 60` → 401;
 3. compares the signature with `hmac.compare_digest`;
 4. rejects a nonce seen in the last 180 s (cache/Redis key `fpb:nonce:<nonce>`, `SET NX EX 180`;
-   longer than the 120 s a timestamp can be accepted in, with margin) → 401;
+   longer than the 120 s a timestamp can be accepted in, with margin) → 401. The cache must be
+   shared by every worker: DKU OJ's system check `judge.E101` fails with the bridge on and a
+   LocMem/Dummy/FileBased default cache;
 5. bodies over the endpoint's limit → 413 before hashing.
 
-Responses are not signed (TLS protects them in production). Clients use timeouts (connect 5 s,
+Responses are not signed (TLS protects them in production): DKU OJ refuses (system check
+`judge.E102`, and every call answers "FairPlay not reachable") a plain `http://` `FAIRPLAY_URL`
+that is not the loopback, unless `DEBUG` or `FAIRPLAY_ALLOW_INSECURE = True` (local kits only).
+DKU OJ reads at most 2 MB of a FairPlay answer, and the whole call within connect + read
+timeout (a slow trickle is cut off) → "FairPlay not reachable" / an error. Clients use timeouts (connect 5 s,
 read 15 s; DKU OJ page loads and the live table's poll: 3 s), never retry a POST that may have
 succeeded unless it is idempotent (marked below).
 
@@ -116,11 +122,16 @@ FairPlay when a student sets up (so the list is never stale).
 `students` = the class's members minus its course's admins and instructors, the class's
 instructors, site staff, and anyone who is an author or curator of any `fairplay_required`
 assignment (a TA or professor of another course who is a plain member here can't be claimed as a
-student). 404 unknown class.
+student). 404 unknown class, and (2026-10-24, §9) 404 for a class FairPlay has no business
+with: the class must be in `classes` of a `fairplay_required` assignment, have its course in
+such an assignment's `organizations`, or have had a FairPlay class login made for it in DKU OJ
+(`Class.fairplay_enabled_at`, set before the first create call).
 
 **`GET /api/fairplay/v1/students/<netid>/classes`** (2026-10-24) — the ACTIVE classes the NetID
 is a student of, by the same rule as the roster above (a class where they are an admin,
-instructor, curator, ... is left out), for the course cards in the FairPlay app.
+instructor, curator, ... is left out), for the course cards in the FairPlay app. Only classes
+the roster endpoint serves (§9) are listed; a NetID on none of their rosters gets
+`{"classes": []}`.
 
 ```json
 {"classes": [{"id": 31, "name": "CS 101 Section A",
@@ -240,8 +251,9 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   keeps them (`extra_close_minutes`, kept across syncs) and closes at DKU OJ's end time + the
   added minutes, so `closes_at` in the answer moves; students starting after it get the time,
   and the automatic close waits for it. The hand-ins then reach DKU OJ after the assignment's
-  end time: DKU OJ files them anyway (`POST exams/<key>/submissions` has no end-time check;
-  lateness is judged from FairPlay's `deadline_at`).
+  end time: DKU OJ files them anyway (until 14 days after the close, §9). DKU OJ counts the
+  minutes added through its FairPlay tab (`Contest.fairplay_added_minutes`); lateness is judged
+  against end time + those minutes (§9).
 - **`POST /exams/<key>/new-code`** → GET shape (new start code).
 - **`POST /exams/<key>/review`** body `{"review": "nothing" | "score" | "breakdown" | "answers" | "answers_and_results",
   "updated_at": "<iso>"}` → GET shape (2026-10-24, §8). Idempotent. Any other `review` → 400;
@@ -453,3 +465,35 @@ FairPlay:
   points" (no link); `breakdown` → the ring plus a chip per question ("Q1 · 4/4"; more than 12 →
   "All N questions →" opens the grade page with a points table); `answers` → "Your answers →";
   `answers_and_results` → "Your answers →" before, the ring + "Feedback →" after the release.
+
+## 9. Security review fixes (2026-10-24)
+
+DKU OJ side (FairPlay → DKU OJ calls are trusted only as far as below, even when signed):
+
+- **Class scope** (§2): roster and student classes only for classes a `fairplay_required`
+  assignment uses (its `classes`, or classes of its `organizations`) or that have a FairPlay
+  class login (`Class.fairplay_enabled_at`); else 404 / not listed.
+- **Exam list** (v1 `GET exams`): `editors` and `roster` entries no longer carry `email`
+  (FairPlay never used it): `{"username","first_name","last_name"}` (+ `extra_time_seconds` in
+  the roster).
+- **Hand-ins** (v1 `POST exams/<key>/submissions`, `POST exams/<key>/uploads`):
+  - one FairPlay attempt per student and exam: a different `attempt_id` for a student who already
+    has a hand-in → `409 {"detail": "This student already has a FairPlay hand-in for this exam
+    (attempt <id>). A professor can clear it ..."}`. The professor clears it on the student's
+    FairPlay report page in DKU OJ ("Clear FairPlay hand-in"); FairPlay then delivers again
+    (the filed submissions stay; the cleared attempt's replay still gets its receipt).
+    The same attempt id stays idempotent (same body → same receipt, different body → 409).
+  - refused after the exam's close + 14 days → `410 {"detail": "This exam closed more than 14 days
+    ago; ..."}`; close = `end_time` + the minutes added from DKU OJ. A replay of an already filed
+    attempt still gets its receipt.
+  - lateness: late when the hand-in counts as made more than 120 s after the close. It counts as
+    made at FairPlay's `handed_in_at`, but never later than DKU OJ's receive time (a hand-in that
+    waited in FairPlay's outbox while DKU OJ was down is not late; a time in the future counts as
+    the receive time). The 14-day window and the one-attempt rule bound what a back-dated time
+    can do, and the report shows both times. The participation start is clamped into
+    [start_time, now].
+  - `integrity_report_url` is kept only when it starts with `FAIRPLAY_URL + "/"` (or DKU OJ's
+    optional `FAIRPLAY_PUBLIC_URL + "/"`, FairPlay's browser address when it differs); otherwise
+    it is dropped (the hand-in is still filed).
+- **Signing** (§1): two-token rotation; shared nonce cache enforced by a system check; https
+  `FAIRPLAY_URL` off the loopback; capped, time-limited reading of FairPlay's answers.
