@@ -14,7 +14,7 @@ __all__ = ['create_submission']
 
 
 def create_submission(profile, problem, *, language, answer, participation=None,
-                      contest_problem=None, judge_id=None):
+                      contest_problem=None, judge_id=None, judge_on_commit=False):
     """Record ``answer`` as a new submission by ``profile`` and send it for grading.
 
     ``answer`` is the source string for code problems, and the grader's cleaned-data dict for
@@ -25,6 +25,8 @@ def create_submission(profile, problem, *, language, answer, participation=None,
 
     Callers are responsible for the pre-submit guards (submission caps, bans, part locks): this
     function assumes the answer is allowed to be submitted.
+
+    ``judge_on_commit`` defers grading until the caller's transaction commits.
     """
     from judge.question_types import get_grader
     from judge.utils.contest_ai import contest_defers_ai, mark_awaiting_batch_ai, supersede_older_in_flight
@@ -50,12 +52,18 @@ def create_submission(profile, problem, *, language, answer, participation=None,
         else:
             get_grader(problem.submission_type).store_answer(submission, answer)
 
-    supersede_older_in_flight(submission)
-    if is_code:
-        submission.judge(force_judge=True, judge_id=judge_id)
-    elif contest_defers_ai(submission):
-        mark_awaiting_batch_ai(submission)
+    def dispatch():
+        supersede_older_in_flight(submission)
+        if is_code:
+            submission.judge(force_judge=True, judge_id=judge_id)
+        elif contest_defers_ai(submission):
+            mark_awaiting_batch_ai(submission)
+        else:
+            submission.judge(force_judge=True)
+
+    if judge_on_commit:
+        transaction.on_commit(dispatch, robust=True)
     else:
-        submission.judge(force_judge=True)
+        dispatch()
 
     return submission

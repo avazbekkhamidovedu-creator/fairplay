@@ -17,6 +17,7 @@ from judge.views import (
     grade, ide, language, license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage,
     ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
+from judge.views.api import fairplay as fairplay_api
 from judge.views.editor_attachment import editor_file_download, editor_file_uploader
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
@@ -405,6 +406,18 @@ urlpatterns = [
         path('participations', api.api_v2.APIContestParticipationList.as_view()),
         path('languages', api.api_v2.APILanguageList.as_view()),
         path('judges', api.api_v2.APIJudgeList.as_view()),
+    ])),
+
+    path('api/fairplay/v1/', include([
+        path('exams', fairplay_api.exams, name='fairplay_api_exams'),
+        path('exams/<str:key>/package', fairplay_api.exam_package, name='fairplay_api_package'),
+        path('exams/<str:key>/assets/<str:name>', fairplay_api.exam_asset, name='fairplay_api_asset'),
+        path('exams/<str:key>/uploads', fairplay_api.exam_uploads, name='fairplay_api_uploads'),
+        path('exams/<str:key>/submissions', fairplay_api.exam_submissions, name='fairplay_api_submissions'),
+        path('exams/<str:key>/results', fairplay_api.exam_results, name='fairplay_api_results'),
+        path('classes/<int:class_id>/roster', fairplay_api.class_roster_view, name='fairplay_api_class_roster'),
+        path('students/<str:netid>/classes', fairplay_api.student_classes_view,
+             name='fairplay_api_student_classes'),
     ])),
 
     path('blog/', paged_list_view(blog.PostList, 'blog_post_list')),

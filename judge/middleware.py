@@ -182,7 +182,8 @@ class APIMiddleware(object):
 
     def __call__(self, request):
         full_token = request.headers.get('authorization', '')
-        if not full_token:
+        # The FairPlay bridge API checks its own shared token (judge/views/api/fairplay.py).
+        if not full_token or request.path.startswith('/api/fairplay/'):
             return self.get_response(request)
 
         token = self.header_pattern.match(full_token)
