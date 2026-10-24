@@ -3,10 +3,12 @@ students by username); students join; every exam belongs to one class."""
 from __future__ import annotations
 
 import secrets
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, false, func, select
+from sqlalchemy import and_, delete, false, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -229,16 +231,61 @@ async def delete_class(class_id: int, p: Principal = Depends(require_teacher),
 
 
 # ---------------------------------------------------------------- student
+CLASS_LOGIN_TYPED = ("That is a class login for first sign-in. "
+                     "Your DKU OJ courses appear here by themselves.")
+
+
+def _upcoming(exams: list[Exam]) -> tuple[int, dict | None]:
+    """(count, next exam): live ones first, then the soonest start (no date last)."""
+    if not exams:
+        return 0, None
+    far = datetime.max
+    first = min(exams, key=lambda e: (e.status != "live", e.scheduled_at or far, e.title or ""))
+    return len(exams), {"title": first.title, "starts_at": iso(first.scheduled_at), "status": first.status}
+
+
 @student_router.get("")
 async def my_classes(p: Principal = Depends(require_student),
                      session: AsyncSession = Depends(get_session)):
+    """The student's classes: FairPlay classes they joined (source "fairplay", can_leave)
+    and, for a DKU OJ student, the DKU OJ classes they are a student of (source "dkuoj",
+    id "dkuoj:<class id>", enrollment managed in DKU OJ). FairPlay's own mirror copies of
+    DKU OJ classes are not listed twice. upcoming_exams / next_exam: exams not closed
+    (FairPlay: live, or draft with a date)."""
+    from .integrations.dkuoj import student_classes as oj
     rows = (await session.execute(
-        select(SchoolClass.id, SchoolClass.name, SchoolClass.term, User.name, ClassMember.joined_at)
+        select(SchoolClass.id, SchoolClass.name, SchoolClass.term, User.name, ClassMember.joined_at,
+               SchoolClass.external_ref)
         .join(ClassMember, ClassMember.class_id == SchoolClass.id)
         .join(User, User.id == SchoolClass.teacher_id)
         .where(ClassMember.user_id == p.user_id).order_by(SchoolClass.name))).all()
-    return [{"id": i, "name": n, "term": term or "", "teacher": t, "joined_at": iso(j)}
-            for i, n, term, t, j in rows]
+    native = [r for r in rows if not (r[5] or "").startswith(oj.MIRROR_PREFIX)]
+    ids = [r[0] for r in native]
+    by_class: dict[int, list[Exam]] = {}
+    if ids:
+        for e in (await session.execute(select(Exam).where(
+                Exam.class_id.in_(ids), Exam.source == "fairplay", Exam.is_trial == false(),
+                or_(Exam.status == "live", and_(Exam.status == "draft", Exam.scheduled_at.is_not(None))),
+                or_(Exam.delivery.is_(None), Exam.delivery != "paper")))).scalars():
+            by_class.setdefault(e.class_id, []).append(e)
+    out = []
+    for i, n, term, t, j, _ref in native:
+        count, nxt = _upcoming(by_class.get(i, []))
+        out.append({"id": i, "name": n, "term": term or "", "teacher": t, "joined_at": iso(j),
+                    "course": None, "source": "fairplay", "upcoming_exams": count, "next_exam": nxt,
+                    "can_leave": True})
+    user = await session.get(User, p.user_id)
+    if user is not None:
+        oj_classes = await oj.dkuoj_classes(session, user)
+        if oj_classes:
+            exams = await oj.exams_by_class(session, p.user_id)
+            for c in oj_classes:
+                count, nxt = _upcoming(exams.get(c["id"], []))
+                out.append({"id": f"dkuoj:{c['id']}", "name": c["name"], "term": "", "teacher": c.get("teacher"),
+                            "joined_at": None, "course": c.get("course"), "source": "dkuoj",
+                            "upcoming_exams": count, "next_exam": nxt, "can_leave": False})
+    out.sort(key=lambda x: ((x["course"] or "").lower(), x["name"].lower()))
+    return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
 @student_router.post("/join")
@@ -248,6 +295,9 @@ async def join_class(body: JoinIn, p: Principal = Depends(require_student),
     wrong_key = f"joinwrong:{p.user_id}"
     if int(await store.get(wrong_key) or 0) >= MAX_WRONG_JOINS:
         raise HTTPException(429, "Too many wrong class codes. Wait 10 minutes.")
+    from .integrations.dkuoj.student_classes import is_class_login_username
+    if await is_class_login_username(session, body.code):
+        raise HTTPException(400, CLASS_LOGIN_TYPED)
     code = normalize_code(body.code)
     c = (await session.execute(select(SchoolClass).where(SchoolClass.join_code == code))).scalar_one_or_none()
     if c is None:

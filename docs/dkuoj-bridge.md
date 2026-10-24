@@ -40,12 +40,14 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
   "classes":[{"id":31,"name":"CS 101 Section A"}],
   "start_time":"2026-11-27T01:00:00Z","end_time":"2026-11-27T03:00:00Z","time_limit_seconds":5400,
   "results_hidden":true,"package_version":"7f3a9c1e","removed":false,
-  "settings":{"calculator":"off","open_book":false,"websites":["docs.python.org"],"strong_lock":false,"resume_needs_approval":true},
+  "settings":{"calculator":"off","open_book":false,"websites":["docs.python.org"],"strong_lock":false,"resume_needs_approval":true,
+              "review":"nothing","review_updated_at":null},
   "editors":[{"username":"sd123","first_name":"Shuai","last_name":"Dong","email":"sd123@example.edu"}],
   "roster":[{"username":"ax19","first_name":"Avazbek","last_name":"Khamidov","email":"ax19@example.edu","extra_time_seconds":0}],
   "updated_at":"2026-11-20T09:14:00Z"}],
  "next_page":null,"server_time":"2026-11-20T09:15:02Z"}
 ```
+`settings.review` / `review_updated_at`: student review after hand-in (v2 §8, 2026-10-24).
 `package_version` = first 16 hex of sha256 over the canonical package JSON (it changes whenever anything in the package changes). `time_limit_seconds` null = the whole window.
 
 **`GET exams/<key>/package`** — 404 if not a FairPlay assignment; `425` + `Retry-After` earlier than 24 h before `start_time`. `ETag: "<package_version>"`, honours `If-None-Match` (304).

@@ -1,0 +1,307 @@
+/* 2026-10-24: student app shell — the top bar stays at the top while only the content scrolls.
+   Loaded after student.css (StudentLayout). */
+
+.stu {
+  --stu-topnav-h: 64px;
+}
+
+.stu-topnav.stu-topnav-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 40; /* above cards and the exam heroes; dialogs use higher values */
+  background: var(--s-surface);
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  padding-left: max(40px, env(safe-area-inset-left, 0px));
+  padding-right: max(40px, env(safe-area-inset-right, 0px));
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.stu-topnav.stu-topnav-sticky.scrolled {
+  border-bottom-color: var(--s-border-strong);
+  box-shadow: 0 1px 2px rgba(27, 37, 51, 0.05), 0 4px 14px rgba(27, 37, 51, 0.07);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stu-topnav.stu-topnav-sticky {
+    transition: none;
+  }
+}
+
+/* Content area: keeps the old flex-column behaviour of .stu for page children. */
+.stu-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Anchored content is not hidden under the bar. */
+.stu-content [id],
+.stu-exam [id] {
+  scroll-margin-top: calc(var(--stu-topnav-h) + 16px);
+}
+
+/* iPad portrait and smaller: tighter bar. */
+@media (max-width: 900px) {
+  .stu-topnav.stu-topnav-sticky {
+    padding-left: max(24px, env(safe-area-inset-left, 0px));
+    padding-right: max(24px, env(safe-area-inset-right, 0px));
+    gap: 8px 16px;
+  }
+}
+
+/* Phone: logo + user on the first row, the nav as a scrollable strip below. */
+@media (max-width: 640px) {
+  .stu-topnav.stu-topnav-sticky {
+    padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 6px
+      max(16px, env(safe-area-inset-left, 0px));
+    min-height: 0;
+    gap: 6px 8px;
+  }
+  .stu-topnav-sticky .stu-logo {
+    order: 1;
+  }
+  .stu-topnav-sticky .stu-user {
+    order: 2;
+  }
+  .stu-topnav-sticky .stu-nav {
+    order: 3;
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .stu-topnav-sticky .stu-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .stu-topnav-sticky .stu-nav a {
+    flex: 0 0 auto;
+    min-height: 40px;
+  }
+}
+
+/* The exam's own bar (LockedBar) is sticky already; keep it clear of the iPad status area. */
+.stu-exam .stu-lockbar {
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
+}
+
+/* ---------- 2026-10-24: text helpers ---------- */
+
+.stu-clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.stu-ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stu-show-all {
+  align-self: flex-start;
+}
+
+/* ---------- course cards (home) ---------- */
+
+.stu-courses {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.stu-course-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  grid-auto-rows: 1fr; /* every card as tall as the tallest */
+  gap: 16px;
+  min-width: 0;
+}
+.stu-course-cell {
+  display: flex;
+  min-width: 0;
+}
+.stu-course-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 18px 20px;
+  border-radius: var(--r-card, 14px);
+  background: var(--s-surface);
+  border: 1px solid var(--s-border);
+  color: var(--s-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.stu-course-card:hover {
+  border-color: var(--s-primary-soft);
+  box-shadow: var(--shadow-paper);
+}
+.stu-course-card.selected {
+  border-color: var(--s-primary);
+  box-shadow: 0 0 0 1px var(--s-primary);
+}
+.stu-course-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.stu-source-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  background: var(--s-ground);
+  color: var(--s-text-2);
+}
+.stu-source-badge.dkuoj {
+  background: var(--s-primary-tint);
+  color: var(--s-primary-hover);
+}
+.stu-course-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-text-2);
+}
+.stu-course-title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  min-height: calc(2 * 1.3em); /* two lines reserved: cards line up */
+}
+.stu-course-sub {
+  font-size: 14px;
+  color: var(--s-text-2);
+}
+.stu-course-next {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--s-divider);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-size: 14px;
+}
+.stu-course-next-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--s-text-2);
+}
+.stu-courses-empty {
+  flex: none;
+}
+
+/* one course's exams */
+.stu-course-exams {
+  gap: 16px;
+  min-width: 0;
+}
+.stu-course-exams h2:focus {
+  outline: none;
+}
+.stu-exam-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.stu-group-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--s-text-2);
+}
+
+/* ---------- exam lists: many cards, long titles ---------- */
+
+.stu-exam-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.stu-exam-item {
+  min-width: 0;
+}
+.stu-exam-item-body h2,
+.stu-exam-item-body h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.stu-exam-hero h2,
+.stu-result-title {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.stu-exam-item-meta,
+.stu-exam-item-when {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .stu-exam-item {
+    padding: 16px;
+    gap: 12px 16px;
+  }
+  .stu-exam-item > .stu-btn {
+    flex: 1 1 100%;
+  }
+  .stu-exam-item .stu-date-tile {
+    width: 48px;
+    height: 52px;
+  }
+  .stu-exam-item .stu-exam-item-body {
+    flex: 1 1 0;
+  }
+  .stu-exam-item-body h2,
+  .stu-exam-item-body h3 {
+    font-size: 17px;
+  }
+}
+
+/* join box */
+.stu-join-card {
+  gap: 10px;
+}
+.stu-join-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.stu-join-form .stu-answer-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  max-width: 360px;
+  min-height: 44px;
+  font-family: var(--font);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.stu-join-form .stu-answer-input::placeholder {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.stu-join-ok {
+  color: var(--s-success);
+  font-weight: 600;
+}

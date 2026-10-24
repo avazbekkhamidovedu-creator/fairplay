@@ -26,6 +26,7 @@ BACKOFF_BASE_S = 1.0
 MAX_RETRY_AFTER_S = 10.0
 MAX_PACKAGE_BYTES = 5 * 1024 * 1024
 MAX_ASSET_BYTES = 10 * 1024 * 1024
+DJANGO_PATH_SAFE = ":@&+$,-_.!~*'()"      # django.utils.encoding.escape_uri_path, minus "/"
 
 TransportFactory = Callable[[str], httpx.AsyncBaseTransport | None]
 _transport_factory: TransportFactory | None = None
@@ -104,15 +105,18 @@ class DkuojClient:
     async def request(self, method: str, path: str, *, params: dict | None = None,
                       json: Any = None, content: bytes | None = None,
                       headers: dict | None = None, attempts: int = MAX_ATTEMPTS,
-                      ok: tuple[int, ...] = (200,)) -> httpx.Response:
+                      ok: tuple[int, ...] = (200,), timeout: float | None = None) -> httpx.Response:
         """One call with retries on 429 / 5xx / network errors. Returns the response when
-        its status is in `ok`; raises OjError otherwise."""
+        its status is in `ok`; raises OjError otherwise. `timeout` (seconds) replaces the
+        default connect / read timeouts for this call (a page someone is waiting on)."""
         url = f"{self.base_url}{API}/{path.lstrip('/')}"
         err: OjError | None = None
         for attempt in range(max(1, attempts)):
             try:
-                req = self._client.build_request(method, url, params=params, json=json,
-                                                 content=content, headers=headers)
+                req = self._client.build_request(
+                    method, url, params=params, json=json, content=content, headers=headers,
+                    timeout=(httpx.Timeout(timeout, connect=min(CONNECT_TIMEOUT_S, timeout))
+                             if timeout else httpx.USE_CLIENT_DEFAULT))
                 body = req.read()
                 path = req.url.raw_path.decode("ascii")
                 req.headers.update(signing.sign_headers(self._token, signing.FP_TO_OJ, method, path, body))
@@ -200,6 +204,15 @@ class DkuojClient:
         """GET classes/<id>/roster (v2 §2): {class, course, students: [{username, first_name,
         last_name}]}. One try: a student is waiting on the set-up screen."""
         return self._json(await self.request("GET", f"classes/{int(class_id)}/roster", attempts=1))
+
+    async def student_classes(self, netid: str, timeout: float = 3.0) -> dict:
+        """GET students/<netid>/classes (v2 §2): {classes: [{id, name, course: {id, name},
+        teachers: [..]}]}. One try with a short timeout: a student's home page waits on it."""
+        from urllib.parse import quote
+        # the same escaping as Django's request.get_full_path() (which DKU OJ signs against)
+        path = "students/" + quote(netid, safe=DJANGO_PATH_SAFE) + "/classes"
+        return self._json(await self.request("GET", path,
+                                             attempts=1, timeout=timeout))
 
     async def results(self, key: str, changed_since: str | None, page: int = 1) -> dict:
         params: dict = {"page": page}

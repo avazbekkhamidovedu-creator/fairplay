@@ -21,6 +21,7 @@ from . import app_client as ac
 from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_member, require_open_for
 from .app_version import check_app_version
 from .question_types import AnswerError, check_answer, is_extended
+from .review import REVIEW_CLOSED, review_level, shows_answers, shows_results
 from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
                       HeartbeatIn, OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
@@ -121,7 +122,9 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                Exam.total_points, Attempt.score, Exam.mode, Exam.delivery, Exam.start_code,
                Exam.calculator, Exam.open_book, Exam.websites,       # 2026-10-23: exam tools
                Exam.source, Attempt.external_result,                        # integrations
-               Exam.open_to)                                                # 2026-10-23
+               Exam.open_to,                                                # 2026-10-23
+               Exam.review_after_handin,                                    # 2026-10-24
+               Exam.class_id, Exam.external_meta)                           # 2026-10-24: class_ids
         .outerjoin(Attempt, and_(Attempt.exam_id == Exam.id, Attempt.student_id == p.user_id))
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
@@ -132,7 +135,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
          total, score, mode, delivery, code, calc, open_book, websites, source, external_result,
-         open_to) in rows:
+         open_to, review, class_id, external_meta) in rows:
         mode = mode or "questions"
         delivery = delivery or ("website" if mode == "external" else "computer")
         attempt = None
@@ -141,10 +144,15 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
             integ = integration_for({"source": source})
             if integ is not None:          # released per student by the external system
                 released, score, total = integ.released(external_result, total)
+            # 2026-10-24 (app.review): no score unless the teacher opened the results
+            level = review_level(source, review)
+            released = released and shows_results(level)
             show = released and astatus == "submitted"
             attempt = {"attempt_id": aid, "status": astatus, "submitted_at": iso(sub),
                        "receipt": receipt, "released": released,
                        "percent": percent(score or 0.0, total) if show else None}
+            if integ is not None:          # native exams have no review setting
+                attempt["review"] = level
         # 2026-10-23: open to selected students only -> listed, but "not open for you yet"
         # (no package, no start) unless this student already started
         open_for_me = aid is not None or is_open_for(open_to, p.user_id)
@@ -157,9 +165,20 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
                                             "websites": websites})}
+        row["class_ids"] = _class_ids(source, class_id, external_meta)
         row.update(_source_fields(source))
         out.append(row)
     return JSONResponse(out)   # perf 0.6.2: plain JSON values; skips FastAPI's re-encoding pass
+
+
+def _class_ids(source: str | None, class_id: int | None, meta) -> list[str]:
+    """2026-10-24: the classes an exam belongs to, as strings equal to String(id) of the items
+    of GET /api/student/classes: DKU OJ exams "dkuoj:<DKU OJ class id>" (every class in
+    external_meta.classes; FairPlay's mirror class is not used), other exams [str(class_id)]."""
+    if source == "dkuoj":
+        return [f"dkuoj:{c['id']}" for c in (meta or {}).get("classes") or []
+                if isinstance(c, dict) and isinstance(c.get("id"), int) and not isinstance(c.get("id"), bool)]
+    return [str(class_id)] if class_id is not None else []
 
 
 def _source_fields(source: str | None) -> dict:
@@ -385,6 +404,12 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
     exam = await get_exam_cached(get_store(), session, a.exam_id)
     if exam is None:
         raise HTTPException(404, "Attempt not found")
+    if a.status == "submitted" and integration_for(exam) is not None:
+        # 2026-10-24 (app.review): after hand-in an external exam's questions and answers
+        # are shown only when the teacher opened the review (the done page needs neither).
+        review = (await session.execute(select(Exam.review_after_handin).where(Exam.id == a.exam_id))).scalar()
+        if not shows_answers(review_level(exam.get("source"), review)):
+            return JSONResponse({**attempt_view(a, exam, utcnow()), "questions": [], "answers": {}})
     return JSONResponse({**attempt_view(a, exam, utcnow()), **await _view_extra(session, a, exam)})   # perf 0.6.2
 
 
@@ -914,23 +939,28 @@ async def my_grades(p: Principal = Depends(require_student),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.course, Exam.total_points, Exam.grades_released,
-               Attempt.submitted_at, Attempt.score, Exam.source, Attempt.external_result)
+               Attempt.submitted_at, Attempt.score, Exam.source, Attempt.external_result,
+               Exam.review_after_handin)
         .join(Attempt, Attempt.exam_id == Exam.id)
         .where(Attempt.student_id == p.user_id, Attempt.status == "submitted",
                Exam.is_trial == false())     # the sample exam never counts
         .order_by(Attempt.submitted_at.desc(), Exam.id))).all()
     out = []
-    for eid, title, course, total, released, sub, score, source, external_result in rows:
+    for eid, title, course, total, released, sub, score, source, external_result, review in rows:
         released = bool(released)
         integ = integration_for({"source": source})
         if integ is not None:
             released, score, total = integ.released(external_result, total)
+        # 2026-10-24 (app.review): "nothing" -> just "Handed in"; "answers" -> no score
+        level = review_level(source, review)
+        released = released and shows_results(level)
         out.append({"exam_id": eid, "title": title, "course": course or "",
                     **_source_fields(source),
                     "submitted_at": iso(sub), "released": released,
                     "score": num(score or 0.0) if released else None,
                     "total_points": num(total),
-                    "percent": percent(score or 0.0, total) if released else None})
+                    "percent": percent(score or 0.0, total) if released else None,
+                    **({"review": level} if integ is not None else {})})
     return out
 
 
@@ -956,8 +986,11 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
     if e is None or e.is_trial:
         raise HTTPException(404, "No submitted attempt for this exam")
     integ = integration_for(e)
+    level = review_level(e.source, e.review_after_handin)
+    if not shows_answers(level):
+        raise HTTPException(403, REVIEW_CLOSED)
     if integ is not None and integ.grades_externally(e):
-        return await _external_grade_detail(session, e, a, integ)
+        return await _external_grade_detail(session, e, a, integ, level)
     if not e.grades_released:
         raise HTTPException(403, "Grades not released yet")
     questions = exam_questions(e)
@@ -1002,12 +1035,13 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
     }
 
 
-async def _external_grade_detail(session: AsyncSession, e: Exam, a: Attempt, integ) -> dict:
+async def _external_grade_detail(session: AsyncSession, e: Exam, a: Attempt, integ, level: str) -> dict:
     """The student's released external result, in the shape of a FairPlay grade page. No
-    answer keys exist: correct_answer is always null."""
+    answer keys exist: correct_answer is always null. 2026-10-24 (app.review): with the review
+    level "answers", or before the results are released, only the student's own answers."""
     released, score, total = integ.released(a.external_result, e.total_points)
-    if not released:
-        raise HTTPException(403, "Grades not released yet")
+    if not (released and shows_results(level)):
+        return _answers_only(e, a, total)
     from .services import student_question
     questions = exam_questions(e)
     _, _, rows = grade_attempt(questions, a.answers, integ.grades_for(questions, a.external_result))
@@ -1044,4 +1078,27 @@ async def _external_grade_detail(session: AsyncSession, e: Exam, a: Attempt, int
         "class_average_percent": round(sum(pcts) / len(pcts), 1) if pcts else None,
         "overall_comment": "", "questions": out_q,
         "result_updated_at": (a.external_result or {}).get("updated_at"),
+        "review": "answers_and_results", "released": True,
+    }
+
+
+def _answers_only(e: Exam, a: Attempt, total) -> dict:
+    """2026-10-24 (app.review): the student's own answers, read-only. No points awarded, no
+    correct answers, no feedback, no class average; "status" only answered / unanswered."""
+    from .services import student_question
+    out_q = []
+    for i, q in enumerate(exam_questions(e)):
+        given = (a.answers or {}).get(q["id"])
+        out_q.append({
+            **student_question(q), "question_id": q["id"], "index": i, "type": q["type"],
+            "prompt": q["prompt"], "options": list(q.get("options") or []), "points": q.get("points", 1),
+            "points_awarded": None, "status": "answered" if is_answered(given) else "unanswered",
+            "given": given, "correct_answer": None, "tolerance": None, "comment": "",
+            "rubric": [], "images": [], "rubric_scores": None,
+        })
+    return {
+        "exam_id": e.id, "title": e.title, "course": e.course or "", **_source_fields(e.source),
+        "submitted_at": iso(a.submitted_at), "receipt": a.receipt, "score": None,
+        "total_points": num(total), "percent": None, "class_average_percent": None,
+        "overall_comment": "", "questions": out_q, "review": "answers", "released": False,
     }

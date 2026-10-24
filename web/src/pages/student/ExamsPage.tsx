@@ -1,17 +1,19 @@
 import { useRef, useState, type KeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
-import { examName, isToday, monthDay, plural, shortDate, shortTime } from "../../components/student/format";
+import { UpcomingExamCard } from "../../components/student/ExamCard";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
-import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+import { pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
+
+/** 2026-10-24: past results beyond this many sit behind "Show all". */
+export const PAST_SHOWN = 20;
 
 type Tab = "upcoming" | "past";
 
 export default function ExamsPage() {
   const { exams, error } = useStudentExams();
   const [tab, setTab] = useState<Tab>("upcoming");
+  const [allPast, setAllPast] = useState(false);
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ upcoming: null, past: null });
 
   const upcoming = exams ? upcomingExams(exams) : [];
@@ -73,7 +75,7 @@ export default function ExamsPage() {
                   <p className="stu-muted">When your teacher opens an exam, it shows up here.</p>
                 </div>
               ) : (
-                upcoming.map((e) => <UpcomingItem key={e.id} exam={e} />)
+                upcoming.map((e) => <UpcomingExamCard key={e.id} exam={e} />)
               )}
             </section>
           ) : (
@@ -82,66 +84,23 @@ export default function ExamsPage() {
               {past.length === 0 ? (
                 <p className="stu-muted">Exams you submit show up here.</p>
               ) : (
-                <div className="stu-rows">
-                  {past.map((e) => (
-                    <PastExamRow key={e.id} exam={e} />
-                  ))}
-                </div>
+                <>
+                  <div className="stu-rows">
+                    {(allPast ? past : past.slice(0, PAST_SHOWN)).map((e) => (
+                      <PastExamRow key={e.id} exam={e} />
+                    ))}
+                  </div>
+                  {past.length > PAST_SHOWN && (
+                    <button type="button" className="stu-btn quiet stu-show-all" aria-expanded={allPast} onClick={() => setAllPast((v) => !v)}>
+                      {allPast ? "Show fewer" : `Show all ${past.length} results`}
+                    </button>
+                  )}
+                </>
               )}
             </section>
           )}
         </main>
       </StudentLayout>
     </>
-  );
-}
-
-function UpcomingItem({ exam }: { exam: StudentExamSummary }) {
-  const navigate = useNavigate();
-  const inProgress = exam.attempt?.status === "in_progress";
-  // 2026-10-23: opened for selected students only, and this student isn't one (yet)
-  const notForMe = !inProgress && exam.open_for_me === false;
-  const md = monthDay(exam.scheduled_at);
-  const when = inProgress
-    ? "In progress"
-    : notForMe
-      ? NOT_OPEN_FOR_YOU
-      : exam.scheduled_at
-      ? `Open now · ${isToday(exam.scheduled_at) ? "today" : shortDate(exam.scheduled_at)} ${shortTime(exam.scheduled_at)}`
-      : "Open now";
-  const meta = [exam.room && `Room ${exam.room}`, `${exam.duration_min} min`, plural(exam.question_count, "question")]
-    .filter(Boolean)
-    .join(" · ");
-  return (
-    <article className="stu-exam-item live">
-      <div className="stu-date-tile live" aria-hidden="true">
-        {md ? (
-          <>
-            <span className="m">{md.m}</span>
-            <span className="d">{md.d}</span>
-          </>
-        ) : (
-          <span className="m">Live</span>
-        )}
-      </div>
-      <div className="stu-exam-item-body">
-        <span className="stu-exam-item-when">{when}</span>
-        <h2>{examName(exam.course, exam.title)}</h2>
-        <span className="stu-exam-item-meta">{meta}</span>
-      </div>
-      {notForMe ? (
-        <span className="stu-muted" data-testid="not-open-for-you">
-          Wait for your teacher
-        </span>
-      ) : inProgress ? (
-        <button type="button" className="stu-btn primary" onClick={() => navigate(`/student/exam/${encodeURIComponent(exam.attempt!.attempt_id)}`)}>
-          Continue
-        </button>
-      ) : (
-        <Link to={`/student/exams/${exam.id}/checkin`} className="stu-btn primary">
-          Check in
-        </Link>
-      )}
-    </article>
   );
 }

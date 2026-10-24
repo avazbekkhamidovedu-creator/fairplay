@@ -467,6 +467,8 @@ export interface StudentExamSummary {
     receipt: string | null;
     released: boolean;
     percent: number | null;
+    /** 2026-10-24: what the student may see after hand-in (external exams) */
+    review?: ReviewLevel;
   };
 }
 
@@ -488,9 +490,10 @@ export interface FeedbackQuestion {
   prompt: string;
   options: string[];
   points: number;
-  points_awarded: number;
-  /** "pending": not graded yet (external source) */
-  status: "correct" | "partial" | "wrong" | "unanswered" | "pending";
+  /** null: answers-only review (no points shown) */
+  points_awarded: number | null;
+  /** "pending": not graded yet (external source); "answered": answers-only review */
+  status: "correct" | "partial" | "wrong" | "unanswered" | "pending" | "answered";
   given: AnswerValue | null;
   correct_answer: AnswerValue | null;
   tolerance: number | null;
@@ -505,9 +508,10 @@ export interface StudentFeedback {
   course: string;
   submitted_at: string | null;
   receipt: string | null;
-  score: number;
+  /** null in an answers-only review */
+  score: number | null;
   total_points: number;
-  percent: number;
+  percent: number | null;
   class_average_percent: number | null;
   overall_comment: string;
   questions: FeedbackQuestion[];
@@ -1081,12 +1085,26 @@ export interface AddMembersResult {
   unknown: string[];
 }
 
+/** 2026-10-24: a class/course the student is in (FairPlay class or DKU OJ class). Optional
+ *  fields may be missing on older servers; the UI copes. */
+export interface StudentClassNextExam {
+  title: string;
+  starts_at: string | null;
+  status: "draft" | "live" | "closed" | string;
+}
+
 export interface StudentClass {
-  id: number;
+  /** FairPlay classes: a number; DKU OJ classes: "dkuoj:<id>". */
+  id: number | string;
   name: string;
+  course?: string | null;
+  source?: "dkuoj" | "fairplay" | string;
   term?: string;
-  teacher: string;
+  teacher?: string | null;
   joined_at?: string;
+  upcoming_exams?: number;
+  next_exam?: StudentClassNextExam | null;
+  can_leave?: boolean;
 }
 
 // ---------- S1 (2026-10-20): device check ----------
@@ -1340,8 +1358,24 @@ export interface LiveRoom {
 export interface StudentExamSummary {
   /** false = the teacher opened it for selected students only (no start, no package). */
   open_for_me?: boolean;
+  /** 2026-10-24: the exam's classes ("dkuoj:31" for DKU OJ, the class number as text for FairPlay). */
+  class_ids?: string[];
 }
 export interface OfflineExam {
   /** 2026-10-23: the offline countdown never runs past this */
   closes_at?: string | null;
+}
+
+// ---------- 2026-10-24: student review after hand-in (set by the exam's source) ----------
+
+/** "nothing": just "Handed in"; "answers": own answers, read-only; "answers_and_results": plus
+ *  points and feedback once released. FairPlay exams are always "answers_and_results". */
+export type ReviewLevel = "nothing" | "answers" | "answers_and_results";
+export interface StudentGradeSummary {
+  review?: ReviewLevel;
+}
+export interface StudentFeedback {
+  /** "answers": only the student's answers (no score, points or feedback) */
+  review?: ReviewLevel;
+  released?: boolean;
 }

@@ -73,15 +73,18 @@ async def attempt_asset(aid: str, name: str, request: Request, p: Principal = De
 @router.get("/api/student/grades/{exam_id}/assets/{name}")
 async def grade_asset(exam_id: str, name: str, request: Request, p: Principal = Depends(require_student),
                       session: AsyncSession = Depends(get_session)):
-    """Pictures of a released grade page (after the exam: no app session needed)."""
+    """Pictures of a student's review / grade page (after the exam: no app session needed).
+    2026-10-24 (app.review): whenever the teacher lets students see their answers (the
+    prompts are shown with them), released or not; never with review "nothing"."""
     from sqlalchemy import select
     from ..models import Exam
+    from ..review import shows_answers
     e = await session.get(Exam, exam_id)
     integ = registry.integration_for(e) if e is not None else None
     a = (await session.execute(select(Attempt).where(
         Attempt.exam_id == exam_id, Attempt.student_id == p.user_id,
         Attempt.status == "submitted"))).scalar_one_or_none() if integ else None
-    if a is None or not integ.released(a.external_result, e.total_points or 0)[0]:
+    if a is None or not shows_answers(integ.review_level(e.review_after_handin)):
         raise HTTPException(404, "Not found")
     found = await integ.asset(session, e.id, name)
     if found is None:

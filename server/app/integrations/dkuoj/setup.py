@@ -15,7 +15,9 @@ token; 5 failed tries an hour for the same typed NetID refuse that NetID (same m
 for the hour; failed tries for 40 DIFFERENT NetIDs in an hour (someone guessing who is in
 the class) disable the class login. A NetID that is already set up is refused with the
 same message but is not counted. Passwords and tokens are never logged or stored in
-plain text.
+plain text. A class login's password is kept as a hash (for sign-in) and, since
+2026-10-24, encrypted with a key derived from the server secret, so the professor can see
+it again in DKU OJ (GET /classes/<id>/status); student passwords are only hashed.
 """
 from __future__ import annotations
 
@@ -66,7 +68,9 @@ SESSION_OVER = "Your set-up has timed out. Sign in with the class login again."
 TAKEN = "That username is taken"
 TOO_MANY = "Too many tries. Wait a minute and try again."
 USERNAME_RULE = "Choose a username of 3 to 32 characters: lower-case letters, digits, dots, dashes or underscores."
-PASSWORD_SHORT = "Choose a password of at least 10 characters."
+PASSWORD_MIN = 10
+PASSWORD_RULE = ("Password needs at least 10 characters, a capital letter, a small letter, "
+                 "a number and a symbol.")
 PASSWORD_SAME = "Your password must not be your username or NetID."
 PASSWORD_MISMATCH = "The two passwords are not the same."
 
@@ -115,6 +119,41 @@ def parse_kind_token(secret: str, kind: str, token: str) -> dict | None:
 def _bearer(request: Request) -> str:
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     return token.strip() if scheme.lower() == "bearer" else ""
+
+
+# ---------------------------------------------------------------- class-login password at rest
+SEAL_LABEL = b"fairplay class-login password v1"
+SEAL_PREFIX = "v1:"
+
+
+def _seal_key(secret: str) -> bytes:
+    """HKDF-SHA256(server secret, info=SEAL_LABEL) -> 32-byte AES key. Its own label, so it
+    is unrelated to every other key made from the secret (tokens, signing)."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=SEAL_LABEL).derive(secret.encode())
+
+
+def seal_login_password(secret: str, username: str, password: str) -> str:
+    """AES-256-GCM, random 96-bit nonce, the login's username as associated data (a sealed
+    value copied onto another row does not open)."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = secrets.token_bytes(12)
+    ct = AESGCM(_seal_key(secret)).encrypt(nonce, password.encode(), username.encode())
+    return SEAL_PREFIX + base64.b64encode(nonce + ct).decode()
+
+
+def open_login_password(secret: str, username: str, sealed: str | None) -> str | None:
+    """The plain password, or None (no copy, other secret, tampered)."""
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if not sealed or not sealed.startswith(SEAL_PREFIX):
+        return None
+    try:
+        raw = base64.b64decode(sealed[len(SEAL_PREFIX):], validate=True)
+        return AESGCM(_seal_key(secret)).decrypt(raw[:12], raw[12:], username.encode()).decode()
+    except (InvalidTag, ValueError, UnicodeDecodeError):
+        return None
 
 
 # ---------------------------------------------------------------- class logins
@@ -170,8 +209,8 @@ async def disable_logins(session: AsyncSession, class_id: int, reason: str, now:
 
 async def create_class_login(session: AsyncSession, settings, class_id: int, class_name: str,
                              course_name: str, actor: str) -> tuple[ClassLogin, str]:
-    """A new login for the class; any previous one stops at once. Returns (row, password):
-    the plain password exists only in this call's answer."""
+    """A new login for the class; any previous one stops at once. Returns (row, password).
+    The password is kept hashed (sign-in) and sealed (the professor sees it again)."""
     now = utcnow()
     await disable_logins(session, class_id, "replaced", now)
     password = new_login_password()
@@ -186,7 +225,8 @@ async def create_class_login(session: AsyncSession, settings, class_id: int, cla
     else:
         raise HTTPException(409, "Could not make a unique class login; try again")
     cl = ClassLogin(class_id=class_id, class_name=class_name[:200], course_name=course_name[:200],
-                    username=username, password_hash=pw_hash, created_at=now,
+                    username=username, password_hash=pw_hash,
+                    password_enc=seal_login_password(settings.secret, username, password), created_at=now,
                     expires_at=now + timedelta(days=CLASS_LOGIN_DAYS), created_by=actor[:150])
     session.add(cl)
     await session.flush()
@@ -227,6 +267,13 @@ def is_set_up(u: User) -> bool:
     if u.set_up_at is not None:
         return True
     return not (u.username or "").startswith("oj:") and (u.password_hash or "").startswith("pbkdf2_")
+
+
+def strong_password(pw: str) -> bool:
+    """v2 §4: at least 10 characters with a small letter, a capital letter, a digit and a
+    symbol (any character that is not a letter, digit or space)."""
+    return (len(pw) >= PASSWORD_MIN and any(c.islower() for c in pw) and any(c.isupper() for c in pw)
+            and any(c.isdigit() for c in pw) and any(not c.isalnum() and not c.isspace() for c in pw))
 
 
 # ---------------------------------------------------------------- the two set-up calls
@@ -379,8 +426,8 @@ async def _make_account(session: AsyncSession, s, tok: dict, body: AccountIn, fi
     username = body.username.strip()
     if not USERNAME_RE.match(username):
         raise HTTPException(400, USERNAME_RULE)
-    if len(body.password) < 10:
-        raise HTTPException(400, PASSWORD_SHORT)
+    if not strong_password(body.password):
+        raise HTTPException(400, PASSWORD_RULE)
     if body.password.lower() in (username.lower(), netid.lower()):
         raise HTTPException(400, PASSWORD_SAME)
     if not hmac.compare_digest(body.password.encode(), body.password2.encode()):

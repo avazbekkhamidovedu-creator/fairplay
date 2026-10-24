@@ -130,6 +130,12 @@ class ExternalSource:
         """(bytes, content_type, sha256) of a statement asset (fp-asset:<name>), or None."""
         return None
 
+    def review_level(self, value: str | None) -> str:
+        """2026-10-24 (app.review): what students see after hand-in. The stored value
+        (Exam.review_after_handin) when valid, else this source's default."""
+        from ..review import ALL, LEVELS
+        return value if value in LEVELS else getattr(self, "default_review", ALL)
+
     # ------------------------------------------------------------ results
     def result_of(self, attempt) -> dict | None:
         r = getattr(attempt, "external_result", None)

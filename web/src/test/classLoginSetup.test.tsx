@@ -115,14 +115,14 @@ describe("class login set-up", () => {
 
     reply("/api/setup/account", { status: 200, body: SESSION });
     await user.type(screen.getByLabelText("Username"), "BobLee");
-    await user.type(screen.getByLabelText("Password"), "correct horse 9");
-    await user.type(screen.getByLabelText("Password again"), "correct horse 9{Enter}");
+    await user.type(screen.getByLabelText("Password"), "Correct-horse-9");
+    await user.type(screen.getByLabelText("Password again"), "Correct-horse-9{Enter}");
 
     await screen.findByRole("heading", { name: "You're set up, Bob." });
     expect(screen.getByText(/Next time sign in as/)).toHaveTextContent("Next time sign in as boblee.");
     const accCall = calls.find((c) => c.url === "/api/setup/account")!;
     expect(accCall.headers.Authorization).toBe("Bearer IDENT-TOK");
-    expect(accCall.body).toEqual({ username: "boblee", password: "correct horse 9", password2: "correct horse 9" });
+    expect(accCall.body).toEqual({ username: "boblee", password: "Correct-horse-9", password2: "Correct-horse-9" });
     expect(localStorage.getItem("proctora:token:student")).toBe("SESSION-TOK");
 
     await user.click(screen.getByRole("button", { name: "Go to my exams" }));
@@ -140,8 +140,8 @@ describe("class login set-up", () => {
     expect(storageValues()).not.toMatch(/SETUP-TOK|IDENT-TOK/);
     reply("/api/setup/account", { status: 200, body: SESSION });
     await user.type(screen.getByLabelText("Username"), "boblee");
-    await user.type(screen.getByLabelText("Password"), "correct horse 9");
-    await user.type(screen.getByLabelText("Password again"), "correct horse 9{Enter}");
+    await user.type(screen.getByLabelText("Password"), "Correct-horse-9");
+    await user.type(screen.getByLabelText("Password again"), "Correct-horse-9{Enter}");
     await screen.findByRole("heading", { name: "You're set up, Bob." });
     const written = setItem.mock.calls.map((c) => String(c[1])).join("\n");
     expect(written).not.toMatch(/SETUP-TOK|IDENT-TOK/);
@@ -202,8 +202,8 @@ describe("class login set-up", () => {
     await screen.findByRole("heading", { name: "Choose your own login" });
     reply("/api/setup/account", { status: 409, body: { detail: "That username is taken" } });
     await user.type(screen.getByLabelText("Username"), "alice");
-    await user.type(screen.getByLabelText("Password"), "correct horse 9");
-    await user.type(screen.getByLabelText("Password again"), "correct horse 9{Enter}");
+    await user.type(screen.getByLabelText("Password"), "Correct-horse-9");
+    await user.type(screen.getByLabelText("Password again"), "Correct-horse-9{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent("That username is taken");
     expect(localStorage.getItem("proctora:token:student")).toBeNull();
   });
@@ -216,16 +216,94 @@ describe("class login set-up", () => {
     await identify(user);
     await screen.findByRole("heading", { name: "Choose your own login" });
 
-    await user.type(screen.getByLabelText("Username"), "bob lee");
+    // a weak password keeps the button off, so nothing is sent
+    await user.type(screen.getByLabelText("Username"), "boblee");
     await user.type(screen.getByLabelText("Password"), "short");
     await user.type(screen.getByLabelText("Password again"), "short{Enter}");
-    expect(await screen.findByRole("alert")).toHaveTextContent(/3 to 32 characters/);
+    expect(screen.getByRole("button", { name: "Finish set-up" })).toBeDisabled();
     expect(calls.some((c) => c.url === "/api/setup/account")).toBe(false);
 
+    // a strong password but a bad username: the username error on submit
     await user.clear(screen.getByLabelText("Username"));
-    await user.type(screen.getByLabelText("Username"), "boblee{Enter}");
-    expect(screen.getByRole("alert")).toHaveTextContent("at least 10 characters");
+    await user.type(screen.getByLabelText("Username"), "bob lee");
+    await user.clear(screen.getByLabelText("Password"));
+    await user.clear(screen.getByLabelText("Password again"));
+    await user.type(screen.getByLabelText("Password"), "Correct-horse-9");
+    await user.type(screen.getByLabelText("Password again"), "Correct-horse-9");
+    expect(screen.getByRole("button", { name: "Finish set-up" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Finish set-up" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/3 to 32 characters/);
     expect(calls.some((c) => c.url === "/api/setup/account")).toBe(false);
+  });
+
+  it("live checklist, strength, match line and show/hide", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    await signInWithClassLogin(user);
+    reply("/api/setup/identify", { status: 200, body: IDENT });
+    await identify(user);
+    await screen.findByRole("heading", { name: "Choose your own login" });
+    const rule = (id: string) => document.querySelector(`[data-rule="${id}"]`)!;
+    const save = () => screen.getByRole("button", { name: "Finish set-up" });
+
+    expect(screen.getByRole("list", { name: "Password rules" })).toBeInTheDocument();
+    expect(rule("length")).toHaveAttribute("data-ok", "false");
+    expect(rule("length")).toHaveTextContent("✗");
+    expect(screen.getByTestId("pw-summary")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByTestId("pw-match")).toHaveTextContent("");
+    expect(save()).toBeDisabled();
+
+    await user.type(screen.getByLabelText("Username"), "boblee");
+    await user.type(screen.getByLabelText("Password"), "abcdefghij");
+    expect(rule("length")).toHaveAttribute("data-ok", "true");
+    expect(rule("length")).toHaveTextContent("✓");
+    expect(rule("lower")).toHaveAttribute("data-ok", "true");
+    expect(rule("upper")).toHaveAttribute("data-ok", "false");
+    expect(rule("digit")).toHaveAttribute("data-ok", "false");
+    expect(rule("symbol")).toHaveAttribute("data-ok", "false");
+    expect(screen.getByTestId("pw-summary")).toHaveTextContent("3 of 6 password rules met.");
+    expect(screen.getByTestId("pw-strength")).toHaveAttribute("data-level", "1");
+    expect(screen.getByTestId("pw-strength")).toHaveTextContent("Weak");
+
+    await user.clear(screen.getByLabelText("Password"));
+    await user.type(screen.getByLabelText("Password"), "Tulip-Ocean-73!x");
+    expect(screen.getByTestId("pw-summary")).toHaveTextContent("All password rules met.");
+    expect(screen.getByTestId("pw-strength")).toHaveTextContent("Strong");
+    expect(save()).toBeDisabled(); // not typed again yet
+
+    await user.type(screen.getByLabelText("Password again"), "Tulip");
+    expect(screen.getByTestId("pw-match")).toHaveTextContent("Passwords don't match yet");
+    expect(save()).toBeDisabled();
+    await user.type(screen.getByLabelText("Password again"), "-Ocean-73!x");
+    expect(screen.getByTestId("pw-match")).toHaveTextContent("Passwords match ✓");
+    expect(save()).toBeEnabled();
+
+    // the password equal to the NetID fails the "personal" rule
+    await user.clear(screen.getByLabelText("Password"));
+    await user.type(screen.getByLabelText("Password"), "BL642");
+    expect(rule("personal")).toHaveAttribute("data-ok", "false");
+
+    const toggle = screen.getByRole("button", { name: "Show password" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Password again")).toHaveAttribute("type", "text");
+  });
+
+  it("shows the server's password error as is", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    await signInWithClassLogin(user);
+    reply("/api/setup/identify", { status: 200, body: IDENT });
+    await identify(user);
+    await screen.findByRole("heading", { name: "Choose your own login" });
+    reply("/api/setup/account", { status: 400, body: { detail: "Password needs a symbol." } });
+    await user.type(screen.getByLabelText("Username"), "boblee");
+    await user.type(screen.getByLabelText("Password"), "Correct-horse-9");
+    await user.type(screen.getByLabelText("Password again"), "Correct-horse-9{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Password needs a symbol.");
   });
 
   it("checkNewLogin matches the contract", () => {
@@ -233,10 +311,11 @@ describe("class login set-up", () => {
     expect(checkNewLogin("a".repeat(33), "x".repeat(10), "x".repeat(10), "bl642")).toMatch(/3 to 32/);
     expect(checkNewLogin("bob!", "x".repeat(10), "x".repeat(10), "bl642")).toMatch(/3 to 32/);
     expect(checkNewLogin("bob.lee_1-x", "123456789", "123456789", "bl642")).toMatch(/at least 10/);
-    expect(checkNewLogin("boblee1234", "boblee1234", "boblee1234", "bl642")).toMatch(/username or NetID/);
-    expect(checkNewLogin("boblee", "BL642BL642", "BL642BL642", "BL642BL642")).toMatch(/username or NetID/);
-    expect(checkNewLogin("boblee", "correct horse 9", "correct horse 8", "bl642")).toMatch(/don't match/);
-    expect(checkNewLogin("bob.lee_1-x", "correct horse 9", "correct horse 9", "bl642")).toBeNull();
+    expect(checkNewLogin("bob.lee_1-x", "correct horse 9", "correct horse 9", "bl642")).toMatch(/upper-case letter and a symbol/);
+    expect(checkNewLogin("boblee1234_a", "Boblee1234_A", "Boblee1234_A", "bl642")).toMatch(/username or NetID/);
+    expect(checkNewLogin("boblee", "BL642bl64!", "BL642bl64!", "Bl642bl64!")).toMatch(/username or NetID/);
+    expect(checkNewLogin("boblee", "Correct-horse-9", "Correct-horse-8", "bl642")).toMatch(/don't match/);
+    expect(checkNewLogin("bob.lee_1-x", "Correct-horse-9", "Correct-horse-9", "bl642")).toBeNull();
   });
 
   it("disables Continue while sending", async () => {

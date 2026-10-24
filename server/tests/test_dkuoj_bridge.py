@@ -106,6 +106,7 @@ class FakeOJ:
         self.results: list[dict] = []
         self.asset_bytes = {"cell.png": PNG}
         self.removed = False
+        self.review, self.review_updated_at = "answers_and_results", None   # 2026-10-24
         self.roster = [
             {"username": "alice", "first_name": "Alice", "last_name": "Chen", "email": "a@x.edu", "extra_time_seconds": 600},
             {"username": "carol", "first_name": "Carol", "last_name": "Wang", "email": "c@x.edu", "extra_time_seconds": 0},
@@ -122,7 +123,8 @@ class FakeOJ:
                 "results_hidden": True, "package_version": self.package["package_version"],
                 "removed": self.removed,
                 "settings": {"calculator": "scientific", "open_book": False, "websites": ["docs.python.org", "*.com"],
-                             "strong_lock": True, "resume_needs_approval": True},
+                             "strong_lock": True, "resume_needs_approval": True, "review": self.review,
+                             "review_updated_at": self.review_updated_at},
                 "editors": self.editors, "roster": self.roster, "updated_at": self.listing_updated}
 
     def handle(self, req: httpx.Request) -> httpx.Response:
@@ -488,7 +490,10 @@ def test_full_flow(oj, fake):
     grades = oj.get("/api/student/grades", headers=alice).json()
     mine = next(g for g in grades if g["exam_id"] == e["id"])
     assert mine["released"] is False and mine["score"] is None
-    assert oj.get(f"/api/student/grades/{e['id']}", headers=alice).status_code == 403
+    # 2026-10-24 (review "answers_and_results"): before the release, her own answers only
+    d = oj.get(f"/api/student/grades/{e['id']}", headers=alice).json()
+    assert d["review"] == "answers" and d["released"] is False and d["score"] is None
+    assert all(q["points_awarded"] is None and q["comment"] == "" for q in d["questions"])
     fake.results = [{"username": "alice", "released": True, "total": 82, "total_points": 100,
                      "updated_at": iso(utcnow()),
                      "questions": [{"question_id": "p000123", "points": 10, "feedback_md": ""},
@@ -512,14 +517,22 @@ def test_full_flow(oj, fake):
     r = oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers={"Authorization": alice["Authorization"]})
     assert r.status_code == 200 and r.content == PNG
     assert oj.get(f"/api/student/grades/{e['id']}/assets/nope.png", headers=alice).status_code == 404
-    # carol has no released result
-    assert oj.get(f"/api/student/grades/{e['id']}", headers=carol).status_code == 403
-    assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=carol).status_code == 404
+    # carol has no released result: her answers only (and the pictures with them); bob nothing
+    dc = oj.get(f"/api/student/grades/{e['id']}", headers=carol).json()
+    assert dc["released"] is False and dc["score"] is None and dc["class_average_percent"] is None
+    assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=carol).status_code == 200
+    assert oj.get(f"/api/student/grades/{e['id']}", headers=bob).status_code == 404
     assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=bob).status_code == 404
     # a withdrawn release hides it again
     fake.results = [{**fake.results[0], "released": False, "updated_at": iso(utcnow() + timedelta(seconds=5))}]
     run(oj, now=fake.end + timedelta(minutes=3))
-    assert oj.get(f"/api/student/grades/{e['id']}", headers=alice).status_code == 403
+    d = oj.get(f"/api/student/grades/{e['id']}", headers=alice).json()
+    assert d["released"] is False and d["score"] is None and d["review"] == "answers"
+    # 2026-10-24: the professor closes the review in DKU OJ -> nothing at all
+    fake.review, fake.listing_updated = "nothing", iso(utcnow() + timedelta(seconds=10))
+    run(oj, now=fake.end + timedelta(minutes=4))
+    r = oj.get(f"/api/student/grades/{e['id']}", headers=alice)
+    assert r.status_code == 403 and r.json()["detail"] == "Your teacher has not opened the review for this exam."
     assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=alice).status_code == 404
 
 
@@ -712,7 +725,8 @@ def real_listing(now, removed=False):
             "time_limit_seconds": 5400, "results_hidden": True, "package_version": "0f1e2d3c4b5a6978",
             "removed": False,
             "settings": {"calculator": "off", "open_book": False, "websites": ["docs.python.org"],
-                         "strong_lock": False, "resume_needs_approval": True},
+                         "strong_lock": False, "resume_needs_approval": True,
+                         "review": "answers_and_results", "review_updated_at": iso(now)},
             "editors": [{"username": "teacher", "first_name": "Shuai", "last_name": "Dong",
                          "email": "fp_teacher@example.edu"}],
             "roster": [{"username": "alice", "first_name": "Avazbek", "last_name": "Khamidov",
@@ -865,7 +879,8 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
                                   "updated_at": iso(real.now + timedelta(hours=4))}]
             run(c, now=real.now + timedelta(hours=4))
             assert real.results_since[-1] == iso(real.now + timedelta(hours=3))
-            assert c.get(f"/api/student/grades/{e['id']}", headers=alice).status_code == 403
+            d = c.get(f"/api/student/grades/{e['id']}", headers=alice).json()
+            assert d["released"] is False and d["score"] is None
 
             # removed: only in the incremental poll; editors keep the exam
             real.removed = True

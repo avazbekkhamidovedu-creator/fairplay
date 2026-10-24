@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, setToken, setupApi } from "../api/client";
 import type { ClassLoginSetupResponse } from "../api/types";
+import { NewPasswordFields } from "../components/NewPasswordFields";
+import { checkPassword } from "../lib/passwordPolicy";
 
 /** Bridge v2 §4: what the sign-in page shows when the set-up must start over. */
 export const SETUP_EXPIRED = "Your class login session expired. Sign in again.";
@@ -15,9 +17,9 @@ export function checkNewLogin(username: string, password: string, password2: str
   if (!USERNAME_RE.test(username)) {
     return "Choose a username of 3 to 32 characters: letters a-z, digits, dots, dashes or underscores.";
   }
-  if (password.length < 10) return "Use a password of at least 10 characters.";
-  const low = password.toLowerCase();
-  if (low === username || low === netid.toLowerCase()) return "Your password can't be your username or NetID.";
+  // 2026-10-24: the strong-password rules (lib/passwordPolicy, same as the server's)
+  const pw = checkPassword(password, { username, netid });
+  if (!pw.ok) return pw.message;
   if (password !== password2) return "The two passwords don't match.";
   return null;
 }
@@ -117,6 +119,11 @@ export default function ClassLoginSetup({
     }
   }
 
+  const passwordReady =
+    checkPassword(password, { username: username.trim().toLowerCase(), netid: identity?.netid ?? "" }).ok &&
+    password === password2;
+  const usernameTyped = username.trim().toLowerCase();
+  const usernameBad = usernameTyped.length > 0 && !USERNAME_RE.test(usernameTyped);
   const classLine = [setup.class.name, setup.class.course].filter(Boolean).join(" · ");
   const alert = error && (
     <div className="alert alert-error" role="alert">
@@ -194,23 +201,22 @@ export default function ClassLoginSetup({
           <div className="t-field">
             <label htmlFor="setup-username">Username</label>
             <input id="setup-username" className="input" autoComplete="username" autoCapitalize="none"
-              spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} />
+              spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)}
+              aria-describedby="setup-username-hint" aria-invalid={usernameBad || undefined} />
+            <p id="setup-username-hint" className={`pw-summary${usernameBad ? " pw-bad" : ""}`}>
+              3 to 32 of a-z, 0-9, dot, dash, underscore.
+            </p>
           </div>
-          <div className="t-field">
-            <label htmlFor="setup-password">Password</label>
-            <input id="setup-password" className="input" type="password" autoComplete="new-password"
-              value={password} onChange={(e) => setPassword(e.target.value)} />
-          </div>
-          <div className="t-field">
-            <label htmlFor="setup-password2">Password again</label>
-            <input id="setup-password2" className="input" type="password" autoComplete="new-password"
-              value={password2} onChange={(e) => setPassword2(e.target.value)} />
-          </div>
-          <p className="t-muted" style={{ margin: 0, fontSize: 13 }}>
-            Username: 3 to 32 of a-z, 0-9, dot, dash, underscore. Password: at least 10 characters.
-          </p>
+          <NewPasswordFields
+            idPrefix="setup"
+            password={password}
+            password2={password2}
+            onPassword={setPassword}
+            onPassword2={setPassword2}
+            context={{ username: username.trim().toLowerCase(), netid: identity?.netid ?? "" }}
+          />
           {alert}
-          <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>
+          <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy || !passwordReady}>
             {busy ? "Setting up…" : "Finish set-up"}
           </button>
         </form>

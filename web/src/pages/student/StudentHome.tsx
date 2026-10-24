@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime, isToday, shortDate } from "../../components/student/format";
+import { CourseExams, CourseGrid, classKey, useStudentClasses } from "../../components/student/Courses";
+import { UpcomingExamCard } from "../../components/student/ExamCard";
 import { JoinClass } from "../../components/student/JoinClass";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
@@ -11,6 +13,9 @@ import { TrialCard } from "../../components/student/TrialCard";
 import { useMe } from "../../lib/useMe";
 import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, useStudentExams } from "./useStudentExams";
 
+/** 2026-10-24: open exams listed on the home page; the rest are on the Exams page. */
+export const HOME_OPEN_SHOWN = 6;
+
 export default function StudentHome() {
   const me = useMe("student");
   const { exams, error, reload } = useStudentExams();
@@ -18,6 +23,17 @@ export default function StudentHome() {
   // 2026-10-22: back from the sample exam (DonePage sends this once the computer unlocked).
   const trialDone = (useLocation().state as { trialDone?: string } | null)?.trialDone;
   const [trialNote, setTrialNote] = useState(!!trialDone);
+  // 2026-10-24: course cards; a picked course shows its own exam list under the cards
+  const courses = useStudentClasses();
+  const [courseKey, setCourseKey] = useState<string | null>(null);
+  const courseRef = useRef<HTMLElement>(null);
+  const selectedCourse = courses.classes?.find((k) => classKey(k) === courseKey) ?? null;
+  useEffect(() => {
+    if (!courseKey) return;
+    const el = courseRef.current;
+    el?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    el?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
+  }, [courseKey]);
 
   const upcoming = exams ? upcomingExams(exams) : [];
   const past = exams ? pastExams(exams) : [];
@@ -74,7 +90,7 @@ export default function StudentHome() {
                   <h2 id="none-h">No open exams</h2>
                   <p className="stu-muted">When your teacher opens an exam, it shows up here. This page checks every few seconds.</p>
                 </section>
-              ) : (
+              ) : upcoming.length <= 2 ? (
                 <div className="stu-hero-col">
                   {upcoming.map((exam) => (
                     <ExamHero
@@ -87,12 +103,70 @@ export default function StudentHome() {
                     />
                   ))}
                 </div>
+              ) : (
+                // 2026-10-24: many open exams -> compact cards instead of big heroes
+                <section className="stu-hero-col" aria-labelledby="open-h">
+                  <h2 id="open-h" className="stu-section-title">
+                    Open now · {upcoming.length}
+                  </h2>
+                  <div className="stu-exam-list">
+                    {upcoming.slice(0, HOME_OPEN_SHOWN).map((exam) => (
+                      <UpcomingExamCard key={exam.id} exam={exam} headingLevel={3} />
+                    ))}
+                  </div>
+                  {upcoming.length > HOME_OPEN_SHOWN && (
+                    <Link to="/student/exams" className="stu-link">
+                      See all {upcoming.length} open exams →
+                    </Link>
+                  )}
+                </section>
               )}
-
             </div>
           )}
 
-          <JoinClass onJoined={reload} />
+          <section className="stu-courses" aria-labelledby="courses-h" data-testid="courses">
+            <div className="stu-row">
+              <h2 id="courses-h" className="stu-section-title">
+                Your courses
+              </h2>
+              {courses.classes && courses.classes.length > 0 && (
+                <span className="stu-pill">{courses.classes.length}</span>
+              )}
+            </div>
+            {courses.error && (
+              <div className="stu-alert warn" role="alert">
+                {courses.error}
+              </div>
+            )}
+            {courses.classes === null ? (
+              <StuLoading label="Loading your courses…" />
+            ) : courses.classes.length === 0 ? (
+              <div className="stu-empty stu-courses-empty" data-testid="courses-empty">
+                <h3 style={{ margin: 0, fontSize: 17 }}>No courses yet</h3>
+                <p className="stu-muted" style={{ margin: 0 }}>
+                  Your DKU OJ courses show up here once your professor adds you. Exams only show up for your courses.
+                </p>
+              </div>
+            ) : (
+              <CourseGrid
+                classes={courses.classes}
+                exams={exams}
+                selectedKey={courseKey}
+                onSelect={(k) => setCourseKey(k ? classKey(k) : null)}
+              />
+            )}
+            {selectedCourse && (
+              <CourseExams ref={courseRef} k={selectedCourse} exams={exams ?? []} onClose={() => setCourseKey(null)} />
+            )}
+          </section>
+
+          <JoinClass
+            hasClasses={!!courses.classes && courses.classes.length > 0}
+            onJoined={() => {
+              void courses.reload();
+              void reload();
+            }}
+          />
 
           {past.length > 0 && (
             <section className="stu-card" aria-labelledby="recent-h" style={{ gap: 6 }}>

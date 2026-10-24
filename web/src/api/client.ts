@@ -654,7 +654,7 @@ export const classesApi = {
 export const studentClassesApi = {
   list: () => request<StudentClass[]>("student", "GET", "/api/student/classes"),
   join: (code: string) => request<StudentClass>("student", "POST", "/api/student/classes/join", { code }),
-  leave: (id: number) => request<void>("student", "DELETE", `/api/student/classes/${id}`),
+  leave: (id: number | string) => request<void>("student", "DELETE", `/api/student/classes/${encodeURIComponent(String(id))}`),
 };
 
 // ---------- 2026-10-23 (exam tools): open-book materials ----------

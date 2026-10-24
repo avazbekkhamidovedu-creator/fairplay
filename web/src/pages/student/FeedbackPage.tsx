@@ -5,11 +5,13 @@ import type { StudentFeedback } from "../../api/types";
 import { FeedbackQuestionCard, ExternalFeedbackQuestionCard } from "../../components/student/FeedbackQuestion";
 import { fmtNum, fmtPercent, shortDate } from "../../components/student/format";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
+import { REVIEW_CLOSED } from "../../lib/review";
 
 type Load =
   | { kind: "loading" }
   | { kind: "ok"; data: StudentFeedback }
   | { kind: "notReleased" }
+  | { kind: "reviewClosed" }
   | { kind: "error"; message: string };
 
 export default function FeedbackPage() {
@@ -23,7 +25,8 @@ export default function FeedbackPage() {
       (data) => alive && setState({ kind: "ok", data }),
       (e) => {
         if (!alive) return;
-        if (e instanceof ApiError && e.status === 403) setState({ kind: "notReleased" });
+        if (e instanceof ApiError && e.status === 403 && e.detail === REVIEW_CLOSED) setState({ kind: "reviewClosed" });
+        else if (e instanceof ApiError && e.status === 403) setState({ kind: "notReleased" });
         else if (e instanceof ApiError && e.status === 404)
           setState({ kind: "error", message: "No submitted exam was found here." });
         else if (e instanceof NetworkError)
@@ -51,6 +54,12 @@ export default function FeedbackPage() {
             </p>
           </section>
         )}
+        {state.kind === "reviewClosed" && (
+          <section className="stu-card" aria-live="polite" data-testid="review-closed">
+            <h1 style={{ margin: 0, fontSize: 24 }}>Handed in</h1>
+            <p className="stu-muted">{REVIEW_CLOSED} You will see more here if they open it.</p>
+          </section>
+        )}
         {state.kind === "error" && (
           <div className="stu-alert error" role="alert">
             {state.message}
@@ -67,6 +76,8 @@ function Feedback({ data }: { data: StudentFeedback }) {
   const questions = [...data.questions].sort((a, b) => a.index - b.index);
   // graded in another system: its points and its feedback
   const external = !!data.source && data.source !== "fairplay";
+  // 2026-10-24: only the student's own answers (no score, points or feedback)
+  const answersOnly = data.review === "answers";
   return (
     <>
       <section className="stu-fb-head" aria-labelledby="fb-h">
@@ -84,20 +95,27 @@ function Feedback({ data }: { data: StudentFeedback }) {
             </span>
           )}
         </div>
-        <div className="stu-fb-score">
-          <b>
-            {fmtNum(data.score)}
-            <small> / {fmtNum(data.total_points)}</small>
-          </b>
-          <span>
-            {fmtPercent(data.percent)}
-            {data.class_average_percent !== null && data.class_average_percent !== undefined
-              ? ` · Class average ${fmtPercent(data.class_average_percent)}`
-              : ""}
-          </span>
-        </div>
+        {!answersOnly && (
+          <div className="stu-fb-score">
+            <b>
+              {fmtNum(data.score)}
+              <small> / {fmtNum(data.total_points)}</small>
+            </b>
+            <span>
+              {fmtPercent(data.percent)}
+              {data.class_average_percent !== null && data.class_average_percent !== undefined
+                ? ` · Class average ${fmtPercent(data.class_average_percent)}`
+                : ""}
+            </span>
+          </div>
+        )}
       </section>
-      {external && (
+      {answersOnly && (
+        <p className="stu-small stu-muted" style={{ margin: 0 }} data-testid="answers-only-note">
+          Your answers as you handed them in. Scores and feedback are not shown.
+        </p>
+      )}
+      {external && !answersOnly && (
         <p className="stu-small stu-muted" style={{ margin: 0 }} data-testid="external-graded-note">
           Graded in {data.external_name || "another system"}.
         </p>

@@ -231,7 +231,26 @@ def _duration_min(item: dict) -> int:
 META_KEYS = ("course", "classes", "start_time", "end_time", "time_limit_seconds", "results_hidden",
              "package_version", "updated_at", "settings")
 KEEP_META = ("results_cursor", "package_retry_at", "package_error", "package_failed_version",
-             "description_md", "assets", "extra_close_minutes")
+             "description_md", "assets", "extra_close_minutes", "review_updated_at")
+
+
+def apply_review(e: Exam, value, updated_at) -> bool:
+    """2026-10-24: DKU OJ's "Student review after hand-in" (app.review), from the exam list's
+    settings or the direct POST /exams/<key>/review. Both come from DKU OJ, so its newest value
+    wins: one older than what FairPlay has (a listing fetched just before the professor
+    changed it) is ignored. Applies also to running and closed exams. True when applied."""
+    from ...review import LEVELS
+    if value not in LEVELS:
+        return False
+    meta = dict(e.external_meta or {})
+    have, new = _time(meta.get("review_updated_at")), _time(updated_at)
+    if have is not None and (new is None or new < have):
+        return False
+    e.review_after_handin = value
+    if new is not None:
+        meta["review_updated_at"] = iso(new)
+    e.external_meta = meta
+    return True
 
 
 # ---------------------------------------------------------------- listing -> exam
@@ -289,6 +308,8 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         e.duration_min = _duration_min(item) + extra_close_minutes(e)
         for f, v in _settings(item).items():
             setattr(e, f, v)
+    oj_settings = item.get("settings") or {}
+    apply_review(e, oj_settings.get("review"), oj_settings.get("review_updated_at"))
     e.updated_at = now
     await session.flush()
     if editors and e.teacher_id not in {u.id for u in editors}:

@@ -111,13 +111,13 @@ def identify(c, tok, first="Bob", last="Li", netid="bl642"):
                   headers=bearer(tok))
 
 
-def account(c, ident, username="bobli", password="correct-horse-9", password2=None):
+def account(c, ident, username="bobli", password="Correct-horse-9", password2=None):
     return c.post("/api/setup/account", json={"username": username, "password": password,
                                               "password2": password2 if password2 is not None else password},
                   headers=bearer(ident))
 
 
-def set_up(c, cl, netid="bl642", first="Bob", last="Li", username="bobli", password="correct-horse-9"):
+def set_up(c, cl, netid="bl642", first="Bob", last="Li", username="bobli", password="Correct-horse-9"):
     r = identify(c, setup_token(c, cl), first, last, netid)
     assert r.status_code == 200, r.text
     r = account(c, r.json()["identity_token"], username, password)
@@ -318,7 +318,7 @@ def test_setup_flow(oj, fake):
 def test_setup_account_rules_and_success(oj, fake):
     cl = make_login(oj)
     ident = identify(oj, setup_token(oj, cl)).json()["identity_token"]
-    assert account(oj, ident, password="correct-horse-9", password2="correct-horse-8").status_code == 400
+    assert account(oj, ident, password="Correct-horse-9", password2="Correct-horse-8").status_code == 400
     assert account(oj, ident, password="BL642").status_code == 400             # = NetID
     r = account(oj, ident, username="alice")
     assert r.status_code == 409 and r.json()["detail"] == "That username is taken"
@@ -330,7 +330,7 @@ def test_setup_account_rules_and_success(oj, fake):
     assert oj.get("/api/me", headers=bearer(me["token"])).json()["username"] == "bobli"
     assert account(oj, ident, username="bobli2").status_code == 401           # single use
     # signs in with the own username from now on
-    login(oj, "bobli", "correct-horse-9")
+    login(oj, "bobli", "Correct-horse-9")
     u = user_row(oj, netid="bl642")
     assert u.username == "bobli" and u.set_up_at is not None and u.role == "student"
     st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
@@ -494,7 +494,7 @@ def test_reset_then_set_up_again_keeps_attempts(oj, fake):
     r = call(oj, "POST", f"{V1}/students/bl642/reset", {"class_id": CLASS_ID})
     assert r.json() == {"ok": True}
     assert oj.get("/api/me", headers=h).status_code == 401
-    assert oj.post("/api/auth/login", json={"username": "bobli", "password": "correct-horse-9"}).status_code == 401
+    assert oj.post("/api/auth/login", json={"username": "bobli", "password": "Correct-horse-9"}).status_code == 401
     u = user_row(oj, netid="bl642")
     assert u.username == "oj:bl642" and u.set_up_at is None
     st = call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status").json()
@@ -505,7 +505,7 @@ def test_reset_then_set_up_again_keeps_attempts(oj, fake):
     assert call(oj, "POST", f"{V1}/students/bl642/reset", {}).status_code == 400
     assert call(oj, "POST", f"{V1}/students/teacher/reset", {"class_id": CLASS_ID}).status_code == 400
     # set up again (even with the same username): the same account, the attempt is still there
-    me2 = set_up(oj, cl, username="bobli", password="another-pass-77")
+    me2 = set_up(oj, cl, username="bobli", password="Another-pass-77")
     assert user_row(oj, netid="bl642").id == u.id
     view = call(oj, "GET", f"{V1}/exams/{KEY}").json()
     bob = next(x for x in view["students"] if x["netid"] == "bl642")
@@ -538,7 +538,8 @@ def test_exam_endpoints(oj, fake):
     assert v["synced"] and v["package_ready"] and v["questions"] == 7 and v["points"] == 100
     assert v["status"] == "draft" and v["start_code"] is None and v["open_to"] == "all"
     assert v["settings"] == {"calculator": "scientific", "open_book": False, "websites": ["docs.python.org"],
-                             "strong_lock": True, "resume_needs_approval": True}
+                             "strong_lock": True, "resume_needs_approval": True,
+                             "review": "answers_and_results"}
     assert v["counts"] == {"roster": 4, "set_up": 2, "not_started": 4, "writing": 0, "offline": 0,
                            "waiting": 0, "handed_in": 0}
     assert {s["netid"] for s in v["students"]} == {"alice", "carol", "ax19", "bl642"}

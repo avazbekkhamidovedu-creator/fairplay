@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ApiError, studentApi } from "../../api/client";
 import type { StudentGradeSummary } from "../../api/types";
 import { fmtNum, fmtPercent, shortDate } from "../../components/student/format";
+import { canOpenReview, waitingLabel } from "../../lib/review";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 
 const NO_COURSE = "Other exams";
@@ -27,7 +28,9 @@ export function groupByCourse(grades: StudentGradeSummary[]): CourseGroup[] {
   return [...map.entries()].map(([course, items]) => {
     const released = items.filter((g) => g.released && g.percent !== null);
     const average = released.length ? released.reduce((s, g) => s + (g.percent ?? 0), 0) / released.length : null;
-    return { course, items, average, graded: released.length, waiting: items.length - released.length };
+    // 2026-10-24: exams whose results the teacher keeps closed are handed in, not "being graded"
+    const closed = items.filter((g) => !g.released && (g.review === "nothing" || g.review === "answers")).length;
+    return { course, items, average, graded: released.length, waiting: items.length - released.length - closed };
   });
 }
 
@@ -113,6 +116,7 @@ export default function GradesPage() {
 }
 
 function GradeRow({ g }: { g: StudentGradeSummary }) {
+  const open = canOpenReview(g.source, g.review, g.released);
   const inner = (
     <>
       <span className="stu-result-title">
@@ -127,11 +131,14 @@ function GradeRow({ g }: { g: StudentGradeSummary }) {
           <span className="stu-link">Feedback</span>
         </>
       ) : (
-        <span className="stu-pill">Being graded</span>
+        <>
+          <span className="stu-pill">{waitingLabel(g.review)}</span>
+          {open && <span className="stu-link">Your answers</span>}
+        </>
       )}
     </>
   );
-  return g.released ? (
+  return open ? (
     <Link to={`/student/grades/${g.exam_id}`} className="stu-result-row">
       {inner}
     </Link>

@@ -27,10 +27,19 @@ const STATUS: Record<FQ["status"], { cls: string; word: string }> = {
   wrong: { cls: "danger", word: "wrong" },
   unanswered: { cls: "", word: "not answered" },
   pending: { cls: "", word: "being graded" },   // not graded yet
+  answered: { cls: "", word: "answered" },        // 2026-10-24: answers-only review
 };
 
 export function StatusPill({ q }: { q: Pick<FQ, "status" | "points" | "points_awarded"> }) {
   const s = STATUS[q.status] ?? STATUS.wrong;
+  if (q.points_awarded === null || q.points_awarded === undefined) {
+    // 2026-10-24: answers-only review: the question's points, never a score
+    return (
+      <span className="stu-pill" data-status={q.status}>
+        {`${fmtNum(q.points)} ${q.points === 1 ? "point" : "points"} · ${s.word}`}
+      </span>
+    );
+  }
   const score = `${fmtNum(q.points_awarded)} / ${fmtNum(q.points)}`;
   return (
     <span className={`stu-pill ${s.cls}`} data-status={q.status}>
@@ -164,8 +173,9 @@ export function describeRichAnswer(q: Pick<FQ, "type" | "options" | "multiple">,
 
 function richStatus(q: FQ): FQ["status"] {
   if (q.status) return q.status;
-  if (q.points_awarded >= q.points && q.points > 0) return "correct";
-  return q.points_awarded > 0 ? "partial" : "wrong";
+  const got = q.points_awarded ?? 0;
+  if (got >= q.points && q.points > 0) return "correct";
+  return got > 0 ? "partial" : "wrong";
 }
 
 /** One question of an exam graded elsewhere: points and that system's feedback. */

@@ -21,6 +21,7 @@ REMOVED = "FairPlay was switched off for this exam in DKU OJ."
 class DkuojSource(ExternalSource):
     id = "dkuoj"
     name = "DKU OJ"
+    default_review = "nothing"     # 2026-10-24: until DKU OJ says otherwise (its default too)
 
     def __init__(self):
         self.config = DkuojConfig()

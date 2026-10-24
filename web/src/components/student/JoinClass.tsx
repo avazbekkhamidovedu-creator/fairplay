@@ -1,27 +1,14 @@
 // Audit 2026-10-12 S-03: a student joins a class with the code the teacher gives out.
 // Exams of that class then appear on the home page.
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+// 2026-10-24: only the "Join another class" box; the course cards (Courses.tsx) list the classes.
+import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, NetworkError, studentClassesApi } from "../../api/client";
-import type { StudentClass } from "../../api/types";
 import { takeJoinCode } from "../../pages/student/JoinLinkPage";
 
-export function JoinClass({ onJoined }: { onJoined?: () => void }) {
-  const [classes, setClasses] = useState<StudentClass[] | null>(null);
+export function JoinClass({ onJoined, hasClasses = true }: { onJoined?: () => void; hasClasses?: boolean }) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setClasses(await studentClassesApi.list());
-    } catch {
-      setClasses((c) => c ?? []);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   // 2026-10-13: arrived through a class link -> join straight away.
   useEffect(() => {
@@ -41,9 +28,9 @@ export function JoinClass({ onJoined }: { onJoined?: () => void }) {
     setMessage(null);
     try {
       const k = await studentClassesApi.join(value);
-      setMessage({ ok: true, text: `You joined ${k.name} (${k.teacher}). Its exams will show up here.` });
+      const who = k.teacher ? ` (${k.teacher})` : "";
+      setMessage({ ok: true, text: `You joined ${k.name}${who}. Its exams will show up here.` });
       setCode("");
-      await load();
       onJoined?.();
     } catch (err) {
       setMessage({
@@ -56,22 +43,12 @@ export function JoinClass({ onJoined }: { onJoined?: () => void }) {
   }
 
   return (
-    <section className="stu-card" aria-labelledby="classes-h" style={{ gap: 10 }}>
-      <h2 id="classes-h">Your classes</h2>
-      {classes && classes.length > 0 ? (
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          {classes.map((k) => (
-            <li key={k.id}>
-              {k.name} <span className="stu-muted">· {[k.term, k.teacher].filter(Boolean).join(" · ")}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="stu-muted" style={{ margin: 0 }}>
-          {classes === null ? "Loading…" : "You are not in a class yet. Exams only show up for your classes."}
-        </p>
-      )}
-      <form onSubmit={join} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+    <section className="stu-card stu-join-card" aria-labelledby="join-h" data-testid="join-class">
+      <h2 id="join-h">{hasClasses ? "Join another class" : "Join a class"}</h2>
+      <p className="stu-muted stu-small" style={{ margin: 0 }}>
+        Your DKU OJ courses appear here by themselves. Use a class code only if your teacher gave you one.
+      </p>
+      <form onSubmit={join} className="stu-join-form">
         <label htmlFor="join-code" className="sr-only">
           Class code
         </label>
@@ -82,16 +59,16 @@ export function JoinClass({ onJoined }: { onJoined?: () => void }) {
           value={code}
           maxLength={20}
           autoComplete="off"
+          autoCapitalize="characters"
           spellCheck={false}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
-          style={{ flex: "1 1 180px", minWidth: 0, letterSpacing: "0.08em" }}
         />
         <button type="submit" className="stu-btn primary" disabled={busy || code.trim().length < 8}>
-          {busy ? "Joining…" : "Join class"}
+          {busy ? "Joining…" : "Join"}
         </button>
       </form>
       {message && (
-        <p role="status" className={message.ok ? "stu-hint" : "stu-field-error"} style={{ margin: 0 }}>
+        <p role={message.ok ? "status" : "alert"} className={message.ok ? "stu-hint stu-join-ok" : "stu-field-error"} style={{ margin: 0 }}>
           {message.text}
         </p>
       )}

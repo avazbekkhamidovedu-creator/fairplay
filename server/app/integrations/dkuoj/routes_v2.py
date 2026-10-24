@@ -27,7 +27,7 @@ from ...store import get_store
 from ...timeutil import iso, utcnow
 from . import signing
 from .models import ClassLogin, ClassLoginEvent, OjEditor, OjRosterEntry
-from .setup import add_event, create_class_login, disable_logins, is_set_up, login_active
+from .setup import add_event, create_class_login, disable_logins, is_set_up, login_active, open_login_password
 
 log = logging.getLogger("proctora.dkuoj")
 
@@ -145,11 +145,31 @@ async def class_login_delete(class_id: int, call: BridgeCall = Depends(signed_ca
     return {"ok": True}
 
 
-def _login_out(cl: ClassLogin | None) -> dict | None:
+HISTORY_MAX = 20
+_REASONS = {"replaced": "replaced", "stopped": "stopped", "too_many_failures": "locked"}
+
+
+def _login_out(cl: ClassLogin | None, secret: str) -> dict | None:
+    """The active login, with its password (None for a login made before passwords were
+    kept encrypted: the professor creates a new one to see it)."""
     if cl is None:
         return None
+    return {"username": cl.username, "password": open_login_password(secret, cl.username, cl.password_enc),
+            "created_at": iso(cl.created_at), "expires_at": iso(cl.expires_at), "used": int(cl.used or 0),
+            "created_by": cl.created_by or None}
+
+
+def _history_out(cl: ClassLogin, now) -> dict:
+    """One past or current login, never its password. A login that ran out before it was
+    replaced or stopped counts as expired (at its expiry time)."""
+    ended_at, reason = None, None
+    if cl.disabled_at is not None and cl.disabled_at < cl.expires_at:
+        ended_at, reason = cl.disabled_at, _REASONS.get(cl.disabled_reason or "", "stopped")
+    elif cl.expires_at <= now or cl.disabled_at is not None:
+        ended_at, reason = cl.expires_at, "expired"
     return {"username": cl.username, "created_at": iso(cl.created_at), "expires_at": iso(cl.expires_at),
-            "used": int(cl.used or 0)}
+            "ended_at": iso(ended_at), "end_reason": reason, "used": int(cl.used or 0),
+            "created_by": cl.created_by or None}
 
 
 def _student_out(u: User, via: set[str]) -> dict:
@@ -190,11 +210,14 @@ async def class_user_ids(session: AsyncSession, class_id: int, netids: set[str] 
 
 
 @router.get("/classes/{class_id}/status")
-async def class_status(class_id: int, call: BridgeCall = Depends(signed_call),
+async def class_status(class_id: int, request: Request, call: BridgeCall = Depends(signed_call),
                        session: AsyncSession = Depends(get_session)):
+    """The class's login (with its password: the professor may copy it again), the login
+    history (newest first, at most HISTORY_MAX, the active one included) and its students.
+    no-store: the answer carries a password."""
     now = utcnow()
     logins = (await session.execute(select(ClassLogin).where(ClassLogin.class_id == class_id)
-                                    .order_by(ClassLogin.id.desc()).limit(5))).scalars().all()
+                                    .order_by(ClassLogin.id.desc()).limit(HISTORY_MAX))).scalars().all()
     active = next((cl for cl in logins if login_active(cl, now)), None)
     via = await setup_netids(session, class_id)
     ids = await class_user_ids(session, class_id, via)
@@ -203,9 +226,13 @@ async def class_status(class_id: int, call: BridgeCall = Depends(signed_call),
                                    .order_by(User.netid))).scalars().all() if ids else []
     recent = (await session.execute(select(ClassLoginEvent).where(ClassLoginEvent.class_id == class_id)
                                     .order_by(ClassLoginEvent.id.desc()).limit(50))).scalars().all()
-    return {"login": _login_out(active), "students": [_student_out(u, via) for u in users],
-            "recent": [{"at": iso(ev.at), "kind": ev.kind, "netid": ev.netid, "actor": ev.actor or None,
-                        "detail": ev.detail or ""} for ev in recent]}
+    return JSONResponse(
+        {"login": _login_out(active, request.app.state.settings.secret),
+         "history": [_history_out(cl, now) for cl in logins],
+         "students": [_student_out(u, via) for u in users],
+         "recent": [{"at": iso(ev.at), "kind": ev.kind, "netid": ev.netid, "actor": ev.actor or None,
+                     "detail": ev.detail or ""} for ev in recent]},
+        headers={"Cache-Control": "no-store"})
 
 
 @router.post("/students/{netid}/reset")
@@ -329,7 +356,9 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "closes_at": iso(exam_closes_at(e)), "open_to": open_to,
             "settings": {"calculator": e.calculator or "off", "open_book": bool(e.open_book),
                          "websites": list(e.websites or []), "strong_lock": bool(e.require_strong_lock),
-                         "resume_needs_approval": bool(e.resume_needs_approval)},
+                         "resume_needs_approval": bool(e.resume_needs_approval),
+                         # 2026-10-24: student review after hand-in (app.review)
+                         "review": SOURCE.review_level(e.review_after_handin)},
             "counts": counts, "students": students, "server_time": iso(now)}
 
 
@@ -404,6 +433,29 @@ async def exam_new_code(key: str, call: BridgeCall = Depends(signed_call),
                         session: AsyncSession = Depends(get_session)):
     e = await _editor_exam(session, key, call)
     await control.rotate_start_code(session, e)
+    return await _view(session, e)
+
+
+@router.post("/exams/{key}/review")
+async def exam_review(key: str, call: BridgeCall = Depends(signed_call),
+                      session: AsyncSession = Depends(get_session)):
+    """2026-10-24: the professor changed "Student review after hand-in" in DKU OJ (any time:
+    before, during or after the exam). Body {"review": "nothing|answers|answers_and_results",
+    "updated_at": "<iso>"}; an updated_at older than the value FairPlay has is ignored (the
+    newer DKU OJ value wins, whichever of this call and the exam list arrives first)."""
+    from ...review import LEVELS
+    from .sync import apply_review
+    value = call.data.get("review")
+    if value not in LEVELS:
+        raise HTTPException(400, "review must be one of: " + ", ".join(LEVELS))
+    updated_at = call.data.get("updated_at")
+    if updated_at is not None and not isinstance(updated_at, str):
+        raise HTTPException(400, "updated_at must be an ISO-8601 time")
+    e = await _editor_exam(session, key, call)
+    if apply_review(e, value, updated_at):
+        e.updated_at = utcnow()
+    await session.commit()
+    log.info("DKU OJ exam %s: student review set to %s by %s", key, value, call.acting_user)
     return await _view(session, e)
 
 
