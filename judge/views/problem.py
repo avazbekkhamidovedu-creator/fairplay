@@ -70,6 +70,7 @@ from judge.utils.assignment_harvest import (
     assignment_harvest_enabled, participation_is_harvestable, user_bypasses_assignment_rules,
 )
 from judge.utils.diggpaginator import DiggPaginator
+from judge.utils.fairplay import fairplay_hidden_q, fairplay_template_problem
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.pdfoid import PDF_RENDERING_ENABLED, render_pdf
 from judge.utils.problem_create import generate_problem_code
@@ -1324,7 +1325,7 @@ class ProblemList(QueryStringSortMixin, TitleMixin, SolvedProblemMixin, ListView
                 filter |= Problem.organization_filter_q(
                     Organization.admins.through.objects.filter(profile=self.profile).values('organization_id'),
                 )
-        return filter
+        return filter & ~fairplay_hidden_q(user, Problem)
 
     def get_course_filter_organizations(self):
         """Courses shown in the list filter: the user's memberships (and orgs they admin).
@@ -1794,7 +1795,8 @@ class LanguageTemplateAjax(View):
         except ValueError:
             raise Http404()
 
-        template = ProblemTemplate.starter_code(language, request.GET.get('problem_id'))
+        problem_id = fairplay_template_problem(request.user, request.GET.get('problem_id'))
+        template = ProblemTemplate.starter_code(language, problem_id)
         resp = HttpResponse(template, content_type='text/plain')
         resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         resp['Pragma'] = 'no-cache'

@@ -37,6 +37,7 @@ from judge.performance_points import get_pp_breakdown
 from judge.ratings import rating_class, rating_progress
 from judge.tasks import prepare_user_data
 from judge.utils.celery import task_status_by_id, task_status_url_by_id
+from judge.utils.fairplay import fairplay_visible_breakdown, fairplay_visible_problems
 from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.mail import send_mail
 from judge.utils.problems import contest_completed_ids, user_completed_ids
@@ -320,6 +321,7 @@ class UserProblemsPage(UserPage):
             .exclude(problem__in=self.get_completed_problems() if self.hide_solved else []) \
             .values('problem__id', 'problem__code', 'problem__name', 'problem__points', 'problem__group__full_name') \
             .distinct().annotate(points=Max('points')).order_by('problem__group__full_name', 'problem__code')
+        result = fairplay_visible_problems(self.request.user, result, 'problem__id')
 
         def process_group(group, problems_iter):
             problems = list(problems_iter)
@@ -334,6 +336,7 @@ class UserProblemsPage(UserPage):
                 }), itemgetter('group'))
         ]
         breakdown, has_more = get_pp_breakdown(self.object, start=0, end=10)
+        breakdown = fairplay_visible_breakdown(self.request.user, breakdown)
         context['pp_breakdown'] = breakdown
         context['pp_has_more'] = has_more
 
@@ -353,6 +356,7 @@ class UserPerformancePointsAjax(UserProblemsPage):
         except ValueError:
             start, end = 0, 100
         breakdown, self.has_more = get_pp_breakdown(self.object, start=start, end=end)
+        breakdown = fairplay_visible_breakdown(self.request.user, breakdown)
         context['pp_breakdown'] = breakdown
         return context
 

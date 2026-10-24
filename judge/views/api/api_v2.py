@@ -13,6 +13,7 @@ from judge.models import (
     Contest, ContestParticipation, ContestTag, Judge, Language, Organization, Problem, ProblemType, Profile, Rating,
     Submission, contest_problem_display_name,
 )
+from judge.utils.fairplay import fairplay_visible_problems
 from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.raw_sql import join_sql_subquery, use_straight_join
 from judge.views.ide import IDE_PROBLEM_CODE
@@ -253,7 +254,7 @@ class APIContestDetail(APIDetailView):
         can_see_problems = (in_contest or contest.ended or contest.is_editable_by(self.request.user))
 
         problems = list(
-            contest.contest_problems
+            fairplay_visible_problems(self.request.user, contest.contest_problems)
             .select_related('problem')
             .defer('problem__description')
             .order_by('order'),
@@ -520,7 +521,7 @@ class APIUserDetail(APIDetailView):
 
     def get_object_data(self, profile):
         solved_problems = list(
-            Submission.objects
+            fairplay_visible_problems(self.request.user, Submission.objects)
             .filter(
                 result='AC',
                 user=profile,

@@ -553,6 +553,11 @@ class Contest(models.Model):
         pass
 
     def access_check(self, user):
+        # A FairPlay exam in its window is invisible on this site to everyone but its staff.
+        from judge.utils.fairplay import fairplay_hidden_for
+        if fairplay_hidden_for(user, self):
+            raise self.Inaccessible()
+
         # Do unauthenticated check here so we can skip authentication checks later on.
         if not user.is_authenticated:
             # Unauthenticated users can only see visible, non-private contests
@@ -809,11 +814,12 @@ class Contest(models.Model):
 
     @classmethod
     def get_visible_contests(cls, user):
+        from judge.utils.fairplay import fairplay_hidden_q
         if not user.is_authenticated:
             return cls.objects.filter(is_visible=True, is_organization_private=False, is_private=False) \
-                              .defer('description').distinct()
+                              .exclude(fairplay_hidden_q(user, cls)).defer('description').distinct()
 
-        queryset = cls.objects.defer('description')
+        queryset = cls.objects.defer('description').exclude(fairplay_hidden_q(user, cls))
         if not (user.has_perm('judge.see_private_contest') or user.has_perm('judge.edit_all_contest')):
             # For org-private contests:
             # - If classes are set, only class members can see

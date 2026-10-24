@@ -365,6 +365,9 @@ def download_test_case(request, submission, case, type):
     submission = get_object_or_404(Submission, id=int(submission))
     if not submission.problem.view_test_cases:
         raise Http404()
+    from judge.utils.fairplay import fairplay_hidden_for
+    if fairplay_hidden_for(request.user, submission):
+        raise Http404()
 
     if not submission.can_see_detail(request.user):
         raise Http404()
@@ -422,6 +425,9 @@ def download_test_case(request, submission, case, type):
 def download_tester(request, problem):
     problem = get_object_or_404(Problem, code=problem)
     if not problem.view_tester:
+        raise Http404()
+    from judge.utils.fairplay import fairplay_hidden_for
+    if fairplay_hidden_for(request.user, problem):
         raise Http404()
 
     # Get available harnesses

@@ -194,6 +194,9 @@ class Submission(models.Model):
     def can_see_detail(self, user):
         if not user.is_authenticated:
             return False
+        from judge.utils.fairplay import fairplay_hidden_for
+        if fairplay_hidden_for(user, self):
+            return False
         profile = user.profile
         source_visibility = self.problem.submission_source_visibility
         if self.problem.is_editable_by(user):

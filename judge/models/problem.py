@@ -467,6 +467,11 @@ class Problem(models.Model):
         return self.organizations.filter(admins=user.profile).exists()
 
     def is_accessible_by(self, user, skip_contest_problem_check=False):
+        # Problems of a FairPlay exam in its window are invisible to its students everywhere.
+        from judge.utils.fairplay import fairplay_hidden_for
+        if fairplay_hidden_for(user, self):
+            return False
+
         # If we don't want to check if the user is in a contest containing that problem.
         if not skip_contest_problem_check and user.is_authenticated:
             # If user is currently in a contest containing that problem.
@@ -525,9 +530,10 @@ class Problem(models.Model):
 
     @classmethod
     def get_visible_problems(cls, user):
+        from judge.utils.fairplay import fairplay_hidden_q
         # Do unauthenticated check here so we can skip authentication checks later on.
         if not user.is_authenticated:
-            return cls.get_public_problems()
+            return cls.get_public_problems().exclude(fairplay_hidden_q(user, cls))
 
         # Conditions for visible problem:
         #   - `judge.edit_all_problem` or `judge.see_private_problem`
@@ -563,7 +569,7 @@ class Problem(models.Model):
             q = cls.q_add_author_curator_tester(q, user.profile)
             queryset = queryset.filter(q)
 
-        return queryset
+        return queryset.exclude(fairplay_hidden_q(user, cls))
 
     @classmethod
     def q_add_author_curator_tester(cls, q, profile):

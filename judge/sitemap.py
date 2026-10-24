@@ -3,7 +3,8 @@ from django.contrib.sitemaps import Sitemap
 from django.urls import reverse
 from django.utils import timezone
 
-from judge.models import BlogPost, Contest, Organization, Problem, Solution
+from judge.models import BlogPost, Contest, Organization, Solution
+from judge.utils.fairplay import fairplay_public_problems
 
 
 class ProblemSitemap(Sitemap):
@@ -11,7 +12,7 @@ class ProblemSitemap(Sitemap):
     priority = 0.8
 
     def items(self):
-        return Problem.get_public_problems().values_list('code')
+        return fairplay_public_problems().values_list('code')
 
     def location(self, obj):
         return reverse('problem_detail', args=obj)
@@ -68,7 +69,7 @@ class SolutionSitemap(Sitemap):
 
     def items(self):
         return (Solution.objects.filter(is_public=True, publish_on__lte=timezone.now(),
-                                        problem__in=Problem.get_public_problems()).values_list('problem__code'))
+                                        problem__in=fairplay_public_problems()).values_list('problem__code'))
 
     def location(self, obj):
         return reverse('problem_editorial', args=obj)

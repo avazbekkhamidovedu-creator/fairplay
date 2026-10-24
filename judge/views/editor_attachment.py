@@ -173,6 +173,9 @@ def editor_file_download(request, file_uuid):
     attachment = get_object_or_404(EditorAttachment, uuid=file_uuid)
     if not attachment.file:
         raise Http404()
+    from judge.utils.fairplay import fairplay_hidden_for
+    if fairplay_hidden_for(request.user, attachment):
+        raise Http404()
     try:
         handle = attachment.file.open('rb')
     except StorageUnavailableError:

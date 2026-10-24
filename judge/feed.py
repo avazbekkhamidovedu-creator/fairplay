@@ -6,7 +6,8 @@ from django.utils import timezone
 from django.utils.feedgenerator import Atom1Feed
 
 from judge.jinja2.markdown import markdown
-from judge.models import BlogPost, Comment, Problem
+from judge.models import BlogPost, Comment
+from judge.utils.fairplay import fairplay_public_problems
 
 
 class ProblemFeed(Feed):
@@ -15,7 +16,7 @@ class ProblemFeed(Feed):
     description = 'The latest problems added on the %s website' % settings.SITE_LONG_NAME
 
     def items(self):
-        return Problem.get_public_problems().order_by('-date', '-id')[:25]
+        return fairplay_public_problems().order_by('-date', '-id')[:25]
 
     def item_title(self, problem):
         return problem.name

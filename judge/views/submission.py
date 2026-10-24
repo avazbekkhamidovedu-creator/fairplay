@@ -27,6 +27,7 @@ from judge.models import Contest, ContestProblem, Language, Problem, ProblemTran
 from judge.models.contest import contest_problem_display_name
 from judge.models.problem import SubmissionSourceAccess
 from judge.utils.contest_grade import attach_student_display_score, grade_desk_url
+from judge.utils.fairplay import fairplay_hidden_for, fairplay_hidden_q
 from judge.utils.infinite_paginator import InfinitePaginationMixin
 from judge.utils.lazy import memo_lazy
 from judge.utils.problems import get_result_data, user_completed_ids, user_editable_ids, user_tester_ids
@@ -106,6 +107,12 @@ class SubmissionMixin(object):
     model = Submission
     context_object_name = 'submission'
     pk_url_kwarg = 'submission'
+
+    def get_object(self, queryset=None):
+        submission = super().get_object(queryset)
+        if fairplay_hidden_for(self.request.user, submission):
+            raise Http404()
+        return submission
 
 
 class SubmissionDetailBase(LoginRequiredMixin, TitleMixin, SubmissionMixin, DetailView):
@@ -627,7 +634,7 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
         if not (hasattr(self, 'problem') and self.problem.code == IDE_PROBLEM_CODE):
             queryset = queryset.exclude(problem__code=IDE_PROBLEM_CODE)
 
-        return queryset
+        return queryset.exclude(fairplay_hidden_q(self.request.user, Submission))
 
     def get_queryset(self):
         queryset = self._get_queryset()
@@ -653,7 +660,8 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
             return []
         problems = {
             p.code: '%s — %s' % (p.code, p.name)
-            for p in Problem.objects.filter(code__in=self.filter_problems).only('code', 'name')
+            for p in Problem.objects.filter(code__in=self.filter_problems)
+            .exclude(fairplay_hidden_q(self.request.user, Problem)).only('code', 'name')
         }
         return [(code, problems.get(code, code)) for code in self.filter_problems]
 
@@ -662,7 +670,8 @@ class SubmissionsListBase(DiggPaginatorMixin, TitleMixin, ListView):
             return []
         contests = {
             c.key: '%s — %s' % (c.key, c.name)
-            for c in Contest.objects.filter(key__in=self.filter_contests).only('key', 'name')
+            for c in Contest.objects.filter(key__in=self.filter_contests)
+            .exclude(fairplay_hidden_q(self.request.user, Contest)).only('key', 'name')
         }
         options = []
         for key in self.filter_contests:
@@ -965,6 +974,8 @@ class ForceContestMixin(object):
     def access_check(self, request):
         super(ForceContestMixin, self).access_check(request)
 
+        if fairplay_hidden_for(request.user, self.contest):
+            raise Http404()
         if not request.user.has_perm('judge.see_private_contest'):
             if not self.contest.is_visible:
                 raise Http404()

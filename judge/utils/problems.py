@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_noop
 
 from judge.models import ContestParticipation, ContestSubmission, Problem, Submission
+from judge.utils.fairplay import fairplay_public_list
 
 __all__ = [
     'assignment_problem_stats', 'contest_completed_ids', 'get_result_data',
@@ -250,4 +251,4 @@ def hot_problems(duration, limit):
         )).order_by('-ordering').defer('description')[:limit]
 
         cache.set(cache_key, qs, 900)
-    return qs
+    return fairplay_public_list(qs)

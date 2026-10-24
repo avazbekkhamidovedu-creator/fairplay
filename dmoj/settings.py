@@ -717,6 +717,15 @@ LITELLM_PROFILES = {
     },
 }
 
+# FairPlay exam bridge (docs/fairplay-bridge.md): on with a shared token of 32+ characters, two during a rotation.
+FAIRPLAY_TOKEN = ''
+# The FairPlay server's base URL, e.g. https://exam.example.edu; required with a token.
+FAIRPLAY_URL = ''
+# FairPlay's address for browsers, if it differs from FAIRPLAY_URL (report links under it are kept).
+FAIRPLAY_PUBLIC_URL = ''
+# Allow a plain http:// FAIRPLAY_URL to another machine; local test set-ups only.
+FAIRPLAY_ALLOW_INSECURE = False
+
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:
         exec(f.read(), globals())
