@@ -241,9 +241,13 @@ def _upcoming(exams: list[Exam]) -> tuple[int, dict | None]:
         return 0, None
     far = datetime.max
     first = min(exams, key=lambda e: (e.status != "live", e.scheduled_at or far, e.title or ""))
-    # 2026-10-24: duration and question count for the student's course page ("Coming up" cards)
+    # 2026-10-24: duration and question count for the student's course page ("Coming up" cards);
+    # no question count while the exam is in its early upload window (nothing about the
+    # questions before it opens, as in /api/student/exams)
+    from .materials import in_upload_window
+    qc = None if first.status == "draft" and in_upload_window(first) else first.question_count
     return len(exams), {"title": first.title, "starts_at": iso(first.scheduled_at), "status": first.status,
-                        "duration_min": first.duration_min, "question_count": first.question_count}
+                        "duration_min": first.duration_min, "question_count": qc}
 
 
 @student_router.get("")

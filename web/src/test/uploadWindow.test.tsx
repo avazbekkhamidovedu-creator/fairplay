@@ -175,3 +175,20 @@ describe("student: the upload window", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove notes.pdf" })).toBeInTheDocument());
   });
 });
+
+describe("course page counts", () => {
+  it("an upload-window exam is not counted again as 'more planned'", async () => {
+    const { moreScheduled } = await import("../components/student/ExamTabs");
+    const k = {
+      id: 7, name: "MATH 201", term: "", teacher: "T", joined_at: null, course: null, source: "fairplay",
+      upcoming_exams: 2, can_leave: true,
+      next_exam: { title: "Quiz", starts_at: null, status: "live" },
+    } as unknown as Parameters<typeof moreScheduled>[0];
+    const up = summary({ id: "u", class_ids: ["7"] } as Partial<StudentExamSummary>);
+    const live = summary({ id: "l", title: "Quiz", status: "live", upload_window: null, class_ids: ["7"] } as Partial<StudentExamSummary>);
+    expect(moreScheduled(k, [live, up])).toBe(0);
+    // the upload exam is the course's next exam itself
+    const k2 = { ...k, upcoming_exams: 1, next_exam: { title: "Midterm", starts_at: "2026-10-26T14:00:00Z", status: "draft" } };
+    expect(moreScheduled(k2, [up])).toBe(0);
+  });
+});

@@ -142,6 +142,9 @@ def test_upload_window_shows_only_the_upload(client, teacher, alice):
                        headers=alice).status_code == 409
     assert client.get(f"/api/student/exams/{e['id']}/package", headers=alice).status_code == 409
     assert client.get(f"/api/student/exams/{e['id']}/package-key", headers=alice).status_code == 409
+    # the course card's next exam says nothing about the questions either
+    k = next(x for x in client.get("/api/student/classes", headers=alice).json() if x["id"] == e["class_id"])
+    assert k["next_exam"]["title"] == e["title"] and k["next_exam"]["question_count"] is None
     m = client.get(f"/api/student/exams/{e['id']}/materials", headers=alice).json()
     assert m["can_change"] is True and m["upload_closes_at"] == e["scheduled_at"]
     assert set(m) >= {"files", "used_bytes", "max_files", "upload_opens_at"} and "questions" not in m

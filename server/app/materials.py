@@ -242,6 +242,14 @@ def upload_window(exam: dict) -> tuple[datetime, datetime] | None:
     return closes - timedelta(days=days), closes
 
 
+def in_upload_window(e: Exam, now: datetime | None = None) -> bool:
+    """An Exam row inside its early upload window now."""
+    w = upload_window({"open_book": e.open_book, "mode": e.mode, "scheduled_at": iso(e.scheduled_at),
+                       "upload_opens_days": getattr(e, "upload_opens_days", 0)})
+    now = now or utcnow()
+    return w is not None and w[0] <= now < w[1]
+
+
 def window_out(exam: dict) -> dict:
     """The window for the student pages ({"upload_opens_at", "upload_closes_at"}, isos)."""
     w = upload_window(exam)

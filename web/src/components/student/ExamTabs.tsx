@@ -89,8 +89,13 @@ export function scheduledExams(classes: StudentClass[]): ScheduledExam[] {
 export function moreScheduled(k: StudentClass, exams: StudentExamSummary[]): number {
   if (typeof k.upcoming_exams !== "number") return 0;
   const live = exams.filter((e) => e.status === "live" && examInCourse(e, k)).length;
-  const next = k.next_exam && k.next_exam.status !== "live" && k.next_exam.status !== "closed" ? 1 : 0;
-  return Math.max(0, k.upcoming_exams - live - next);
+  const n = k.next_exam;
+  const next = n && n.status !== "live" && n.status !== "closed" ? 1 : 0;
+  // 2026-10-24: drafts in their upload window are listed already (the next exam counted once)
+  const uploads = exams.filter((e) => e.status === "draft" && !!e.upload_window && examInCourse(e, k));
+  const nextIsUpload =
+    next === 1 && !!n && uploads.some((e) => sameExam(n, e));
+  return Math.max(0, k.upcoming_exams - live - next - (uploads.length - (nextIsUpload ? 1 : 0)));
 }
 
 /** "Your tests  [✓ Active | Past]": a two-tab switch; arrows move between the tabs. */
@@ -234,7 +239,7 @@ export function ScheduledExamCard({ item, showCourse }: { item: ScheduledExam; s
 
 /** Active: exams open now (own renderer allowed: the home page's big cards), then coming up. */
 /** 2026-10-24: a course's next exam that is listed already as an upload-window exam. */
-function sameExam(s: ScheduledExam, e: StudentExamSummary): boolean {
+function sameExam(s: { title: string; starts_at: string | null }, e: StudentExamSummary): boolean {
   if (s.title !== e.title) return false;
   if (!s.starts_at || !e.scheduled_at) return !s.starts_at && !e.scheduled_at;
   return new Date(s.starts_at).getTime() === new Date(e.scheduled_at).getTime();
