@@ -3,6 +3,7 @@
 .stu-gcard-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 16px;
   min-width: 0;
 }
@@ -35,6 +36,12 @@
 }
 .stu-gcard.has-chips {
   align-items: flex-start;
+  flex-wrap: wrap;
+}
+.stu-gcard.has-chips .stu-gcard-action {
+  flex-basis: 100%;
+  padding-left: 90px;
+  margin-top: -6px;
 }
 a.stu-gcard:hover {
   border-color: #c9cedc;
@@ -63,6 +70,7 @@ a.stu-gcard:focus-visible {
 }
 .stu-gcard-title {
   margin: 0;
+  color: #161a2c;
   font-size: 17px;
   font-weight: 700;
   line-height: 1.3;
@@ -214,4 +222,17 @@ a.stu-gcard:hover .stu-gcard-action {
   display: flex;
   align-items: center;
   gap: 18px;
+}
+/* two narrow columns (iPad portrait, small laptops): the link goes under the text so the
+   title keeps the width */
+@media (min-width: 481px) and (max-width: 1023px) {
+  .stu-gcard {
+    flex-wrap: wrap;
+  }
+  .stu-gcard-action,
+  .stu-gcard.has-chips .stu-gcard-action {
+    flex-basis: 100%;
+    padding-left: 90px;
+    margin-top: -6px;
+  }
 }

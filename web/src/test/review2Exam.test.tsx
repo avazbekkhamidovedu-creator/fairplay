@@ -150,6 +150,33 @@ describe("layout D: the divider between question and answer", () => {
     vi.unstubAllGlobals();
   });
 
+  it("coding: the problem in the left pane, the editor on the right; Wide editor moves the divider", async () => {
+    nativeApp();
+    SPLITS.clear();
+    api.getAttempt.mockResolvedValue(
+      view({
+        questions: [
+          { id: "c1", type: "code", prompt: "Write double(n)", points: 2, options: [], language: "python",
+            tests: [{ input: "2", expected: "4" }] },
+        ],
+      } as Partial<AttemptView>),
+    );
+    renderExam();
+    const problem = await screen.findByRole("region", { name: "Problem" });
+    await waitFor(() => expect(problem.closest(".xd-left")).not.toBeNull());
+    expect(screen.getByRole("region", { name: "Problem" })).toHaveTextContent("Write double(n)");
+    expect(screen.getByRole("region", { name: "Your code" }).closest(".xd-right")).not.toBeNull();
+    const sep = screen.getByRole("separator", { name: "Resize the question and answer panes" });
+    expect(sep).toHaveAttribute("aria-valuenow", "42");             // code starts with more room for the editor
+    const wide = screen.getByRole("button", { name: "Wide editor" });
+    fireEvent.click(wide);
+    expect(wide).toHaveAttribute("aria-pressed", "true");
+    expect(sep).toHaveAttribute("aria-valuenow", "25");
+    fireEvent.click(wide);
+    expect(sep).toHaveAttribute("aria-valuenow", "42");
+    expect(SPLITS.get("e_1:code")).toBe(42);
+  });
+
   it("tools on the right, question on the left; Next becomes Review and submit on the last", async () => {
     nativeApp();
     api.getAttempt.mockResolvedValue(view());

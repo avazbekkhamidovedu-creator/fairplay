@@ -602,11 +602,22 @@
   }
 }
 @media (max-width: 760px) {
+  /* title on its own row; timer (left) and tools (right) under it */
   .exam-d .stu-lockbar {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .exam-d .stu-lb-right {
+  .exam-d .stu-lb-left {
     grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .exam-d .stu-lb-center {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .exam-d .stu-lb-right {
+    grid-column: 2;
+    grid-row: 2;
     justify-content: flex-end;
   }
 }
@@ -644,4 +655,36 @@
 .exam-d .xd-problem .stu-cq-io pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.exam-d .stu-viewer-group .stu-icon-btn {
+  width: 40px;
+  height: 40px;
+}
+@media (max-width: 899px) {
+  /* stacked panes: the editor has the full width already */
+  .exam-d .xd-wide {
+    display: none;
+  }
+}
+@media (max-width: 480px) {
+  /* phones: the timer row and the tools share one line */
+  .exam-d .stu-lockbar .stu-timer {
+    padding: 0 12px;
+    font-size: 18px;
+  }
+  .exam-d .stu-lb-center {
+    gap: 6px;
+  }
+  .exam-d .stu-battery > span[aria-hidden="true"] {
+    display: none;
+  }
+  .exam-d .stu-tool {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+}
+/* the question's own tab never shrinks; material tabs share what is left */
+.xd-tablist > .xd-tab:first-child {
+  flex: none;
 }
