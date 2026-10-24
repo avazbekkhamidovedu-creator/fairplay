@@ -13,9 +13,9 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, assignment_draft, blog, comment, contest_analytics, contests, file_upload, fill_blank,
-    grade, ide, language, license, mailgun, mcq, organization, preview, problem, problem_import, problem_manage,
-    ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
+    TitledTemplateView, api, assignment_draft, blog, comment, contest_analytics, contests, fairplay, file_upload,
+    fill_blank, grade, ide, language, license, mailgun, mcq, organization, preview, problem, problem_import,
+    problem_manage, ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.api import fairplay as fairplay_api
 from judge.views.editor_attachment import editor_file_download, editor_file_uploader
@@ -291,6 +291,11 @@ urlpatterns = [
         path('/draft/<str:problem>', assignment_draft.AssignmentDraftView.as_view(), name='assignment_draft'),
         path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
+        path('/fairplay', fairplay.ContestFairPlay.as_view(), name='contest_fairplay'),
+        path('/fairplay/status', fairplay.ContestFairPlayStatus.as_view(), name='contest_fairplay_status'),
+        path('/fairplay/students/<str:netid>/report', fairplay.ContestFairPlayReport.as_view(),
+             name='contest_fairplay_report'),
+        path('/fairplay/<str:action>', fairplay.ContestFairPlayAction.as_view(), name='contest_fairplay_action'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
         path('/grade', contests.ContestGrade.as_view(), name='contest_grade'),
@@ -418,6 +423,21 @@ urlpatterns = [
         path('classes/<int:class_id>/roster', fairplay_api.class_roster_view, name='fairplay_api_class_roster'),
         path('students/<str:netid>/classes', fairplay_api.student_classes_view,
              name='fairplay_api_student_classes'),
+    ])),
+
+    path('fairplay/', include([
+        path('', fairplay.FairPlayHome.as_view(), name='fairplay_home'),
+        path('<int:pk>-<slug:slug>/', include([
+            path('', fairplay.FairPlayCourse.as_view(), name='fairplay_course'),
+            path('students', fairplay.FairPlayCourseStudents.as_view(), name='fairplay_course_students'),
+            path('class-login', fairplay.FairPlayCourseLogin.as_view(), name='fairplay_course_login'),
+            path('classes/<int:class_id>/login', fairplay.FairPlayClassLoginCreate.as_view(),
+                 name='fairplay_class_login_create'),
+            path('classes/<int:class_id>/login/stop', fairplay.FairPlayClassLoginStop.as_view(),
+                 name='fairplay_class_login_stop'),
+            path('classes/<int:class_id>/students/<str:netid>/reset', fairplay.FairPlayStudentReset.as_view(),
+                 name='fairplay_student_reset'),
+        ])),
     ])),
 
     path('blog/', paged_list_view(blog.PostList, 'blog_post_list')),

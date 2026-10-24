@@ -53,6 +53,9 @@ from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status, task_status_url
+from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_visible_problems
+from judge.utils.fairplay_editor import FAIRPLAY_EDITOR_FIELDS, apply_fairplay_editor, fairplay_check_edit, \
+    fairplay_contest_context, fairplay_edit_lock, fairplay_editor_context, parse_fairplay_payload
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -62,6 +65,7 @@ from judge.utils.stats import get_bar_chart, get_pie_chart
 from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
+from judge.views.fairplay_editor import fairplay_editor_saved
 
 logger = logging.getLogger(__name__)
 
@@ -479,6 +483,7 @@ class ContestCreate(LoginRequiredMixin, View):
         if not user.has_perm('judge.contest_seb_requirement'):
             restricted |= {'seb_required', 'seb_browser_exam_keys', 'seb_config_keys',
                            'seb_config_file', 'seb_quit_url', 'seb_preset'}
+            restricted |= set(FAIRPLAY_EDITOR_FIELDS)
         if not user.has_perm('judge.create_private_contest'):
             restricted |= {'private_contestants', 'organizations', 'is_private', 'is_organization_private'}
             # is_visible is only gated when the user can neither create private
@@ -744,6 +749,9 @@ class ContestCreate(LoginRequiredMixin, View):
                         setattr(contest, field, '')
             else:
                 contest.seb_preset = None
+
+        # Validated before anything is written; applied after the many-to-many fields.
+        self._fairplay_plan = parse_fairplay_payload(contest, payload, restricted)
 
         # ── Format: registered name + optional JSON config blob ─────────────
         # Validating against contest_format.formats (rather than the field's
@@ -1187,7 +1195,8 @@ class ContestCreate(LoginRequiredMixin, View):
         from judge.utils.contest_ai import schedule_batch_ai_grade
         transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
         transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
-        return self._action_response(payload, contest.key)
+        return (fairplay_editor_saved(request, contest, self._fairplay_plan) or
+                self._action_response(payload, contest.key))
 
     def _save_new_contest(self, request, payload, key):
         """Insert one contest row and its related data.
@@ -1211,6 +1220,7 @@ class ContestCreate(LoginRequiredMixin, View):
                     except IntegrityError:
                         raise _ContestKeyConflict
                     self._save_m2m(contest, payload)
+                    apply_fairplay_editor(contest, self._fairplay_plan)
                     contest.authors.add(request.profile)
                     self._sync_problems(contest, payload)
                     self._log_assignment(request, contest, added=True)
@@ -1224,6 +1234,8 @@ class ContestCreate(LoginRequiredMixin, View):
     def _update(self, request, payload):
         """Update an existing contest row (and optionally its key) in place."""
         contest = self.contest
+        old_key = contest.key
+        fairplay_lock = fairplay_edit_lock(contest)
         try:
             with transaction.atomic():
                 # Renaming the key (the URL slug) needs a uniqueness check that
@@ -1250,6 +1262,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 contest.full_clean()
                 contest.save()
                 self._save_m2m(contest, payload)
+                apply_fairplay_editor(contest, self._fairplay_plan)
                 # Authors are only editable here; create auto-adds the current user.
                 if 'authors' in payload:
                     values = payload['authors']
@@ -1260,6 +1273,7 @@ class ContestCreate(LoginRequiredMixin, View):
                     except (TypeError, ValueError):
                         raise ValidationError(_('Invalid value for "authors".'))
                 self._sync_problems(contest, payload)
+                fairplay_check_edit(fairplay_lock, contest, self._fairplay_plan)
                 contest_id = contest.pk
                 contest_key = contest.key
                 if self._scoring_snapshot(contest) != before_score:
@@ -1269,7 +1283,8 @@ class ContestCreate(LoginRequiredMixin, View):
             from judge.utils.contest_ai import schedule_batch_ai_grade
             transaction.on_commit(lambda cid=contest_id: schedule_batch_ai_grade(cid))
             transaction.on_commit(lambda cid=contest_id: reschedule_assignment_harvest(cid))
-            return self._action_response(payload, contest_key)
+            return (fairplay_editor_saved(request, contest, self._fairplay_plan, old_key=old_key) or
+                    self._action_response(payload, contest_key))
         except Exception as e:
             return self._error_response(e)
 
@@ -1474,7 +1489,8 @@ class ContestCreate(LoginRequiredMixin, View):
                 if field in ('organizations', 'join_organizations', 'classes'):
                     prefill[field] = [(o.id, o.name) for o in related.all()]
                 elif field == 'tags':
-                    prefill[field] = [(t.id, t.name) for t in related.all()]
+                    # The FairPlay tag is set by the lock option, not the tag picker.
+                    prefill[field] = [(t.id, t.name) for t in related.exclude(name=FAIRPLAY_TAG)]
                 else:
                     prefill[field] = [(p.id, profile_choice_label(p)) for p in related.select_related('user')]
             prefill['authors'] = [
@@ -1534,7 +1550,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'now': timezone.now(),
             'organizations': Organization.objects.all(),
             'classes': Class.objects.all(),
-            'tags': ContestTag.objects.all(),
+            'tags': ContestTag.objects.exclude(name=FAIRPLAY_TAG),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
             # Only problems this editor may attach — see _visible_problems_for.
             # select_related/prefetch_related feed the library columns (types /
@@ -1565,6 +1581,7 @@ class ContestCreate(LoginRequiredMixin, View):
             # What this contest already uses, so the card names the real
             # configuration rather than whichever one is default today.
             'seb_linked_preset': linked_preset,
+            **fairplay_editor_context(self.request, contest, self._restricted_fields(self.request.user)),
             'prefill': prefill,
         }
         ctx.update(self._library_filter_context())
@@ -1615,6 +1632,8 @@ class ContestTagCreateView(LoginRequiredMixin, View):
             return JsonResponse({'error': _('Please enter a tag name.')}, status=400)
         if not re.match(r'^[a-z-]+$', name):
             return JsonResponse({'error': _('Lowercase letters and hyphens only.')}, status=400)
+        if name == FAIRPLAY_TAG:
+            return JsonResponse({'error': _('This tag name is reserved for the FairPlay lock option.')}, status=400)
         if len(name) > 20:
             return JsonResponse({'error': _('Tag name must be at most 20 characters.')}, status=400)
         tag, _created = ContestTag.objects.get_or_create(
@@ -1880,7 +1899,7 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
     def get_context_data(self, **kwargs):
         context = super(ContestDetail, self).get_context_data(**kwargs)
         problems = list(
-            Problem.objects.filter(contests__contest=self.object)
+            fairplay_visible_problems(self.request.user, Problem.objects.filter(contests__contest=self.object), 'id')
             .order_by('contests__order').defer('description')
             .annotate(has_public_editorial=Case(
                 When(solution__is_public=True, solution__publish_on__lte=timezone.now(), then=True),
@@ -1952,6 +1971,7 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
                 )
         context['contest_solved_problem_ids'] = solved
         context['contest_attempted_problem_ids'] = attempted
+        context.update(fairplay_contest_context(self.request, self.object))
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         context['enable_social'] = settings.DMOJ_ENABLE_SOCIAL
         return context
@@ -1994,7 +2014,8 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
     def form_valid(self, form):
         contest = self.object
 
-        tags = contest.tags.all()
+        # A clone is not a FairPlay exam until FairPlay is turned on in its editor.
+        tags = list(contest.tags.exclude(name=FAIRPLAY_TAG))
         organizations = contest.organizations.all()
         private_contestants = contest.private_contestants.all()
         view_contest_scoreboard = contest.view_contest_scoreboard.all()
@@ -3054,6 +3075,7 @@ class ContestExportPDF(ContestMixin, View):
                 return contest
 
             contest_problems = contest.contest_problems.order_by('order').select_related('problem')
+            contest_problems = fairplay_visible_problems(request.user, contest_problems)
 
             totalscore = 0
             for page_num, cp in enumerate(contest_problems, 1):
@@ -3664,6 +3686,7 @@ class ContestExportWord(ContestMixin, View):
                 return contest
 
             contest_problems = contest.contest_problems.order_by('order').select_related('problem')
+            contest_problems = fairplay_visible_problems(request.user, contest_problems)
 
             totalscore = 0
             for page_num, cp in enumerate(contest_problems, 1):

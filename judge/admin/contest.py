@@ -19,6 +19,7 @@ from reversion.admin import VersionAdmin
 
 from judge.models import Class, Contest, ContestProblem, ContestSubmission, Profile, Rating, Submission
 from judge.ratings import rate_contest
+from judge.utils.fairplay import fairplay_clean_admin_form
 from judge.utils.user_search import apply_profile_choice_labels, profile_choice_label
 from judge.utils.views import NoBatchDeleteMixin
 from judge.widgets import AdminAceWidget, AdminHeavySelect2MultipleWidget, AdminHeavySelect2Widget, \
@@ -114,6 +115,8 @@ class ContestForm(ModelForm):
             raise forms.ValidationError(
                 _('You must select organizations before selecting classes.'),
             )
+
+        fairplay_clean_admin_form(self, cleaned_data)
 
         if 'allow_student_ai_grading' in cleaned_data:
             cleaned_data['ai_grading_mode'] = (

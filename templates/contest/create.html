@@ -757,6 +757,26 @@
                  'seb_use_default'].forEach(function(f) {
                     data[f] = fd.has(f);
                 });
+                // The lock radio decides seb_required / fairplay_required (one lock at most).
+                var lockChoice = form.querySelector('input[name="exam_lock"]:checked');
+                if (lockChoice) {
+                    data.seb_required = lockChoice.value === 'seb';
+                    if (form.querySelector('input[name="exam_lock"][value="fairplay"]')) {
+                        data.fairplay_required = lockChoice.value === 'fairplay';
+                    }
+                }
+                delete data.exam_lock;
+                // FairPlay settings go only if they loaded and changed here, or the assignment ID changed.
+                var fpPanel = document.getElementById('fairplay-panel');
+                var fpCurrent = window.fairplaySettingsSnapshot ? window.fairplaySettingsSnapshot() : null;
+                Object.keys(data).forEach(function (f) { if (f.indexOf('fairplay_') === 0 && f !== 'fairplay_required') delete data[f]; });
+                if (fpPanel && fpCurrent && data.fairplay_required) {
+                    var keyInput = form.querySelector('[name="key"]');
+                    var keyChanged = keyInput && keyInput.defaultValue !== keyInput.value;
+                    if (keyChanged || JSON.stringify(fpCurrent) !== window.fairplaySettingsInitial) {
+                        data.fairplay_settings = fpCurrent;
+                    }
+                }
 
                 // Auto grade after end: Off → −1 (do not schedule). On → minutes (≥0).
                 var autoOn = document.getElementById('id_auto_grade_after_end');
@@ -922,7 +942,12 @@
                 })
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
-                    if (res.ok) {
+                    if (res.ok && res.fairplay_warning) {
+                        // Saved, but FairPlay did not take its settings: the FairPlay tab offers them again.
+                        isDirty = false;
+                        window.alert(res.fairplay_warning);
+                        window.location.href = res.redirect;
+                    } else if (res.ok) {
                         isDirty = false;
                         if (res.action === 'another') {
                             // "Save and add another": stay put and clear the form.
@@ -1839,6 +1864,36 @@
             }
             if (sebDefault) sebDefault.addEventListener('change', syncSebDefault);
             syncSebDefault();
+
+            // --- Lock choice: show the SEB card or the FairPlay panel for the chosen lock ---
+            var lockRadios = document.querySelectorAll('input[name="exam_lock"]');
+            function syncExamLock() {
+                var chosen = document.querySelector('input[name="exam_lock"]:checked');
+                var value = chosen ? chosen.value : 'none';
+                var sebCard = document.getElementById('cheat-seb-section');
+                var fairplayPanel = document.getElementById('fairplay-panel');
+                if (sebCard) sebCard.style.display = value === 'seb' ? '' : 'none';
+                if (fairplayPanel) fairplayPanel.style.display = value === 'fairplay' ? '' : 'none';
+            }
+            for (var li = 0; li < lockRadios.length; li++) lockRadios[li].addEventListener('change', syncExamLock);
+            syncExamLock();
+            // The FairPlay settings as FairPlay sent them, to send only what the professor changed.
+            window.fairplaySettingsSnapshot = function () {
+                var panel = document.getElementById('fairplay-panel');
+                if (!panel || panel.getAttribute('data-loaded') !== '1') return null;
+                var out = {};
+                panel.querySelectorAll('[data-fp-field]').forEach(function (el) {
+                    var name = el.getAttribute('data-fp-field');
+                    out[name] = el.type === 'checkbox' ? el.checked : el.value;
+                });
+                if (!Object.keys(out).length) return null;
+                out.websites = String(out.websites || '').split('\n').map(function (l) { return l.trim(); })
+                    .filter(function (l) { return l; });
+                out.upload_opens_days = parseInt(out.upload_opens_days || '0', 10) || 0;
+                return out;
+            };
+            var fpInitial = window.fairplaySettingsSnapshot();
+            window.fairplaySettingsInitial = fpInitial ? JSON.stringify(fpInitial) : null;
 
             // Auto grade after end: Off unchecks → submit −1; On keeps minutes (≥0).
             var autoGradeCb = document.getElementById('id_auto_grade_after_end');
@@ -3111,13 +3166,103 @@
                             {% endif %}
 
                             {% if can_edit_seb %}
-                            <div class="ac-card" id="cheat-seb-section">
+                            {# FairPlay is offered only with the bridge on, or when the assignment already uses it. #}
+                            {% set exam_lock = 'fairplay' if fairplay_on else ('seb' if prefill.seb_required else 'none') %}
+                            <div class="form-row" id="cheat-lock-row">
+                                <label>{{ _('Lock') }}</label>
+                                <div class="field">
+                                    <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-right:1rem;">
+                                        <input type="radio" name="exam_lock" value="none" id="id_lock_none"{% if exam_lock == 'none' %} checked{% endif %}> {{ _('No lock') }}
+                                    </label>
+                                    <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-right:1rem;">
+                                        <input type="radio" name="exam_lock" value="seb" id="id_seb_required"{% if exam_lock == 'seb' %} checked{% endif %}> {{ _('Safe Exam Browser') }}{{ tip(_('If enabled, non-staff participants can only access this assignment from inside Safe Exam Browser.')) }}
+                                    </label>
+                                    {% if fairplay_offered %}
+                                    <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+                                        <input type="radio" name="exam_lock" value="fairplay" id="id_fairplay_required"{% if exam_lock == 'fairplay' %} checked{% endif %}> {{ _('FairPlay') }}{{ tip(_('Students take this assignment in the FairPlay app only. It is hidden from them on this site from %(hours)d hours before it starts until its results are released (ended and finalized, or %(days)d days after the end).', hours=fairplay_lead_hours, days=fairplay_delivery_days)) }}
+                                    </label>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% if fairplay_offered %}
+                            {# Stored in FairPlay: loaded with the page, sent after Save only when changed. #}
+                            <div class="ac-card" id="fairplay-panel"{% if exam_lock != 'fairplay' %} style="display:none;"{% endif %}
+                                 data-loaded="{{ '1' if fairplay_settings is not none else '0' }}">
+                                <div class="ac-help" style="margin-bottom:0.4rem;">{{ _('All optional. FairPlay downloads the exam the day before it starts and sends every answer back here after hand-in; grade it here as usual.') }}</div>
+                                {% if fairplay_edit_locked %}
+                                <div class="ac-help" id="fairplay-edit-locked" style="color:#b45309;">
+                                    <i class="fa fa-lock"></i> {{ _('FairPlay holds this exam now: its ID, its problem list and the FairPlay lock can\'t be changed until hand-ins can no longer arrive.') }}
+                                </div>
+                                {% endif %}
+                                {% if fairplay_shared_warning %}
+                                <div class="ac-help" id="fairplay-shared-warning" style="color:#b45309;">
+                                    <i class="fa fa-exclamation-triangle"></i> {{ fairplay_shared_warning }}
+                                </div>
+                                {% endif %}
+                                {% if fairplay_settings is none %}
+                                <div class="ac-help" id="fairplay-settings-unreachable" style="color:#b45309;">
+                                    <i class="fa fa-exclamation-triangle"></i> {{ _('FairPlay not reachable: the settings can\'t be shown or changed right now (%(detail)s). Saving keeps the FairPlay lock; change the settings later here or on the assignment\'s FairPlay tab.', detail=fairplay_settings_error) }}
+                                </div>
+                                {% else %}
+                                {% set fps = fairplay_settings %}
+                                <div class="form-row" style="margin-bottom:0.4rem;">
+                                    <label style="width:140px;">{{ _('Calculator') }}</label>
+                                    <div class="field">
+                                        <select name="fairplay_calculator" id="id_fairplay_calculator" data-fp-field="calculator">
+                                            {% for value, label in fairplay_calculator_choices %}
+                                            <option value="{{ value }}"{% if fps.calculator == value %} selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-row" style="margin-bottom:0.4rem;">
+                                    <label style="width:140px;">{{ _('Allowed websites') }}</label>
+                                    <div class="field">
+                                        <textarea name="fairplay_websites" id="id_fairplay_websites" rows="2" data-fp-field="websites" placeholder="{{ _('One per line: docs.python.org, or a link (optionally after a title)') }}">{{ fps.websites or '' }}</textarea>
+                                        <div class="helptext" id="fairplay-websites-help" style="margin-top:0.2rem;">{{ _('A link opens first and every page of its site is allowed. AI chat, messaging and file-sharing sites are always blocked by FairPlay, even if listed here.') }}</div>
+                                        {% if fps.websites_blocked %}
+                                        <div class="helptext" id="fairplay-websites-blocked" style="color:#b45309;">{{ _('FairPlay will not open:') }} {% for item in fps.websites_blocked %}{{ item.site }}{% if item.reason %} ({{ item.reason }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <label style="display:flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.3rem;">
+                                    <input type="checkbox" name="fairplay_open_book" id="id_fairplay_open_book" data-fp-field="open_book"{% if fps.open_book %} checked{% endif %}> {{ _('Open book: students may add their own notes and files before starting') }}
+                                </label>
+                                <div class="form-row" style="margin-bottom:0.4rem;">
+                                    <label style="width:140px;" for="id_fairplay_upload_opens_days">{{ _('Early upload') }}</label>
+                                    <div class="field">
+                                        <select name="fairplay_upload_opens_days" id="id_fairplay_upload_opens_days" data-fp-field="upload_opens_days">
+                                            {% for days in range(0, 8) %}
+                                            <option value="{{ days }}"{% if (fps.upload_opens_days or 0)|int == days %} selected{% endif %}>{% if days == 0 %}{{ _('Off') }}{% else %}{{ ngettext('%(num)d day before the start', '%(num)d days before the start', days) }}{% endif %}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <div class="ac-help">{{ _('Open book only: students may upload their files this long before the exam (only the upload, no questions).') }}</div>
+                                    </div>
+                                </div>
+                                <label style="display:flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.3rem;">
+                                    <input type="checkbox" name="fairplay_strong_lock" id="id_fairplay_strong_lock" data-fp-field="strong_lock"{% if fps.strong_lock %} checked{% endif %}> {{ _('Strongest lock only (Windows separate desktop, Mac assessment mode)') }}
+                                </label>
+                                <label style="display:flex;align-items:center;gap:0.35rem;font-weight:normal;">
+                                    <input type="checkbox" name="fairplay_resume_needs_approval" id="id_fairplay_resume_needs_approval" data-fp-field="resume_needs_approval"{% if fps.resume_needs_approval %} checked{% endif %}> {{ _('After a crash a student waits for the invigilator') }}
+                                </label>
+                                <div class="form-row" style="margin-top:0.4rem;margin-bottom:0;">
+                                    <label style="width:140px;" for="id_fairplay_review">{{ _('After handing in, students can see') }}</label>
+                                    <div class="field">
+                                        <select name="fairplay_review" id="id_fairplay_review" data-fp-field="review">
+                                            {% for value, label in fairplay_review_choices %}
+                                            <option value="{{ value }}"{% if fps.review == value %} selected{% endif %}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <div class="ac-help" id="id_fairplay_review_help">{{ _('Grade only, grade and points per question, their own answers, or everything. You can change this at any time, also after the exam, on the assignment\'s FairPlay tab.') }}</div>
+                                    </div>
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            <div class="ac-card" id="cheat-seb-section"{% if exam_lock != 'seb' %} style="display:none;"{% endif %}>
                                 <div class="form-row">
                                     <label>{{ _('SEB') }}</label>
                                     <div class="field">
-                                        <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;margin-bottom:0.4rem;">
-                                            <input type="checkbox" id="id_seb_required" name="seb_required"{% if prefill.seb_required %} checked{% endif %}> {{ _('Require Safe Exam Browser') }}{{ tip(_('If enabled, non-staff participants can only access this assignment from inside Safe Exam Browser.')) }}
-                                        </label>
                                         <div class="ac-help" style="margin-bottom:0.4rem;">
                                             {{ _('Staff always bypass. At least one Browser Exam Key hash is required when SEB is on.') }}
                                         </div>

@@ -1,0 +1,7 @@
+{% extends "tabs-base.html" %}
+
+{% block tabs %}
+    {{ make_tab('exams', 'fa-lock', url('fairplay_course', org.id, org.slug), _('Exams')) }}
+    {{ make_tab('students', 'fa-users', url('fairplay_course_students', org.id, org.slug), _('Students')) }}
+    {{ make_tab('login', 'fa-key', url('fairplay_course_login', org.id, org.slug), _('Class login (for first sign-in)')) }}
+{% endblock %}

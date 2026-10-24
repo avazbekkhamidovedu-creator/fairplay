@@ -1,0 +1,346 @@
+{% extends "common-content.html" %}
+
+{% block title_ruler %}{% endblock %}
+
+{% block title_row %}
+    {% set tab = 'fairplay' %}
+    {% set title = contest.name %}
+    {% include "contest/contest-tabs.html" %}
+{% endblock %}
+
+{% block content_media %}
+    {% include "fairplay/style.html" %}
+{% endblock %}
+
+{% macro student_status(status) -%}
+    {%- if status == 'writing' %}{{ _('writing') }}
+    {%- elif status == 'not_started' %}{{ _('not started') }}
+    {%- elif status == 'offline' %}{{ _('offline') }}
+    {%- elif status == 'waiting' %}{{ _('waiting for approval') }}
+    {%- elif status == 'handed_in' %}{{ _('handed in') }}
+    {%- else %}{{ status }}{% endif -%}
+{%- endmacro %}
+
+{% macro confirm_form(action, label, question, yes, button_id='') %}
+    <details class="fairplay-confirm">
+        <summary class="button"{% if button_id %} id="{{ button_id }}"{% endif %}>{{ label }}</summary>
+        <form method="post" action="{{ action }}" class="fairplay-confirm-box">
+            {% csrf_token %}
+            <span>{{ question }}</span>
+            <button type="submit" class="button">{{ yes }}</button>
+            <button type="button" class="button js-cancel">{{ _('Cancel') }}</button>
+        </form>
+    </details>
+{% endmacro %}
+
+{% block content_js_media %}
+    {% include "contest/media-js.html" %}
+    <script type="text/javascript">
+    (function () {
+        function ready(fn) { if (document.readyState !== 'loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
+        var STATUS = {
+            writing: {{ _('writing')|htmltojs }}, not_started: {{ _('not started')|htmltojs }},
+            offline: {{ _('offline')|htmltojs }}, waiting: {{ _('waiting for approval')|htmltojs }},
+            handed_in: {{ _('handed in')|htmltojs }}
+        };
+        var MIN_LEFT = {{ _('%(min)s min left', min='%(min)s')|htmltojs }};
+        function cell(row, text) { var td = document.createElement('td'); td.textContent = text == null ? '' : String(text); row.appendChild(td); return td; }
+        function render(exam) {
+            var tbody = document.querySelector('#fairplay-students tbody');
+            if (!tbody || !exam) return;
+            if (exam.status && exam.status !== document.getElementById('fairplay-root').getAttribute('data-status')) {
+                window.location.reload();
+                return;
+            }
+            var counts = exam.counts || {};
+            document.querySelectorAll('[data-count]').forEach(function (el) {
+                var v = counts[el.getAttribute('data-count')];
+                el.textContent = v == null ? '0' : String(v);
+            });
+            while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+            (exam.students || []).forEach(function (s) {
+                var tr = document.createElement('tr');
+                cell(tr, s.netid); cell(tr, s.name);
+                cell(tr, STATUS[s.status] || s.status);
+                cell(tr, (s.answered == null ? '' : s.answered) + ' / ' + (s.questions == null ? '' : s.questions));
+                cell(tr, s.seconds_left == null ? '' : MIN_LEFT.replace('%(min)s', Math.ceil(s.seconds_left / 60)));
+                cell(tr, (s.warnings || []).join('; '));
+                tbody.appendChild(tr);
+            });
+            var waiting = (exam.students || []).filter(function (s) { return s.status === 'waiting'; });
+            var known = Array.prototype.map.call(document.querySelectorAll('#fairplay-waiting [data-netid]'),
+                function (el) { return el.getAttribute('data-netid'); }).sort().join(',');
+            if (waiting.map(function (s) { return String(s.netid); }).sort().join(',') !== known) {
+                window.location.reload();
+            }
+            var note = document.getElementById('fairplay-poll-error');
+            if (note) note.hidden = true;
+        }
+        ready(function () {
+            document.querySelectorAll('.fairplay-confirm .js-cancel').forEach(function (button) {
+                button.addEventListener('click', function () { button.closest('details').open = false; });
+            });
+            var toggle = document.getElementById('fairplay-invigilator-toggle');
+            if (toggle) {
+                toggle.addEventListener('click', function () {
+                    var code = document.getElementById('fairplay-invigilator-code');
+                    var hidden = code.hidden;
+                    code.hidden = !hidden;
+                    document.getElementById('fairplay-invigilator-mask').hidden = hidden;
+                    toggle.textContent = toggle.getAttribute(hidden ? 'data-hide' : 'data-show');
+                });
+            }
+            document.querySelectorAll('input[name="open_to"]').forEach(function (radio) {
+                radio.addEventListener('change', function () {
+                    var pick = document.getElementById('fairplay-pick');
+                    if (pick) pick.hidden = document.querySelector('input[name="open_to"]:checked').value !== 'picked';
+                });
+            });
+            var root = document.getElementById('fairplay-root');
+            if (root && root.getAttribute('data-status') === 'live') {
+                var url = root.getAttribute('data-poll-url');
+                // One poll at a time, 5 s after the last answer, so a slow FairPlay can't pile up requests.
+                var POLL_MS = 5000, timer = null, busy = false;
+                var schedule = function () {
+                    if (timer === null && !busy && !document.hidden) timer = setTimeout(poll, POLL_MS);
+                };
+                var poll = function () {
+                    timer = null;
+                    if (document.hidden) return;
+                    busy = true;
+                    fetch(url, {credentials: 'same-origin', headers: {'Accept': 'application/json'}})
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            var note = document.getElementById('fairplay-poll-error');
+                            if (data.ok) { render(data.exam); if (note) note.hidden = true; }
+                            else if (note) { note.textContent = data.detail; note.hidden = false; }
+                        })
+                        .catch(function () {})
+                        .then(function () { busy = false; schedule(); });
+                };
+                document.addEventListener('visibilitychange', function () {
+                    if (document.hidden) { if (timer !== null) { clearTimeout(timer); timer = null; } }
+                    else schedule();
+                });
+                schedule();
+            }
+        });
+    })();
+    </script>
+{% endblock %}
+
+{% block body %}
+<div class="fairplay-page" id="fairplay-root" data-status="{{ fp_status or '' }}" data-poll-url="{{ url('contest_fairplay_status', contest.key) }}">
+    {% if fp_error %}
+        <div class="fairplay-unreachable" id="fairplay-unreachable"><i class="fa fa-exclamation-triangle"></i> {{ fp_error }}.
+            {{ _('FairPlay not reachable: the exam\'s settings can\'t be shown or changed right now.') }}</div>
+    {% elif not fp.synced %}
+        <div class="fairplay-unreachable" id="fairplay-not-synced">{{ _('FairPlay has not received this assignment yet. It picks up changes every few minutes; reload this page later.') }}</div>
+    {% endif %}
+
+    {% if fp_unsaved %}
+        <div class="fairplay-unreachable" id="fairplay-unsaved">
+            <i class="fa fa-exclamation-triangle"></i> {{ _('These FairPlay settings were NOT saved (%(reason)s). They are filled in below: check them and save.', reason=fp_unsaved.reason) }}
+        </div>
+    {% endif %}
+
+    {% if fp_not_listed %}
+        <div class="fairplay-unreachable" id="fairplay-not-listed">
+            <i class="fa fa-exclamation-triangle"></i> {{ _('This assignment is hidden (not visible), so FairPlay is not given it. Make it visible to run it in FairPlay.') }}
+        </div>
+    {% endif %}
+
+    {% for warning in delivery_warnings %}
+        {% if loop.first %}<div class="fairplay-unreachable" id="fairplay-delivery-warnings"><i class="fa fa-exclamation-triangle"></i>
+            {{ _('FairPlay delivered a hand-in for these students while their answers were already on file here without a record of the earlier hand-in, so it was not filed twice. Check their submissions; to accept the new hand-in, clear the old one on the student\'s report page.') }}<ul>{% endif %}
+        <li><a href="{{ url('contest_fairplay_report', contest.key, warning.username) }}">{{ warning.username }}</a>{% if warning.at %} ({{ warning.at|date(_('N j, Y, g:i a')) }}){% endif %}</li>
+        {% if loop.last %}</ul></div>{% endif %}
+    {% endfor %}
+
+    {% if fp_websites_blocked %}
+        <div class="fairplay-unreachable" id="fairplay-websites-blocked">
+            <i class="fa fa-exclamation-triangle"></i> {{ _('FairPlay will not open these sites during the exam:') }}
+            <ul>
+                {% for item in fp_websites_blocked %}
+                    <li><code>{{ item.site }}</code>{% if item.reason %} ({{ item.reason }}){% endif %}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    {% if fp and fp.synced %}
+        {% if fp_status == 'draft' %}
+            <div class="fairplay-section" id="fairplay-before">
+                <h3>{{ _('Before the exam') }}</h3>
+                <table class="fairplay-settings">
+                    <tr><td>{{ _('Questions') }}</td><td>{{ fp.questions }} ({{ _('%(points)s points', points=fp.points) }})</td></tr>
+                    <tr><td>{{ _('Package') }}</td><td>{% if fp.package_ready %}{{ _('ready') }}{% else %}{{ _('not ready yet (it is fetched 24 hours before the start)') }}{% endif %}</td></tr>
+                    <tr><td>{{ _('Students') }}</td><td>{{ _('%(set_up)s of %(roster)s set up in FairPlay', set_up=fp_counts.set_up or 0, roster=fp_counts.roster or 0) }}</td></tr>
+                </table>
+                {% if not_set_up %}
+                    <p class="fairplay-unreachable" id="fairplay-not-set-up">
+                        {{ ngettext('%(num)d student has not set up FairPlay yet. Give the class login to them before the exam.', '%(num)d students have not set up FairPlay yet. Give the class login to them before the exam.', not_set_up) }}
+                    </p>
+                {% endif %}
+                <form method="post" action="{{ url('contest_fairplay_action', contest.key, 'open') }}" id="fairplay-open-form">
+                    {% csrf_token %}
+                    <h4>{{ _('Who can start') }}</h4>
+                    <label><input type="radio" name="open_to" value="all"{% if open_to_all %} checked{% endif %}> {{ _('Everyone on the student list') }}</label><br>
+                    <label><input type="radio" name="open_to" value="picked"{% if not open_to_all %} checked{% endif %}> {{ _('Only the students I pick') }}</label>
+                    <div id="fairplay-pick" class="fairplay-pick"{% if open_to_all %} hidden{% endif %}>
+                        {% for profile in roster %}
+                            <label style="display:block"><input type="checkbox" name="netids" value="{{ profile.user.username }}"{% if profile.user.username.lower() in open_to_set %} checked{% endif %}>
+                                {{ profile.user.username }} {{ profile.user.first_name }} {{ profile.user.last_name }}</label>
+                        {% endfor %}
+                    </div>
+                    <p><button type="submit" class="button" style="width:auto" id="fairplay-open-btn">{{ _('Open exam') }}</button></p>
+                </form>
+            </div>
+
+        {% elif fp_status == 'live' %}
+            <div class="fairplay-section" id="fairplay-live">
+                <div class="fairplay-codes">
+                    <div>
+                        <div>{{ _('Start code') }}</div>
+                        <div class="fairplay-code" id="fairplay-start-code">{{ fp.start_code or '' }}</div>
+                        <form method="post" class="fairplay-inline" action="{{ url('contest_fairplay_action', contest.key, 'new-code') }}">
+                            {% csrf_token %}
+                            <button type="submit" class="button" style="width:auto">{{ _('New code') }}</button>
+                        </form>
+                    </div>
+                    <div>
+                        <div>{{ _('Invigilator code') }}</div>
+                        <div class="fairplay-code"><span id="fairplay-invigilator-mask">••••••</span><span id="fairplay-invigilator-code" hidden>{{ fp.invigilator_code or '' }}</span></div>
+                        <button type="button" class="button" style="width:auto" id="fairplay-invigilator-toggle"
+                                data-show="{{ _('Show') }}" data-hide="{{ _('Hide') }}">{{ _('Show') }}</button>
+                    </div>
+                    <div>
+                        <div>{{ _('Closes at') }}</div>
+                        <div class="fairplay-code" style="font-size:1.3em">{{ fp.closes_at|fp_time }}</div>
+                        <form method="post" class="fairplay-inline" action="{{ url('contest_fairplay_action', contest.key, 'add-time') }}">
+                            {% csrf_token %}
+                            <input type="hidden" name="minutes" value="10">
+                            <button type="submit" class="button" style="width:auto">{{ _('Add 10 min') }}</button>
+                        </form>
+                        {{ confirm_form(url('contest_fairplay_action', contest.key, 'close'), _('Close'),
+                                        _('Close the exam now? Students who are writing hand in what is saved.'), _('Yes, close'),
+                                        'fairplay-close-btn') }}
+                    </div>
+                </div>
+                <div class="fairplay-counts">
+                    {% for key, label in (('roster', _('On the list')), ('set_up', _('Set up')), ('not_started', _('Not started')),
+                                          ('writing', _('Writing')), ('offline', _('Offline')), ('waiting', _('Waiting')),
+                                          ('handed_in', _('Handed in'))) %}
+                        <div><strong data-count="{{ key }}">{{ fp_counts[key] or 0 }}</strong>{{ label }}</div>
+                    {% endfor %}
+                </div>
+                <div id="fairplay-waiting">
+                    {% if fp_waiting %}
+                        <h4>{{ _('Waiting for your approval') }}</h4>
+                        {% for student in fp_waiting %}
+                            <form method="post" class="fairplay-inline" data-netid="{{ student.netid }}" action="{{ url('contest_fairplay_action', contest.key, 'approve') }}">
+                                {% csrf_token %}
+                                <input type="hidden" name="netid" value="{{ student.netid }}">
+                                {{ student.name }} ({{ student.netid }})
+                                <button type="submit" class="button" style="width:auto">{{ _('Approve') }}</button>
+                            </form>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+                <p class="helptext" id="fairplay-poll-error" hidden></p>
+            </div>
+
+        {% elif fp_status == 'closed' %}
+            <div class="fairplay-section" id="fairplay-closed">
+                <h3>{{ _('The exam is closed') }}</h3>
+                <p>{{ _('Open a student\'s report to see their integrity events.') }}</p>
+            </div>
+        {% endif %}
+
+        {% if fp_status in ('live', 'closed') %}
+            <table class="table" id="fairplay-students">
+                <thead><tr><th>{{ _('NetID') }}</th><th>{{ _('Name') }}</th><th>{{ _('Status') }}</th><th>{{ _('Answered') }}</th><th>{{ _('Time left') }}</th><th>{{ _('Warnings') }}</th>{% if fp_status == 'closed' %}<th></th>{% endif %}</tr></thead>
+                <tbody>
+                {% for s in fp_students %}
+                    <tr>
+                        <td>{{ s.netid }}</td>
+                        <td>{{ s.name }}</td>
+                        <td>{{ student_status(s.status) }}</td>
+                        <td>{{ s.answered }} / {{ s.questions }}</td>
+                        <td>{% if s.seconds_left is not none and fp_status == 'live' %}{{ _('%(min)s min left', min=((s.seconds_left + 59) // 60)|int) }}{% endif %}</td>
+                        <td>{{ (s.warnings or [])|join('; ') }}</td>
+                        {% if fp_status == 'closed' %}
+                            <td><a href="{{ url('contest_fairplay_report', contest.key, s.netid) }}">{{ _('Report') }}</a></td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    {% endif %}
+
+    {# The exam's settings are kept by FairPlay: shown and changed only while it answers. #}
+    <div class="fairplay-section" id="fairplay-settings">
+        <h3>{{ _('Exam settings') }}</h3>
+        {% if settings_form is none %}
+            <p class="fairplay-unreachable" id="fairplay-settings-unreachable">{{ _('FairPlay not reachable: the settings can\'t be shown or changed right now.') }}</p>
+        {% else %}
+            <form method="post" action="{{ url('contest_fairplay_action', contest.key, 'settings') }}" id="fairplay-settings-form">
+                {% csrf_token %}
+                <fieldset{% if not settings_editable %} disabled{% endif %} style="border:0;padding:0;margin:0">
+                <table class="fairplay-settings">
+                    <tr><td><label for="fairplay-calculator">{{ _('Calculator') }}</label></td><td>
+                        <select name="calculator" id="fairplay-calculator">
+                            {% for value, label in calculator_choices %}
+                                <option value="{{ value }}"{% if settings_form.calculator == value %} selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select></td></tr>
+                    <tr><td><label for="fairplay-websites">{{ _('Allowed websites') }}</label></td><td>
+                        <textarea name="websites" id="fairplay-websites" rows="3" style="width:100%" placeholder="{{ _('One per line: docs.python.org, or a link (optionally after a title)') }}">{{ settings_form.websites }}</textarea>
+                        <div class="helptext">{{ _('A link opens first and every page of its site is allowed. AI chat, messaging and file-sharing sites are always blocked by FairPlay, even if listed here.') }}</div>
+                        {% for item in fp_companions %}
+                            <div class="helptext">{{ _('Also opened so %(name)s works:', name=item.name) }} {{ item.sites|join(', ') }}</div>
+                        {% endfor %}
+                    </td></tr>
+                    <tr><td>{{ _('Open book') }}</td><td><label><input type="checkbox" name="open_book" id="fairplay-open-book"{% if settings_form.open_book %} checked{% endif %}> {{ _('Students may add their own notes and files before starting') }}</label></td></tr>
+                    <tr><td><label for="fairplay-upload-days">{{ _('Early upload') }}</label></td><td>
+                        <select name="upload_opens_days" id="fairplay-upload-days">
+                            {% for days in range(0, 8) %}
+                                <option value="{{ days }}"{% if (settings_form.upload_opens_days or 0)|int == days %} selected{% endif %}>{% if days == 0 %}{{ _('Off') }}{% else %}{{ ngettext('%(num)d day before the start', '%(num)d days before the start', days) }}{% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="helptext">{{ _('Open book only: students may upload their files this long before the exam (only the upload, no questions).') }}</div>
+                    </td></tr>
+                    <tr><td>{{ _('Strongest lock only') }}</td><td><label><input type="checkbox" name="strong_lock" id="fairplay-strong-lock"{% if settings_form.strong_lock %} checked{% endif %}> {{ _('Windows separate desktop, Mac assessment mode') }}</label></td></tr>
+                    <tr><td>{{ _('After a crash') }}</td><td><label><input type="checkbox" name="resume_needs_approval" id="fairplay-resume-approval"{% if settings_form.resume_needs_approval %} checked{% endif %}> {{ _('The student waits for your approval') }}</label></td></tr>
+                </table>
+                {% if settings_editable %}
+                    <p class="helptext">{{ _('Fixed once the first student has started.') }}</p>
+                    <p><button type="submit" class="button" style="width:auto" id="fairplay-settings-save">{{ _('Save settings') }}</button></p>
+                {% endif %}
+                </fieldset>
+            </form>
+        {% endif %}
+    </div>
+
+    {# Any time (before, during or after the exam), while FairPlay answers. #}
+    <div class="fairplay-section" id="fairplay-review">
+        <h3>{{ _('Student review after hand-in') }}</h3>
+        {% if fp_error %}
+            <p class="fairplay-unreachable" id="fairplay-review-unreachable">{{ _('FairPlay not reachable: this setting can\'t be shown or changed right now.') }}</p>
+        {% else %}
+        <form method="post" action="{{ url('contest_fairplay_action', contest.key, 'review') }}" id="fairplay-review-form">
+            {% csrf_token %}
+            <p>{{ _('After handing in, students can see:') }}</p>
+            {% for value, label in review_choices %}
+                <label style="display:block;margin-bottom:0.45rem" id="fairplay-review-{{ value }}"><input type="radio" name="review" aria-describedby="fairplay-review-help-{{ value }}" value="{{ value }}"{% if review_value == value %} checked{% endif %}> {{ label }}
+                    <span class="helptext" id="fairplay-review-help-{{ value }}" style="display:block;margin-left:1.6rem;font-weight:normal">{{ review_help[value] }}</span>
+                </label>
+            {% endfor %}
+            <p class="helptext">{{ _('You can change this at any time. Scores and feedback appear only for results you have released here.') }}</p>
+            <p><button type="submit" class="button" style="width:auto" id="fairplay-review-save">{{ _('Save') }}</button></p>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
