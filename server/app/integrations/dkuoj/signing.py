@@ -78,11 +78,16 @@ class BadSignature(Exception):
     pass
 
 
-async def verify(token: str, direction: str, method: str, path: str, headers, body: bytes,
-                 store=None, now: float | None = None) -> str:
+async def verify(token: str | list[str] | tuple[str, ...], direction: str, method: str, path: str, headers,
+                 body: bytes, store=None, now: float | None = None) -> str:
     """Check a signed request; returns the acting user ("" when none). Raises BadSignature.
-    `headers` is a case-insensitive mapping. The nonce is remembered (store.setnx) only
-    after the signature is right, so nobody can burn another's nonces."""
+    `token` may be several tokens (rotation, docs/dkuoj-bridge-v2.md §1): a signature made
+    with any of them is accepted (every one is compared, so the time taken doesn't tell
+    which). `headers` is a case-insensitive mapping. The nonce is remembered (store.setnx)
+    only after the signature is right, so nobody can burn another's nonces."""
+    tokens = [token] if isinstance(token, str) else [t for t in token if t]
+    if not tokens:
+        raise BadSignature()
     ts_raw = (headers.get(H_TIMESTAMP) or "").strip()
     nonce = (headers.get(H_NONCE) or "").strip()
     sig = (headers.get(H_SIGNATURE) or "").strip().lower()
@@ -94,8 +99,11 @@ async def verify(token: str, direction: str, method: str, path: str, headers, bo
     ts = int(ts_raw)
     if abs((now if now is not None else time.time()) - ts) > MAX_SKEW_S:
         raise BadSignature()
-    expected = signature(token, direction, method, path, ts_raw, nonce, acting, body)
-    if not hmac.compare_digest(expected, sig):
+    good = False
+    for t in tokens:
+        expected = signature(t, direction, method, path, ts_raw, nonce, acting, body)
+        good = hmac.compare_digest(expected, sig) or good
+    if not good:
         raise BadSignature()
     if store is not None and not await store.setnx(f"fpb:nonce:{nonce}", "1", NONCE_TTL_S):
         raise BadSignature()

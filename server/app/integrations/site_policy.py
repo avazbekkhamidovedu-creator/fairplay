@@ -1,0 +1,119 @@
+"""FairPlay's own say over the websites an EXTERNAL source opens inside the lock
+(security review 2026-10-24).
+
+A FairPlay teacher picks an exam's allowed websites in FairPlay; for an exam that comes from
+another system (DKU OJ) that system's settings used to decide alone, so a compromised or
+careless source could open chatgpt.com or web.whatsapp.com during an exam. Every site an
+external source asks for now passes this policy first:
+
+- a built-in deny-list (AI chat and assistants, messaging, file sharing and notes). A deny
+  entry covers the domain and all its subdomains; an allowed entry is refused when it is a
+  denied host, or when it is a wildcard ("*.google.com") that reaches one (gemini.google.com);
+- optionally FAIRPLAY_EXTERNAL_SITE_ALLOWLIST (comma-separated site names, the same form as
+  the teacher's list: "docs.python.org,*.cppreference.com"): when set, ONLY sites it covers
+  may be used.
+
+Dropped sites are kept with their reason (`websites_blocked: [{"site", "reason"}]`) so the
+source's own page can show the professor what FairPlay removed. FairPlay-native exams are
+not touched: their teacher chose the sites in FairPlay itself.
+"""
+from __future__ import annotations
+
+import logging
+import os
+
+log = logging.getLogger("proctora.integrations")
+
+ENV_ALLOWLIST = "FAIRPLAY_EXTERNAL_SITE_ALLOWLIST"
+WILDCARD = "*."
+
+AI = "AI assistant"
+MESSAGING = "messaging"
+SHARING = "file sharing / notes"
+NOT_ALLOWED = "not on this FairPlay server's list of sites for external exams"
+
+# domain -> reason; each entry covers the domain and its subdomains ("*." is the same thing)
+DENY_SUFFIX: dict[str, str] = {d: AI for d in (
+    "openai.com", "chatgpt.com", "oaiusercontent.com", "claude.ai", "anthropic.com",
+    "gemini.google.com", "bard.google.com", "aistudio.google.com", "notebooklm.google.com",
+    "copilot.microsoft.com", "copilot.cloud.microsoft", "bing.com", "perplexity.ai", "poe.com",
+    "deepseek.com", "kimi.moonshot.cn", "kimi.com", "moonshot.cn", "doubao.com", "tongyi.aliyun.com",
+    "qianwen.aliyun.com", "yiyan.baidu.com", "chatglm.cn", "yuanbao.tencent.com", "character.ai",
+    "you.com", "phind.com", "mistral.ai", "groq.com", "x.ai", "grok.com", "meta.ai", "pi.ai",
+    "cohere.com", "huggingface.co", "hf.co", "githubcopilot.com", "copilot.github.com",
+    "blackbox.ai",
+    "chatbot.theb.ai", "quillbot.com")}
+DENY_SUFFIX.update({d: MESSAGING for d in (
+    "whatsapp.com", "whatsapp.net", "telegram.org", "telegram.me", "t.me", "wechat.com", "weixin.qq.com",
+    "wx.qq.com", "qq.com", "messenger.com", "facebook.com", "instagram.com", "discord.com",
+    "discord.gg", "discordapp.com", "slack.com", "teams.microsoft.com", "teams.live.com",
+    "signal.org", "line.me", "skype.com", "mail.google.com", "outlook.live.com",
+    "outlook.office.com", "chat.google.com", "x.com", "twitter.com")})
+DENY_SUFFIX.update({d: SHARING for d in (
+    "drive.google.com", "docs.google.com", "sheets.google.com", "slides.google.com",
+    "keep.google.com", "dropbox.com", "onedrive.live.com", "1drv.ms", "sharepoint.com",
+    "box.com", "notion.so", "notion.site", "evernote.com", "pastebin.com", "paste.ee",
+    "hastebin.com", "gist.github.com", "gist.githubusercontent.com", "raw.githubusercontent.com",
+    "wetransfer.com", "mega.nz", "pan.baidu.com", "weiyun.com", "kdocs.cn", "docs.qq.com",
+    "shimo.im", "yuque.com", "feishu.cn", "larksuite.com", "codeshare.io")})
+# exact hosts only (their subdomains, e.g. docs.github.com, stay possible)
+DENY_EXACT: dict[str, str] = {"github.com": AI + " (GitHub Copilot chat)", "www.github.com": AI + " (GitHub Copilot chat)"}
+
+
+def _host(entry: str) -> tuple[str, bool]:
+    e = entry.strip().lower().rstrip(".")
+    if e.startswith(WILDCARD):
+        return e[len(WILDCARD):], True
+    return e, False
+
+
+def _under(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def denied(entry: str) -> str | None:
+    """The reason a site entry is refused for an external exam, or None."""
+    host, wild = _host(entry)
+    if not host:
+        return None
+    for d, why in DENY_EXACT.items():
+        if host == d or (wild and _under(d, host)):
+            return why
+    for d, why in DENY_SUFFIX.items():
+        if _under(host, d) or (wild and _under(d, host)):
+            return why
+    return None
+
+
+def allowlist() -> list[str] | None:
+    """FAIRPLAY_EXTERNAL_SITE_ALLOWLIST as site entries, or None when unset."""
+    raw = os.environ.get(ENV_ALLOWLIST, "")
+    items = [x.strip().lower().rstrip(".") for x in raw.split(",") if x.strip()]
+    return items or None
+
+
+def _allowed_by(entry: str, allow: list[str]) -> bool:
+    host, wild = _host(entry)
+    for a in allow:
+        ah, awild = _host(a)
+        if awild:
+            if _under(host, ah):              # "*.x" covers x, its subdomains and "*.sub.x"
+                return True
+        elif not wild and host == ah:         # a plain entry covers only itself
+            return True
+    return False
+
+
+def filter_sites(sites: list[str]) -> tuple[list[str], list[dict]]:
+    """(the sites kept, [{"site", "reason"}] for the ones dropped), order kept."""
+    allow = allowlist()
+    kept, blocked = [], []
+    for s in sites:
+        why = denied(s)
+        if why is None and allow is not None and not _allowed_by(s, allow):
+            why = NOT_ALLOWED
+        if why is None:
+            kept.append(s)
+        else:
+            blocked.append({"site": s, "reason": why})
+    return kept, blocked

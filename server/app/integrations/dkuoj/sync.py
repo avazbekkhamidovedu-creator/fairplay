@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import ClassMember, Exam, SchoolClass, User
 from ...schemas import normalize_website
+from ..sanitize import clean_markdown
+from ..site_policy import filter_sites
 from ...services import invalidate_exam, new_id
 from ...store import get_store
 from ...timeutil import iso, parse_iso, utcnow
@@ -203,17 +205,25 @@ async def _owner(session: AsyncSession) -> User:
 def _settings(item: dict) -> dict:
     s = item.get("settings") or {}
     calc = s.get("calculator")
-    sites = []
+    sites, unusable = [], []
     for w in s.get("websites") or []:
         try:
             h = normalize_website(str(w))
-        except ValueError:
+        except ValueError as exc:
             log.warning("DKU OJ exam %s: website %r skipped", item.get("key"), w)
+            unusable.append({"site": str(w)[:200], "reason": str(exc)[:200]})
             continue
         if h not in sites:
             sites.append(h)
+    # Security review 2026-10-24: FairPlay's own policy for sites an external source opens
+    # in the lock (app.integrations.site_policy); the dropped ones go to websites_blocked.
+    sites, blocked = filter_sites(sites[:20])
+    blocked = (unusable + blocked)[:40]
+    if blocked:
+        log.warning("DKU OJ exam %s: websites refused by FairPlay: %s", item.get("key"),
+                    ", ".join(b["site"] for b in blocked))
     return {"calculator": calc if calc in ("off", "scientific", "graphing") else "off",
-            "open_book": bool(s.get("open_book")), "websites": sites[:20],
+            "open_book": bool(s.get("open_book")), "websites": sites, "websites_blocked": blocked,
             "require_strong_lock": bool(s.get("strong_lock")),
             "resume_needs_approval": s.get("resume_needs_approval") is not False}
 
@@ -231,7 +241,7 @@ def _duration_min(item: dict) -> int:
 META_KEYS = ("course", "classes", "start_time", "end_time", "time_limit_seconds", "results_hidden",
              "package_version", "updated_at", "settings")
 KEEP_META = ("results_cursor", "package_retry_at", "package_error", "package_failed_version",
-             "description_md", "assets", "extra_close_minutes", "review_updated_at")
+             "description_md", "assets", "extra_close_minutes", "review_updated_at", "websites_blocked")
 
 
 def apply_review(e: Exam, value, updated_at) -> bool:
@@ -306,7 +316,9 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         e.scheduled_at = _time(item.get("start_time"))
         # minutes added with "Add time" stay added (exam_control.extend_exam)
         e.duration_min = _duration_min(item) + extra_close_minutes(e)
-        for f, v in _settings(item).items():
+        tools = _settings(item)
+        meta["websites_blocked"] = tools.pop("websites_blocked")
+        for f, v in tools.items():
             setattr(e, f, v)
     oj_settings = item.get("settings") or {}
     apply_review(e, oj_settings.get("review"), oj_settings.get("review_updated_at"))
@@ -523,7 +535,7 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
         meta.pop("package_error", None)
         meta.pop("package_failed_version", None)
         meta["package_version"] = version
-        meta["description_md"] = str(pkg.get("description_md") or "")[:20000]
+        meta["description_md"] = clean_markdown(str(pkg.get("description_md") or "")[:20000])
         meta["assets"] = [a["name"] for a in assets]
         # Only while nobody started: the first start freezes the version (same row lock).
         res = await session.execute(

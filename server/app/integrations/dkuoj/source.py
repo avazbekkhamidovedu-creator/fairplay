@@ -33,6 +33,8 @@ class DkuojSource(ExternalSource):
 
     def configure(self, settings) -> None:
         self.config = DkuojConfig.from_env(getattr(settings, "public_url", ""))
+        # security review 2026-10-24: no plain http:// to another machine (config.check)
+        self.config.check(dev=bool(getattr(settings, "dev", False)))
 
     def routers(self) -> list:
         from .routes_v2 import router as bridge_router

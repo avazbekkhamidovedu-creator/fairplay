@@ -821,7 +821,10 @@ source-agnostic). Code: `server/app/integrations/` (`base.py` = `ExternalSource`
 `registry.py` = `integration_for(exam)`, None for FairPlay exams; `dkuoj/` = the DKU OJ source),
 `server/app/question_types.py` (the extended question types), `server/app/answer_files.py`.
 DKU OJ settings are read only by `integrations/dkuoj/config.py`: `DKUOJ_URL`, `DKUOJ_TOKEN` (both
-set = connected), `DKUOJ_SYNC_SECONDS` (120), `DKUOJ_DELIVERY_RPS` (10). `FAIRPLAY_PUBLIC_URL`
+set = connected; the token may be `new,old` while rotating), `DKUOJ_SYNC_SECONDS` (120),
+`DKUOJ_DELIVERY_RPS` (10), `DKUOJ_ALLOW_INSECURE` (plain http to another machine; refused
+otherwise). `FAIRPLAY_EXTERNAL_SITE_ALLOWLIST` limits the websites an external exam may open
+(`integrations/site_policy.py`). `FAIRPLAY_PUBLIC_URL`
 (FairPlay's own address) makes report links absolute (`<it>/teacher/exams/<id>/submissions/<aid>`);
 DKU OJ drops links that are not http(s).
 A switched-off integration keeps its exams readable as read-only archives (they cannot start).

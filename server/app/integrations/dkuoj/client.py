@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import zlib
 from typing import Any, Callable
 
 import httpx
@@ -26,6 +27,13 @@ BACKOFF_BASE_S = 1.0
 MAX_RETRY_AFTER_S = 10.0
 MAX_PACKAGE_BYTES = 5 * 1024 * 1024
 MAX_ASSET_BYTES = 10 * 1024 * 1024
+# Security review 2026-10-24: every answer is read as a stream and cut off past a cap counted
+# on the DEcompressed bytes (a 1 MiB gzip bomb used to become 1-4 GiB in memory), and every
+# try has a total deadline (a body trickled one byte per 2 s used to beat the read timeout).
+MAX_JSON_BYTES = 2 * 1024 * 1024      # exam list / roster / student classes / results pages
+MAX_SMALL_BYTES = 256 * 1024          # upload / submission receipts
+MAX_ERROR_BYTES = 64 * 1024           # the body of a refusal (only its first 300 chars are kept)
+MAX_TOTAL_S = 30.0                    # per try: send + whole body, at most
 DJANGO_PATH_SAFE = ":@&+$,-_.!~*'()"      # django.utils.encoding.escape_uri_path, minus "/"
 
 TransportFactory = Callable[[str], httpx.AsyncBaseTransport | None]
@@ -87,7 +95,8 @@ class DkuojClient:
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(READ_TIMEOUT_S, connect=CONNECT_TIMEOUT_S), transport=transport,
             follow_redirects=False,
-            headers={"Accept": "application/json", "User-Agent": "FairPlay-DKUOJ-Bridge/2.0"})
+            headers={"Accept": "application/json", "Accept-Encoding": "identity",
+                     "User-Agent": "FairPlay-DKUOJ-Bridge/2.0"})
 
     @classmethod
     def from_config(cls, cfg) -> "DkuojClient":
@@ -105,11 +114,15 @@ class DkuojClient:
     async def request(self, method: str, path: str, *, params: dict | None = None,
                       json: Any = None, content: bytes | None = None,
                       headers: dict | None = None, attempts: int = MAX_ATTEMPTS,
-                      ok: tuple[int, ...] = (200,), timeout: float | None = None) -> httpx.Response:
-        """One call with retries on 429 / 5xx / network errors. Returns the response when
-        its status is in `ok`; raises OjError otherwise. `timeout` (seconds) replaces the
-        default connect / read timeouts for this call (a page someone is waiting on)."""
+                      ok: tuple[int, ...] = (200,), timeout: float | None = None,
+                      max_bytes: int = MAX_JSON_BYTES, too_big: str | None = None) -> httpx.Response:
+        """One call with retries on 429 / 5xx / network errors. Returns the response (body
+        read) when its status is in `ok`; raises OjError otherwise. `timeout` (seconds)
+        replaces the default connect / read timeouts for this call (a page someone is
+        waiting on). Each try ends after min(2 x timeout, MAX_TOTAL_S) whatever the server
+        does; a body larger than `max_bytes` once decompressed is refused (`too_big`)."""
         url = f"{self.base_url}{API}/{path.lstrip('/')}"
+        total = min(MAX_TOTAL_S, 2 * (timeout or READ_TIMEOUT_S))
         err: OjError | None = None
         for attempt in range(max(1, attempts)):
             try:
@@ -120,8 +133,8 @@ class DkuojClient:
                 body = req.read()
                 path = req.url.raw_path.decode("ascii")
                 req.headers.update(signing.sign_headers(self._token, signing.FP_TO_OJ, method, path, body))
-                resp = await self._client.send(req)
-            except httpx.TimeoutException:
+                resp = await asyncio.wait_for(self._send(req, ok, max_bytes, too_big), total)
+            except (httpx.TimeoutException, asyncio.TimeoutError):
                 err = OjError("DKU OJ did not answer in time")
             except httpx.HTTPError as exc:
                 err = OjError(f"Could not reach DKU OJ ({type(exc).__name__})")
@@ -142,6 +155,24 @@ class DkuojClient:
                 await sleep(min(wait, MAX_RETRY_AFTER_S))
         assert err is not None
         raise err
+
+    async def _send(self, req: httpx.Request, ok: tuple[int, ...], max_bytes: int,
+                    too_big: str | None) -> httpx.Response:
+        """Send and read the body as a stream, at most `max_bytes` (MAX_ERROR_BYTES for a
+        refusal) after decompression. Returns a plain, fully read Response."""
+        resp = await self._client.send(req, stream=True)
+        try:
+            cap = max_bytes if resp.status_code in ok else MAX_ERROR_BYTES
+            data = await _read_capped(resp, cap)
+        finally:
+            await resp.aclose()
+        if data is None:
+            if resp.status_code in ok:
+                raise OjError(too_big or "DKU OJ sent an answer that is too large", resp.status_code)
+            data = b""                       # an oversized refusal: its status is enough
+        hdrs = [(k, v) for k, v in resp.headers.multi_items()
+                if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")]
+        return httpx.Response(resp.status_code, headers=hdrs, content=data, request=req)
 
     @staticmethod
     def _json(resp: httpx.Response, kind: type = dict) -> Any:
@@ -164,21 +195,16 @@ class DkuojClient:
         """(status, package or None, retry_after). 200 = new package, 304 = unchanged,
         425 = too early (retry_after seconds), 404 = not a FairPlay exam (any more)."""
         headers = {"If-None-Match": f'"{etag}"'} if etag else None
-        try:
-            resp = await self.request("GET", f"exams/{key}/package", headers=headers,
-                                      ok=(200, 304, 404, 425))
-        except OjError:
-            raise
+        resp = await self.request("GET", f"exams/{key}/package", headers=headers,
+                                  ok=(200, 304, 404, 425), max_bytes=MAX_PACKAGE_BYTES,
+                                  too_big="The exam package is larger than 5 MB")
         if resp.status_code == 200:
-            if len(resp.content) > MAX_PACKAGE_BYTES:
-                raise OjError("The exam package is larger than 5 MB", 200)
             return 200, self._json(resp), None
         return resp.status_code, None, _retry_after(resp)
 
     async def asset(self, key: str, name: str) -> tuple[bytes, str]:
-        resp = await self.request("GET", f"exams/{key}/assets/{name}")
-        if len(resp.content) > MAX_ASSET_BYTES:
-            raise OjError(f"The file {name} is larger than 10 MB", 200)
+        resp = await self.request("GET", f"exams/{key}/assets/{name}", max_bytes=MAX_ASSET_BYTES,
+                                  too_big=f"The file {name} is larger than 10 MB")
         return resp.content, resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
 
     async def upload(self, key: str, username: str, question_id: str, filename: str,
@@ -188,7 +214,7 @@ class DkuojClient:
         # signed body).
         resp = await self.request(
             "POST", f"exams/{key}/uploads", content=data, attempts=attempts,
-            ok=(200, 201),
+            ok=(200, 201), max_bytes=MAX_SMALL_BYTES,
             params={"username": username, "question_id": question_id, "filename": _filename_safe(filename)},
             headers={"X-Sha256": sha256, "Content-Type": "application/octet-stream"})
         up = self._json(resp).get("upload_id")
@@ -197,7 +223,8 @@ class DkuojClient:
         return up
 
     async def submit(self, key: str, body: dict, attempts: int = MAX_ATTEMPTS) -> dict:
-        resp = await self.request("POST", f"exams/{key}/submissions", json=body, attempts=attempts)
+        resp = await self.request("POST", f"exams/{key}/submissions", json=body, attempts=attempts,
+                                  max_bytes=MAX_SMALL_BYTES)
         return self._json(resp)
 
     async def roster(self, class_id: int) -> dict:
@@ -219,6 +246,52 @@ class DkuojClient:
         if changed_since:
             params["changed_since"] = changed_since
         return self._json(await self.request("GET", f"exams/{key}/results", params=params))
+
+
+async def _read_capped(resp: httpx.Response, cap: int) -> bytes | None:
+    """The body, decompressed, or None once it passes `cap` bytes. Decoded here from the raw
+    stream with zlib's max_length, so one small compressed chunk can never expand past the
+    cap in memory either. An encoding other than gzip / deflate / identity is refused."""
+    try:                      # already in memory (a test transport's prepared Response)
+        done = resp.content
+    except httpx.ResponseNotRead:
+        pass
+    else:
+        return done if len(done) <= cap else None
+    enc = [e.strip().lower() for e in resp.headers.get("content-encoding", "").split(",") if e.strip()]
+    enc = [e for e in enc if e != "identity"]
+    if len(enc) > 1 or (enc and enc[0] not in ("gzip", "x-gzip", "deflate")):
+        raise OjError("DKU OJ sent an answer in an encoding FairPlay does not read", resp.status_code)
+    if enc:
+        wbits = 16 + zlib.MAX_WBITS if enc[0] in ("gzip", "x-gzip") else zlib.MAX_WBITS
+        dec = zlib.decompressobj(wbits)
+    else:
+        dec = None
+    out = bytearray()
+    try:
+        async for raw in resp.aiter_raw():
+            if dec is None:
+                out += raw
+            else:
+                buf = raw
+                while buf:
+                    # never more than what is left of the cap (+1, to notice going over)
+                    piece = dec.decompress(buf, max(1, cap - len(out) + 1))
+                    out += piece
+                    if len(out) > cap:
+                        return None
+                    buf = dec.unconsumed_tail
+                    if not piece and buf:
+                        break
+            if len(out) > cap:
+                return None
+        if dec is not None:
+            out += dec.flush(max(1, cap - len(out) + 1))
+    except zlib.error:
+        raise OjError("DKU OJ sent an answer FairPlay could not decompress", resp.status_code) from None
+    if len(out) > cap:
+        return None
+    return bytes(out)
 
 
 def _filename_safe(name: str) -> str:

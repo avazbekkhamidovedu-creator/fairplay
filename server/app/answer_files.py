@@ -114,7 +114,18 @@ async def upload_answer_file(aid: str, question_id: str, request: Request,
 async def get_answer_file(aid: str, fid: str, request: Request,
                           p: Principal = Depends(require_student),
                           session: AsyncSession = Depends(get_session)):
-    await _attempt_and_exam(request, session, aid, p)
+    a, exam = await _attempt_and_exam(request, session, aid, p)
+    if a.status != "in_progress":
+        # Security review 2026-10-24: an external-source exam after hand-in shows the
+        # student's answers only at a review level that shows them (like attempt_asset).
+        from .integrations import registry
+        integ = registry.integration_for(exam)
+        if integ is not None:
+            from .models import Exam
+            from .review import shows_answers
+            value = (await session.execute(select(Exam.review_after_handin).where(Exam.id == a.exam_id))).scalar()
+            if not shows_answers(integ.review_level(value)):
+                raise HTTPException(404, "Not found")
     f = (await session.execute(select(AnswerFile).options(undefer(AnswerFile.data))
                                .where(AnswerFile.id == fid))).scalar_one_or_none()
     if f is None or f.attempt_id != aid:

@@ -183,7 +183,12 @@ def tool_settings(e: Exam) -> dict:
     if e.mode == "external":
         return {"calculator": "off", "open_book": False, "websites": []}
     calc = e.calculator if e.calculator in ("scientific", "graphing") else "off"
-    return {"calculator": calc, "open_book": bool(e.open_book), "websites": list(e.websites or [])}
+    websites = list(e.websites or [])
+    if (getattr(e, "source", None) or "fairplay") != "fairplay" and websites:
+        # security review 2026-10-24: also an exam synced (and started) before the policy
+        from .integrations.site_policy import filter_sites
+        websites = filter_sites(websites)[0]
+    return {"calculator": calc, "open_book": bool(e.open_book), "websites": websites}
 
 
 def student_tools(exam: dict) -> dict:

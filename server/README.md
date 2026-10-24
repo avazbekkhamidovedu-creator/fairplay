@@ -27,7 +27,9 @@ docker compose up --build --scale api=4
 | FAIRPLAY_LOGIN_IP_LIMIT | 300 | sign-in tries per minute from one address |
 | FAIRPLAY_LOGIN_SCHOOL_NETS / FAIRPLAY_LOGIN_SCHOOL_IP_LIMIT | (none) / 6000 | a school's own networks (CIDRs) get the higher per-address limit: a whole school behind one NAT signs in at once |
 | FAIRPLAY_LOGIN_HASH_SLOTS | 4 | password checks running at once per worker (CPU-bound) |
-| DKUOJ_URL / DKUOJ_TOKEN | (none: not connected) | DKU OJ integration (app/integrations/dkuoj, docs/dkuoj-bridge.md); the token is DKU OJ's FAIRPLAY_TOKEN |
+| DKUOJ_URL / DKUOJ_TOKEN | (none: not connected) | DKU OJ integration (app/integrations/dkuoj, docs/dkuoj-bridge.md); the token is DKU OJ's FAIRPLAY_TOKEN. `new,old` (two tokens) while rotating it (docs/dkuoj-bridge-v2.md §1). A plain `http://` URL to another machine stops the server from starting |
+| DKUOJ_ALLOW_INSECURE | 0 | 1 = allow a plain `http://` DKUOJ_URL to another machine (a test network only) |
+| FAIRPLAY_EXTERNAL_SITE_ALLOWLIST | (none) | comma-separated sites (`docs.python.org,*.cppreference.com`): the ONLY websites a DKU OJ exam may open in the lock. AI / messaging / file-sharing sites are refused either way |
 | DKUOJ_SYNC_SECONDS / DKUOJ_DELIVERY_RPS | 120 / 10 | sync interval; hand-ins sent to DKU OJ per second |
 | FAIRPLAY_PUBLIC_URL | (none) | this server's https address, for the report links sent to integrations (needed: DKU OJ drops relative links) |
 

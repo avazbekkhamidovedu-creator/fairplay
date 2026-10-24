@@ -1,6 +1,6 @@
 # DKU OJ ↔ FairPlay bridge, v2: professors use only DKU OJ
 
-Status: build contract (2026-10-24; review fixes 2026-10-24; class-login password viewable, login
+Status: build contract (2026-10-24; review fixes 2026-10-24; security review fixes 2026-10-24 (§1 rotation / transport / bounded answers, §3 reset refusal and websites_blocked); class-login password viewable, login
 history, strong student passwords, student classes, student review after hand-in §8 2026-10-24, five review levels §8 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
 assets, uploads, submissions, results). Everything in v1 stays, except where this file changes it
 (§1 signing replaces the Bearer token; §6 retires the live-room link).
@@ -46,6 +46,21 @@ v2
 <lowercase hex sha256 of the raw request body (empty body: sha256 of "")>
 ```
 
+**Token rotation** (security review 2026-10-24): `DKUOJ_TOKEN` / `FAIRPLAY_TOKEN` may hold TWO
+comma-separated tokens, `<new>,<old>`. A server signs with the FIRST and accepts a request
+signed with ANY of them (each token gives its own pair of direction keys; every token is
+compared, so the timing doesn't tell which matched). More than two → the server refuses to
+start. To rotate without downtime:
+1. FairPlay: `DKUOJ_TOKEN=<old>,<new>` (still signs with old; accepts new). Restart.
+2. DKU OJ: `FAIRPLAY_TOKEN=<new>,<old>` (signs with new; accepts old). Restart.
+3. FairPlay: `DKUOJ_TOKEN=<new>,<old>`, then `<new>` alone. Restart.
+4. DKU OJ: `FAIRPLAY_TOKEN=<new>`. Restart. The old token is now refused everywhere.
+
+**Transport** (security review 2026-10-24): FairPlay refuses to start when `DKUOJ_URL` is
+plain `http://` to anything but a loopback address (`localhost`, `127.0.0.0/8`, `::1`):
+the signatures don't hide rosters, packages and grades. `https://` always; plain http to
+another machine only with `FAIRPLAY_DEV=1` or `DKUOJ_ALLOW_INSECURE=1` (a test network).
+
 The receiver:
 1. bridge off (no token) → 404; missing/invalid headers → 401 `{"detail":"bad signature"}`;
 2. `|now - timestamp| > 60` → 401;
@@ -57,6 +72,17 @@ The receiver:
 Responses are not signed (TLS protects them in production). Clients use timeouts (connect 5 s,
 read 15 s; DKU OJ page loads and the live table's poll: 3 s), never retry a POST that may have
 succeeded unless it is idempotent (marked below).
+
+FairPlay reads every DKU OJ answer as a stream (security review 2026-10-24): it sends
+`Accept-Encoding: identity`; a gzip / deflate body is still read, but its size is counted
+AFTER decompression, and any other `Content-Encoding` is refused. A body past the endpoint's
+cap is dropped as soon as it passes the cap (not after downloading it): package 5 MB, asset
+10 MB, exam list / roster / student classes / results pages 2 MB each, upload and submission
+receipts 256 KB, the body of a refusal (non-2xx) 64 KB (then only its status counts). Each
+try also has a total deadline, whatever the server does: 2 × the call's timeout, at most
+30 s (a body trickled a byte at a time no longer outlasts the read timeout). A capped,
+undecodable or late answer is the same "could not reach DKU OJ" failure as a network error
+(too-large answers are not retried).
 
 Class login passwords (product decision 2026-10-24, from the professors: "I can't find the
 temporary password"): FairPlay keeps each class login's password encrypted (§3) and sends it to
@@ -163,6 +189,13 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   FairPlay checks again: a NetID not linked to `class_id` (see `students` above) → 403
   `{"detail": "This student is not linked to this class in FairPlay: ..."}`; a teacher's
   account → 400; a NetID FairPlay has no account for → `{"ok": true}`.
+  Security review 2026-10-24: DKU OJ may reset only accounts DKU OJ alone gave access to. An
+  account that is also a member of a class made in FairPlay (not a DKU OJ mirror class,
+  `external_ref` not `dkuoj:*`), of an LMS course, or has an attempt on an exam that is not
+  from DKU OJ (the sample exam doesn't count) → 403
+  `{"detail": "This account is also used for FairPlay classes; reset it in FairPlay."}`
+  (event `student_reset_refused` in the class's `recent`). Every reset and refusal is an
+  event (`student_reset` / `student_reset_refused`, with the acting user).
 
 ### Exam control (key = DKU OJ assignment key)
 
@@ -172,6 +205,7 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
    "status": "draft|live|closed", "start_code": "219074" | null,
    "invigilator_code": "583204" | null, "closes_at": "...", "open_to": "all" | ["bl642"],
    "settings": {"calculator":"scientific","open_book":false,"websites":["docs.python.org"],
+                "websites_blocked":[{"site":"chatgpt.com","reason":"AI assistant"}],
                 "strong_lock":true,"resume_needs_approval":true,"review":"nothing"},
    "counts": {"roster": 68, "set_up": 61, "not_started": 3, "writing": 23, "offline": 1,
               "waiting": 1, "handed_in": 41},
@@ -180,6 +214,23 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
    "server_time": "..."}
   ```
   `synced:false` (404 is not used) when FairPlay hasn't got the assignment yet.
+  `settings.websites` = the sites the lock really opens; `settings.websites_blocked` = the
+  ones DKU OJ asked for that FairPlay refused, each with its reason (always present, `[]`
+  when none). Security review 2026-10-24: FairPlay has its own policy for sites an external
+  source opens (`app/integrations/site_policy.py`): a built-in deny-list of AI chat and
+  assistants (openai.com, chatgpt.com, claude.ai, gemini.google.com, copilot.microsoft.com,
+  perplexity.ai, deepseek.com, kimi / doubao / tongyi / yiyan, huggingface.co, ...),
+  messaging (whatsapp.com, telegram.org, wx.qq.com, discord.com, slack.com,
+  teams.microsoft.com, ...) and file sharing / notes (drive.google.com, docs.google.com,
+  dropbox.com, onedrive.live.com, notion.so, pastebin.com, gist.github.com, ...); a deny
+  entry covers its subdomains, and a wildcard that reaches one (`*.google.com` →
+  gemini.google.com) is refused too (`github.com` itself is refused for Copilot chat;
+  `docs.github.com` is fine). Optional `FAIRPLAY_EXTERNAL_SITE_ALLOWLIST` (comma-separated, the
+  teacher list's form, e.g. `docs.python.org,*.cppreference.com`): when set, ONLY sites it
+  covers may be used (reason "not on this FairPlay server's list of sites for external
+  exams"). A name that isn't a usable site (`*.com`, a path, an IP) is listed too, with the
+  reason. FairPlay-native exams are not affected. DKU OJ shows `websites_blocked` on the
+  FairPlay tab.
 - **`POST /exams/<key>/open`** body `{"open_to": "all" | ["netid", ...]}` → same shape as GET.
   Idempotent (already live: updates `open_to`).
 - **`POST /exams/<key>/close`** → GET shape. Same effect as the FairPlay teacher Close (writers

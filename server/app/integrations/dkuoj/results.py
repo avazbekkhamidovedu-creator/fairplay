@@ -13,6 +13,7 @@ from sqlalchemy import false, select
 
 from ...models import Attempt, Exam, User
 from ...timeutil import parse_iso
+from ..sanitize import clean_markdown
 from .client import DkuojClient
 
 log = logging.getLogger("proctora.dkuoj")
@@ -36,7 +37,8 @@ def result_of(r: dict) -> dict:
             except (TypeError, ValueError):
                 pts = 0.0
             qs.append({"question_id": q["question_id"], "points": pts,
-                       "feedback_md": str(q.get("feedback_md") or "")[:20000]})
+                       # security review 2026-10-24: cleaned on arrival (app.integrations.sanitize)
+                       "feedback_md": clean_markdown(str(q.get("feedback_md") or "")[:20000])})
 
     def f(v):
         try:

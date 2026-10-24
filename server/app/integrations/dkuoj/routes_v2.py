@@ -83,7 +83,7 @@ async def signed_call(request: Request) -> BridgeCall:
         chunks.append(chunk)
     body = b"".join(chunks)
     try:
-        acting = await signing.verify(SOURCE.config.token, signing.OJ_TO_FP, request.method, _raw_path(request),
+        acting = await signing.verify(SOURCE.config.verify_tokens, signing.OJ_TO_FP, request.method, _raw_path(request),
                                       request.headers, body, get_store())
     except signing.BadSignature:
         raise HTTPException(401, BAD_SIGNATURE) from None
@@ -235,6 +235,26 @@ async def class_status(class_id: int, request: Request, call: BridgeCall = Depen
         headers={"Cache-Control": "no-store"})
 
 
+ALSO_NATIVE = "This account is also used for FairPlay classes; reset it in FairPlay."
+
+
+async def uses_fairplay_natively(session: AsyncSession, user_id: int) -> bool:
+    """A member of a class made in FairPlay (not a DKU OJ mirror), of an LMS course, or with
+    an attempt on an exam that is not from DKU OJ."""
+    from ...models import CourseMember
+    native_class = (await session.execute(select(ClassMember.id).join(
+        SchoolClass, SchoolClass.id == ClassMember.class_id).where(
+        ClassMember.user_id == user_id,
+        or_(SchoolClass.external_ref.is_(None), ~SchoolClass.external_ref.like("dkuoj:%"))).limit(1))).first()
+    if native_class is not None:
+        return True
+    if (await session.execute(select(CourseMember.id).where(CourseMember.user_id == user_id).limit(1))).first():
+        return True
+    return (await session.execute(select(Attempt.id).join(Exam, Exam.id == Attempt.exam_id).where(
+        Attempt.student_id == user_id, Exam.is_trial.is_not(True),      # the sample exam doesn't count
+        or_(Exam.source.is_(None), Exam.source != "dkuoj")).limit(1))).first() is not None
+
+
 @router.post("/students/{netid}/reset")
 async def student_reset(netid: str, call: BridgeCall = Depends(signed_call),
                         session: AsyncSession = Depends(get_session)):
@@ -252,6 +272,14 @@ async def student_reset(netid: str, call: BridgeCall = Depends(signed_call),
     # Defence in depth (DKU OJ checks too): only a student linked to THIS class.
     if u.id not in await class_user_ids(session, class_id):
         raise HTTPException(403, NOT_IN_CLASS)
+    # Security review 2026-10-24: DKU OJ may reset only what DKU OJ gave the account. One
+    # that also belongs to FairPlay's own classes / LMS courses or took a FairPlay exam is
+    # reset in FairPlay (else a compromised DKU OJ could take it over, native data and all).
+    if await uses_fairplay_natively(session, u.id):
+        await add_event(session, class_id, "student_reset_refused", netid=netid, actor=call.acting_user,
+                        detail="also used for FairPlay classes")
+        await session.commit()
+        raise HTTPException(403, ALSO_NATIVE)
     u.netid = netid
     u.username = placeholder_username(netid)
     u.password_hash = IMPORTED_PASSWORD
@@ -349,13 +377,24 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
         open_to = sorted(n for n in (await session.execute(
             select(User.netid).where(User.id.in_(ids)))).scalars() if n) if ids else []
     live = e.status == "live"
+    # Security review 2026-10-24: the sites FairPlay lets the lock open (app.integrations.
+    # site_policy) and the ones it refused, with why, for the FairPlay tab in DKU OJ.
+    from ..site_policy import filter_sites
+    websites, refused = filter_sites(list(e.websites or []))
+    blocked = [b for b in (e.external_meta or {}).get("websites_blocked") or []
+               if isinstance(b, dict) and isinstance(b.get("site"), str)]
+    seen = {b["site"] for b in blocked}
+    blocked += [b for b in refused if b["site"] not in seen]
     return {"synced": True, "package_ready": SOURCE.package_ready(e), "questions": nq,
             "points": _num(e.total_points), "status": e.status,
             "start_code": e.start_code if live else None,
             "invigilator_code": e.invigilator_code if live else None,
             "closes_at": iso(exam_closes_at(e)), "open_to": open_to,
             "settings": {"calculator": e.calculator or "off", "open_book": bool(e.open_book),
-                         "websites": list(e.websites or []), "strong_lock": bool(e.require_strong_lock),
+                         "websites": websites,
+                         "websites_blocked": [{"site": b["site"], "reason": str(b.get("reason") or "")}
+                                              for b in blocked],
+                         "strong_lock": bool(e.require_strong_lock),
                          "resume_needs_approval": bool(e.resume_needs_approval),
                          # 2026-10-24: student review after hand-in (app.review)
                          "review": SOURCE.review_level(e.review_after_handin)},

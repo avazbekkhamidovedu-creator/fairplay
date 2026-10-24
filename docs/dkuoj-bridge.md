@@ -20,7 +20,7 @@ In the anti-cheating box, the lock becomes one choice: **No lock · Safe Exam Br
 | `fairplay_required` | bool | false | the assignment runs in FairPlay and is hidden from students on DKU OJ |
 | `fairplay_calculator` | `off` / `scientific` / `graphing` | `off` | built-in calculator |
 | `fairplay_open_book` | bool | false | students may add their own notes/files before starting |
-| `fairplay_websites` | text, one host per line | empty | websites students may open inside the exam (e.g. `docs.python.org`) |
+| `fairplay_websites` | text, one host per line | empty | websites students may open inside the exam (e.g. `docs.python.org`); FairPlay drops AI-assistant, messaging and file-sharing sites and, when set, any site not on its `FAIRPLAY_EXTERNAL_SITE_ALLOWLIST` (v2 §3 `websites_blocked`) |
 | `fairplay_strong_lock` | bool | false | only the strongest lock counts (Windows separate desktop, Mac assessment mode) |
 | `fairplay_resume_needs_approval` | bool | true | after a crash a student waits for the invigilator |
 
@@ -71,7 +71,8 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
 - `points`/`partial` from `ContestProblem`. `label`/`title` from the assignment's display name if set.
 - `statement_md` is DKU OJ markdown (KaTeX with `~…~` inline, `$$…$$` display). Full-markup problems: `statement_md` null and `statement_html` = DKU OJ's sanitized rendering.
 - Images in statements are rewritten to `fp-asset:<name>` and listed in `assets`.
-- Body ≤ 5 MB.
+- FairPlay cleans `statement_md` / `statement_html`, option `text_md`, `instructions_md` and `description_md` on arrival (security review 2026-10-24, `app/integrations/sanitize.py`): a small allow-list of formatting tags and attributes (script / style / iframe / svg ... dropped with their content); links only http(s), mailto, `fp-asset:` and `#…`; images only `fp-asset:` and `data:image/png|jpeg|gif|webp` — any other image (e.g. an external `https://` picture) becomes the text `[external image removed]`. Code (fenced blocks, `inline code`) is kept exactly. The web cleans again (DOMPurify).
+- Body ≤ 5 MB (counted after decompression; v2 §1).
 
 **`GET exams/<key>/assets/<name>`** — the file (only names listed in the current package; from 24 h before start). `ETag: "<sha256>"`. ≤ 10 MB each, ≤ 50 MB per exam.
 
@@ -99,6 +100,8 @@ All JSON, UTF-8, times ISO-8601 UTC with `Z`.
 {"results":[{"username":"ax19","released":true,"total":82,"total_points":100,"updated_at":"…",
   "questions":[{"question_id":"p000123","points":10,"feedback_md":""}]}],"next_page":null}
 ```
+- `feedback_md` is cleaned on arrival like the statements (above). Each page ≤ 2 MB.
+- After hand-in, a student downloads their own uploaded answer files (`GET /api/student/attempts/<id>/files/<fid>`) only when the review level shows answers (`answers`, `answers_and_results`; v2 §8), like the statement pictures; otherwise 404.
 
 ## 5. FairPlay server (FastAPI)
 

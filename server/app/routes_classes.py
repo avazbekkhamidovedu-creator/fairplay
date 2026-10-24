@@ -299,6 +299,9 @@ async def join_class(body: JoinIn, p: Principal = Depends(require_student),
         raise HTTPException(429, "Too many wrong class codes. Wait 10 minutes.")
     from .integrations.dkuoj.student_classes import is_class_login_username
     if await is_class_login_username(session, body.code):
+        # Security review 2026-10-24: the hint tells a class-login username apart, so it
+        # counts as a wrong code (same 10-minute limit): no free guessing of login names.
+        await store.incr(wrong_key, WRONG_JOIN_WINDOW_S)
         raise HTTPException(400, CLASS_LOGIN_TYPED)
     code = normalize_code(body.code)
     c = (await session.execute(select(SchoolClass).where(SchoolClass.join_code == code))).scalar_one_or_none()

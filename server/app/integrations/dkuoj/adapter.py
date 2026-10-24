@@ -22,11 +22,13 @@ import re
 from typing import Any
 
 from ...grading import num
+from ..sanitize import clean, clean_markdown
 
 OJ_TYPES = ("choice", "fill_blank", "short_answer", "file_upload", "code")
 FP_TYPE = {"choice": "mcq", "fill_blank": "fill_blank", "short_answer": "short",
            "file_upload": "file_upload", "code": "code"}
 OJ_TYPE = {v: k for k, v in FP_TYPE.items()}
+
 ASSET_SCHEME = "fp-asset:"
 ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
 MAX_TEXT = 200_000
@@ -100,7 +102,8 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
     title = _text(q.get("title"), 300)
     out: dict = {
         "id": fp_question_id(oj_id, taken if taken is not None else set(), salt),
-        "type": FP_TYPE[t], "prompt": _text(prompt) or title or oj_id, "prompt_format": fmt,
+        # security review 2026-10-24: cleaned on arrival (app.integrations.sanitize)
+        "type": FP_TYPE[t], "prompt": clean(_text(prompt), fmt) or title or oj_id, "prompt_format": fmt,
         "title": title, "label": _text(q.get("label"), 50),
         "points": _points(q.get("points", 0)), "partial": bool(q.get("partial")),
         "options": [], "correct_index": None, "answer_number": None, "tolerance": None,
@@ -113,7 +116,7 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
         opts = [o for o in c.get("options") or [] if isinstance(o, dict)]
         if len(opts) < 2:
             raise AdapterError(f"choice question {oj_id} has fewer than 2 options")
-        out["options"] = [_text(o.get("text_md"), 20_000) for o in opts]
+        out["options"] = [clean_markdown(_text(o.get("text_md"), 20_000)) for o in opts]
         out["multiple"] = bool(c.get("multiple"))
         out["true_false"] = bool(c.get("true_false"))
         out["shuffle"] = bool(c.get("shuffle"))
@@ -139,7 +142,7 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
         except (TypeError, ValueError):
             size = 0
         out["max_file_size"] = max(0, min(size, 10 * 1024 * 1024)) or 10 * 1024 * 1024
-        out["instructions_md"] = _text(f.get("instructions_md"), 20_000)
+        out["instructions_md"] = clean_markdown(_text(f.get("instructions_md"), 20_000))
         out["max_files"] = 1          # DKU OJ files exactly one upload per question
     elif t == "code":
         c = q.get("code") or {}

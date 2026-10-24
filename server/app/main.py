@@ -33,6 +33,10 @@ from .timeutil import iso, utcnow
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 log = logging.getLogger("proctora")
+# Security review 2026-10-24: httpx logs every request URL at INFO, and DKU OJ URLs carry
+# NetIDs (GET .../students/<netid>/classes). Only warnings and errors from the HTTP clients.
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
