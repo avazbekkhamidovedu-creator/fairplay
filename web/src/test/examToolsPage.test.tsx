@@ -150,6 +150,7 @@ describe("exam page tools", () => {
     expect(screen.getByRole("heading", { name: "Your answer" })).toBeVisible();    // the answer pane stays
     fireEvent.click(await screen.findByRole("button", { name: /notes\.txt/ }));
     expect(screen.getByRole("tab", { name: /notes\.txt/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: /Materials/ })).toBeNull();
     expect(await screen.findByText("F = ma")).toBeInTheDocument();
     // arrow keys move between the tabs
     fireEvent.keyDown(tablist, { key: "Home" });
@@ -168,10 +169,8 @@ describe("exam page tools", () => {
     fireEvent.click(screen.getByRole("button", { name: "docs.python.org" }));
     expect(screen.getByRole("tab", { name: /docs\.python\.org/ })).toHaveAttribute("aria-selected", "true");
     expect(document.querySelector("iframe")?.getAttribute("src")).toBe("https://docs.python.org/");
-    // the other tabs stay open (the file keeps its place)
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "¶Question 2", "≡Materials", "TXTnotes.txt", "◎Websites", "◎docs.python.org",
-    ]);
+    // a file or site opened from its list takes the list's tab; the other tabs stay open
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["¶Question 2", "TXTnotes.txt", "◎docs.python.org"]);
     fireEvent.click(screen.getByRole("button", { name: "Close docs.python.org" }));
     expect(document.querySelector("iframe")).toBeNull();
     expect(screen.getByRole("tab", { name: /Question 2/ })).toHaveAttribute("aria-selected", "true");
@@ -180,7 +179,7 @@ describe("exam page tools", () => {
     fireEvent.click(screen.getByRole("button", { name: /Back/ }));
     expect(screen.getByRole("tab", { name: /Question 1/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "2+2?" })).toBeVisible();
-    for (const name of ["Materials", "notes.txt", "Websites"]) {
+    for (const name of ["notes.txt"]) {
       fireEvent.click(screen.getByRole("tab", { name: new RegExp(name.replace(".", "\\.")) }));
       fireEvent.click(screen.getByRole("button", { name: `Close ${name}` }));
     }

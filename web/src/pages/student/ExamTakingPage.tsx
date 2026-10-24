@@ -861,13 +861,15 @@ function ExamTakingInner() {
   // next to the question ("Question 3 | Formula sheet.pdf | docs.python.org").
   const [matTabs, setMatTabs] = useState<MatTab[]>([]);
   const [activeTab, setActiveTab] = useState<string>("question");
-  const openTab = useCallback((t: MatTab) => {
-    setMatTabs((prev) => {
+  const openTab = useCallback((t: MatTab, replace?: string) => {
+    setMatTabs((all) => {
+      // a file / site opened from its list takes the list's place (More opens the list again)
+      const prev = replace ? all.filter((x) => x.id !== replace) : all;
       const i = prev.findIndex((x) => x.id === t.id);
       if (i >= 0) {
         if (t.kind !== "site") return prev;
         const old = prev[i] as Extract<MatTab, { kind: "site" }>;
-        if (old.url === t.url && t.seq === 0) return prev;
+        if (old.url === t.url) return prev;
         const next = [...prev];
         next[i] = { ...t, seq: old.seq + 1 };       // the open tab goes to the new page
         return next;
@@ -877,6 +879,9 @@ function ExamTakingInner() {
     });
     setActiveTab(t.id);
   }, []);
+  useEffect(() => {
+    document.getElementById(`xd-tab-${activeTab}`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [activeTab, matTabs.length]);
   const closeTab = (id: string) => {
     setMatTabs((prev) => prev.filter((t) => t.id !== id));
     setActiveTab("question");
@@ -887,9 +892,10 @@ function ExamTakingInner() {
       else moreButtonRef.current?.focus();      // the last tab: back to More, where it came from
     }, 0);
   };
-  const openFile = useCallback((f: MaterialFile) => openTab({ id: `file:${f.id}`, kind: "file", file: f }), [openTab]);
+  const openFile = useCallback((f: MaterialFile) => openTab({ id: `file:${f.id}`, kind: "file", file: f }, "files"), [openTab]);
   const openSite = useCallback(
-    (host: string, url: string) => openTab({ id: `site:${host}`, kind: "site", host, url, seq: 0 }),
+    (host: string, url: string, fromList = false) =>
+      openTab({ id: `site:${host}`, kind: "site", host, url, seq: 0 }, fromList ? "sites" : undefined),
     [openTab],
   );
   const examLinks = useMemo<ExamLinks>(
@@ -1351,7 +1357,7 @@ function ExamTakingInner() {
                     <MaterialFileView attemptId={materialsAid} file={t.file} />
                   ) : t.kind === "sites" ? (
                     <div className="xd-tool-pad">
-                      <WebsitesPaneContent sites={tools?.websites ?? []} onOpenSite={openSite} />
+                      <WebsitesPaneContent sites={tools?.websites ?? []} onOpenSite={(h, u) => openSite(h, u, true)} />
                     </div>
                   ) : (
                     <WebsitesPaneContent
@@ -1512,10 +1518,12 @@ function ExamTakingInner() {
                 aria-label={`Question ${current + 1} of ${questions.length}`}
                 onClick={() => setNavOpen((o) => !o)}
               >
-                <span className="stu-lbl-long">Question </span>
-                <span className="stu-lbl-short">Q</span>
-                {current + 1}
-                <span className="xd-of"> of {questions.length}</span>
+                <span>
+                  <span className="stu-lbl-long">Question </span>
+                  <span className="stu-lbl-short">Q</span>
+                  {current + 1}
+                  <span className="xd-of"> of {questions.length}</span>
+                </span>
                 <ChevronIcon className="chev" />
               </button>
 

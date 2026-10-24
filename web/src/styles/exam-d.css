@@ -256,7 +256,8 @@
   scrollbar-width: thin;
 }
 .xd-tab {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 96px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -626,4 +627,21 @@
   .xd-of {
     display: none;
   }
+}
+
+/* website bar and Directions: bigger targets for fingers */
+.exam-d .stu-web-bar .stu-icon-btn {
+  width: 40px;
+  height: 40px;
+}
+.exam-d .stu-directions-btn {
+  min-height: 28px;
+}
+/* a coding example in a narrow pane wraps instead of running into the next column */
+.exam-d .xd-problem .stu-cq-io > div {
+  min-width: 0;
+}
+.exam-d .xd-problem .stu-cq-io pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

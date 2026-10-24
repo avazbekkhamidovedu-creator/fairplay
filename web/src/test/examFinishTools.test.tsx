@@ -108,6 +108,11 @@ describe("material tabs and focus", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /Websites/ }));
     fireEvent.click(screen.getByRole("button", { name: "docs.python.org" }));
     expect(screen.getByRole("tab", { name: /docs\.python\.org/ })).toHaveAttribute("aria-selected", "true");
+    // the site took the list's tab; More opens the list again
+    expect(screen.queryByRole("tab", { name: /Websites/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Websites/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /docs\.python\.org/ }));
     fireEvent.click(screen.getByRole("button", { name: "Close docs.python.org" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: /Question 1/ })).toHaveFocus());
     const tab = screen.getByRole("tab", { name: /Websites/ });
