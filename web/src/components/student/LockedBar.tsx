@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import type { SyncStatus } from "../../lib/answerQueue";
 import { batteryTone, useBattery } from "../../lib/battery";
-import { TIMER_FORCE_SHOW_MS, type TextSize } from "../../lib/examPrefs";
+import { MAX_TEXT_SIZE, MIN_TEXT_SIZE, TIMER_FORCE_SHOW_MS, stepTextSize, type TextSize } from "../../lib/examPrefs";
 import { formatCountdown } from "../../lib/timer";
 import { LogoMark } from "../ui/Icon";
 import {
@@ -14,7 +14,9 @@ import {
   DiskIcon,
   HelpIcon,
   LockIcon,
+  MinusIcon,
   MoreVerticalIcon,
+  PlusIcon,
   TextSizeIcon,
   UnlockIcon,
 } from "./icons";
@@ -61,7 +63,8 @@ export function LockedBar({
   /** Lines shown under "Directions"; omitted -> no Directions button. */
   directions?: string[];
   textSize?: TextSize;
-  onTextSize?: () => void;
+  /** 2026-10-24: More -> Text size: − / + one step, the % resets to 100 %. */
+  onTextSize?: (size: TextSize) => void;
   /** 2026-10-23 (exam tools): only when the teacher allowed it. */
   calculator?: { open: boolean; onToggle: () => void; buttonRef?: Ref<HTMLButtonElement> };
   /** open-book exams: count = the student's files (null = not known yet) */
@@ -283,13 +286,7 @@ export function LockedBar({
               </span>
             </button>
           )}
-          {onTextSize && (
-            <button type="button" role="menuitem" className="stu-menu-item" onClick={onTextSize}>
-              <TextSizeIcon />
-              Text size
-              <span className="stu-menu-note">{Math.round(textSize * 100)}%</span>
-            </button>
-          )}
+          {onTextSize && <TextSizeRow size={textSize} onChange={onTextSize} />}
           <button type="button" role="menuitem" className="stu-menu-item" onClick={() => setOpen("help")}>
             <HelpIcon />
             Help
@@ -317,6 +314,59 @@ export function LockedBar({
   );
 }
 
+
+/**
+ * 2026-10-24: "Text size  [−] 100% [+]" in the More menu. The buttons stay in the menu (it does not
+ * close) and stay focusable at the ends (aria-disabled), so keyboard users never lose their place.
+ * The % in the middle goes back to 100 %.
+ */
+export function TextSizeRow({ size, onChange }: { size: TextSize; onChange: (size: TextSize) => void }) {
+  const atMin = size <= MIN_TEXT_SIZE;
+  const atMax = size >= MAX_TEXT_SIZE;
+  const pct = `${Math.round(size * 100)}%`;
+  return (
+    <div className="stu-menu-item stu-textsize" role="group" aria-label="Text size" data-testid="text-size">
+      <TextSizeIcon />
+      <span className="stu-textsize-label" aria-hidden="true">
+        Text size
+      </span>
+      <span className="stu-textsize-ctl">
+        <button
+          type="button"
+          role="menuitem"
+          className="stu-textsize-btn"
+          aria-label="Smaller text"
+          aria-disabled={atMin || undefined}
+          title="Smaller text"
+          onClick={() => !atMin && onChange(stepTextSize(size, -1))}
+        >
+          <MinusIcon size={16} />
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="stu-textsize-value"
+          aria-label={size === 1 ? `Text size ${pct}` : `Text size ${pct}, reset to 100%`}
+          title={size === 1 ? undefined : "Reset to 100%"}
+          onClick={() => size !== 1 && onChange(1)}
+        >
+          <span aria-live="polite">{pct}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="stu-textsize-btn"
+          aria-label="Larger text"
+          aria-disabled={atMax || undefined}
+          title="Larger text"
+          onClick={() => !atMax && onChange(stepTextSize(size, 1))}
+        >
+          <PlusIcon size={16} />
+        </button>
+      </span>
+    </div>
+  );
+}
 
 export const OFFLINE_ANNOUNCE_MS = 5000;
 

@@ -304,7 +304,7 @@ export default function BeforeStartPage() {
             <p className="stu-muted" style={{ margin: 0 }}>
               Your teacher reads it out in the room. The exam and the timer start when the code is right.
             </p>
-            <StartCodeForm examId={examId} autoFocus legend="Start code" onInFlight={onStartInFlight} paused={step === "leaving"} />
+            <StartCodeForm examId={examId} autoFocus centered legend="Start code" onInFlight={onStartInFlight} paused={step === "leaving"} />
             {leaveError && (
               <div className="stu-alert error" role="alert">
                 {leaveError}

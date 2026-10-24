@@ -56,6 +56,7 @@ export function StartCodeForm({
   legend,
   onInFlight,
   paused,
+  centered,
 }: {
   examId: string;
   autoFocus?: boolean;
@@ -68,6 +69,8 @@ export function StartCodeForm({
   onInFlight?: (inFlight: boolean) => void;
   /** The page is leaving: no start (nor a retry while waiting for a swap) is sent. */
   paused?: boolean;
+  /** 2026-10-24: the six boxes centred (the "Enter the start code" card). */
+  centered?: boolean;
 }) {
   const navigate = useNavigate();
   const [digits, setDigits] = useState<string[]>(emptyCode);
@@ -237,6 +240,7 @@ export function StartCodeForm({
         describedBy={error ? errId : undefined}
         disabled={busy || waiting}
         legend={legend}
+        centered={centered}
       />
       </div>
       {error && !waiting && (

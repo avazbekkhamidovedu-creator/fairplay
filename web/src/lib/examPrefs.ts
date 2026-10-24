@@ -9,8 +9,8 @@ const crossModeKey = (aid: string) => `fairplay:crossmode:${aid}`;
 const timerKey = (aid: string) => `fairplay:timerhidden:${aid}`;
 export const TEXT_SIZE_KEY = "fairplay:textsize";
 
-/** Text size steps, in the order the More menu cycles them. */
-export const TEXT_SIZES = [1, 1.15, 1.3] as const;
+/** Text size steps, smallest to largest (More -> Text size: − and + move one step). */
+export const TEXT_SIZES = [0.9, 1, 1.15, 1.3, 1.5] as const;
 export type TextSize = (typeof TEXT_SIZES)[number];
 
 function read(key: string): string | null {
@@ -90,10 +90,15 @@ export function writeTextSize(size: TextSize): void {
   write(TEXT_SIZE_KEY, size === 1 ? null : String(size));
 }
 
-export function nextTextSize(size: TextSize): TextSize {
+/** 2026-10-24: one step smaller (-1) or larger (+1); stays at the ends (no wrap-around). */
+export function stepTextSize(size: TextSize, dir: -1 | 1): TextSize {
   const i = TEXT_SIZES.indexOf(size);
-  return TEXT_SIZES[(i + 1) % TEXT_SIZES.length] ?? 1;
+  const j = Math.max(0, Math.min(TEXT_SIZES.length - 1, (i < 0 ? TEXT_SIZES.indexOf(1) : i) + dir));
+  return TEXT_SIZES[j] ?? 1;
 }
+
+export const MIN_TEXT_SIZE: TextSize = TEXT_SIZES[0];
+export const MAX_TEXT_SIZE: TextSize = TEXT_SIZES[TEXT_SIZES.length - 1]!;
 
 /** The timer is shown again, whatever the student chose, in the last 5 minutes. */
 export const TIMER_FORCE_SHOW_MS = 5 * 60 * 1000;

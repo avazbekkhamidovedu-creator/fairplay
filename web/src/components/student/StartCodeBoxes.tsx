@@ -17,6 +17,8 @@ interface Props {
   invalid?: boolean;
   describedBy?: string;
   disabled?: boolean;
+  /** 2026-10-24: centre the legend and the row of boxes. */
+  centered?: boolean;
 }
 
 export const emptyCode = (): string[] => Array.from({ length: CODE_LENGTH }, () => "");
@@ -26,7 +28,7 @@ export const emptyCode = (): string[] => Array.from({ length: CODE_LENGTH }, () 
  * Backspace clears and moves back, pasting a code fills all boxes.
  */
 export const StartCodeBoxes = forwardRef<StartCodeBoxesHandle, Props>(function StartCodeBoxes(
-  { value, onChange, onComplete, idPrefix, legend = "Start code — your teacher reads it out", invalid, describedBy, disabled },
+  { value, onChange, onComplete, idPrefix, legend = "Start code — your teacher reads it out", invalid, describedBy, disabled, centered },
   ref,
 ) {
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
@@ -105,7 +107,7 @@ export const StartCodeBoxes = forwardRef<StartCodeBoxesHandle, Props>(function S
   };
 
   return (
-    <fieldset className="stu-code" aria-describedby={describedBy}>
+    <fieldset className={`stu-code${centered ? " centered" : ""}`} data-testid="start-code-boxes" aria-describedby={describedBy}>
       <legend>{legend}</legend>
       <div className="stu-code-boxes">
         {value.map((d, i) => (

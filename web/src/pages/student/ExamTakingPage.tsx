@@ -20,8 +20,8 @@ import { StuLoading } from "../../components/student/StudentLayout";
 import { ArrowLeftIcon, ArrowRightIcon, BookmarkIcon, ChevronIcon, CloseIcon, CrossOutIcon, PinIcon } from "../../components/student/icons";
 import {
   type Crossed,
+  type TextSize,
   clearExamPrefs,
-  nextTextSize,
   readCrossMode,
   readCrossed,
   readTextSize,
@@ -748,12 +748,11 @@ function ExamTakingInner() {
     writeTimerHidden(attemptId, hidden);
     setTimerHidden(hidden);
   };
-  const cycleTextSize = () =>
-    setTextSize((t) => {
-      const n = nextTextSize(t);
-      writeTextSize(n);
-      return n;
-    });
+  // 2026-10-24: More -> Text size: − / + / reset (the LockedBar passes the new size)
+  const changeTextSize = (n: TextSize) => {
+    writeTextSize(n);
+    setTextSize(n);
+  };
 
   // Move focus to the question when the student changes question (not on first show).
   const promptRef = useRef<HTMLElement>(null);
@@ -1006,7 +1005,7 @@ function ExamTakingInner() {
         timerHidden={timerHidden}
         onTimerHidden={hideTimer}
         textSize={textSize}
-        onTextSize={cycleTextSize}
+        onTextSize={changeTextSize}
         calculator={calcMode && toolsShown ? { open: calcOpen, onToggle: toggleCalc, buttonRef: calcButtonRef } : undefined}
         materials={tools?.open_book && toolsShown ? { count: materialCount, onOpen: () => setPane("materials") } : undefined}
         websites={

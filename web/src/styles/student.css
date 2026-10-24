@@ -798,6 +798,24 @@ a.stu-result-row:hover {
   flex-direction: column;
   gap: 14px;
 }
+/* 2026-10-24: "Enter the start code": the six boxes sit centred in the card (any width). */
+.stu-code.centered legend {
+  width: 100%;
+  text-align: center;
+}
+.stu-code.centered .stu-code-boxes {
+  width: 100%;
+  margin-inline: auto;
+}
+@media (max-width: 400px) {
+  .stu-code-boxes {
+    gap: 6px;
+  }
+  .stu-code-box {
+    height: 54px;
+    font-size: 24px;
+  }
+}
 
 /* ================================================================
    Exam screen
@@ -2387,6 +2405,65 @@ details.stu-rubric-details > summary .pts {
   margin-left: auto;
   font-size: 12px;
   color: var(--s-muted);
+}
+/* 2026-10-24: More -> "Text size  [−] 100% [+]" */
+.stu-menu-item.stu-textsize,
+.stu-menu-item.stu-textsize:hover {
+  cursor: default;
+  background: none;
+  color: var(--s-text);
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.stu-textsize-ctl {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--s-ground);
+}
+.stu-textsize-btn,
+.stu-textsize-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  color: var(--s-text);
+  cursor: pointer;
+}
+.stu-textsize-btn {
+  width: 34px;
+}
+.stu-textsize-btn svg {
+  color: currentColor;
+}
+.stu-textsize-value {
+  min-width: 52px;
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.stu-textsize-btn:hover:not([aria-disabled="true"]),
+.stu-textsize-value:hover {
+  background: var(--s-surface);
+  color: var(--s-primary);
+  box-shadow: 0 1px 2px rgba(27, 37, 51, 0.08);
+}
+.stu-textsize-btn:focus-visible,
+.stu-textsize-value:focus-visible {
+  outline: 2px solid var(--s-primary);
+  outline-offset: 1px;
+}
+.stu-textsize-btn[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 @keyframes stu-pop-in {
   from {
