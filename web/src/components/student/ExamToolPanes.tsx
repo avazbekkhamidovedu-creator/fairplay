@@ -6,9 +6,9 @@
 // entry exactly; "*.python.org" is shown as "python.org (all pages)" and opens python.org).
 import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
-import type { MaterialFile } from "../../api/types";
+import type { MaterialFile, WebsiteLink } from "../../api/types";
 import { formatBytes, isOfflineError, loadAttemptMaterials, materialBlob } from "../../lib/materials";
-import { siteLabel, siteUrl } from "../../lib/websites";
+import { siteEntries } from "../../lib/websites";
 import { MaterialViewer } from "./MaterialViewer";
 import { ArrowLeftIcon, ArrowRightIcon, FileIcon, GlobeIcon, ReloadIcon } from "./icons";
 import "../../styles/tools.css";
@@ -107,12 +107,15 @@ export const BLANK_HINT = "Blank page? This site doesn't allow being shown insid
 
 export function WebsitesPaneContent({
   sites,
+  links,
   request,
   startUrl,
   onOpenSite,
   onAllSites,
 }: {
   sites: string[];
+  /** 2026-10-24: start pages of sites given as full links (listed instead of the site root) */
+  links?: WebsiteLink[];
   /** A link in a question to an allowed site opens here (seq: each click). */
   request?: { url: string; seq: number } | null;
   /** 2026-10-24 (layout D): a site tab starts on this page (no list first) */
@@ -152,8 +155,7 @@ export function WebsitesPaneContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request?.seq]);
 
-  const openSite = (host: string) => {
-    const url = siteUrl(host);
+  const openSite = (host: string, url: string) => {
     if (onOpenSite) {
       onOpenSite(host, url);
       return;
@@ -170,11 +172,14 @@ export function WebsitesPaneContent({
           Your teacher allows these websites. Links to other sites are blocked.
         </p>
         <ul className="stu-filelist" aria-label="Allowed websites">
-          {sites.map((host) => (
-            <li key={host}>
-              <button type="button" className="stu-filerow" onClick={() => openSite(host)}>
+          {siteEntries(sites, links).map((x) => (
+            <li key={x.key}>
+              <button type="button" className="stu-filerow" onClick={() => openSite(x.host, x.url)}>
                 <GlobeIcon size={20} />
-                <span className="stu-filerow-name">{siteLabel(host)}</span>
+                <span className="stu-filerow-name">
+                  {x.label}
+                  {x.detail && <small className="stu-filerow-detail">{x.detail}</small>}
+                </span>
               </button>
             </li>
           ))}

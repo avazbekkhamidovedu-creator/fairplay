@@ -184,6 +184,101 @@ def normalize_websites(v: list[str] | None) -> list[str]:
     return out
 
 
+# 2026-10-24 (website links): an allowed website may be given as a full link
+# ("https://duke.app.box.com/folder/0"), optionally after a title ("Course folder
+# https://duke.app.box.com/folder/0"). The HOST goes on the allow-list as a plain entry
+# (every page of that host, any path: a Box folder link names a folder id, not a place in a
+# tree), and the link is kept as the page the exam's websites tab opens first.
+MAX_WEBSITE_LINKS = 20
+MAX_LINK_CHARS = 2000
+MAX_LINK_TITLE = 80
+LINK_PATH_RE = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@%/?#\[\]-]*$")
+
+
+def _link_title(raw: str) -> str | None:
+    t = "".join(c for c in raw if c.isprintable()).strip()
+    t = re.sub(r"\s+", " ", t)[:MAX_LINK_TITLE].strip()
+    return t or None
+
+
+def parse_website_entry(v: str) -> tuple[str, dict | None]:
+    """One allowed-website line -> (allow-list entry, link or None). A plain site name keeps
+    the rules of normalize_website. A full http(s) link with a path, query or a title gives
+    the link {"host", "url", "title"}: url = "https://" + host + the rest as typed (http is
+    upgraded: the exam pane only loads https); the host is the plain entry. A link on a
+    wildcard, with a port, a user name, spaces or odd characters is refused (ValueError)."""
+    raw = (v or "").strip()
+    title = None
+    s = raw
+    parts = raw.rsplit(None, 1)
+    if len(parts) == 2 and re.match(r"^https?://", parts[1], re.I):
+        title, s = _link_title(parts[0]), parts[1]
+    if not re.match(r"^https?://", s, re.I):
+        if title is not None or re.search(r"\s", s):
+            raise ValueError(f"'{raw}' is not a website name or a link like https://docs.python.org/3/")
+        return normalize_website(s), None
+    if len(s) > MAX_LINK_CHARS:
+        raise ValueError(f"'{raw[:80]}...' is too long (at most {MAX_LINK_CHARS} characters)")
+    rest = s.split("://", 1)[1]
+    cut = min([i for i in (rest.find("/"), rest.find("?"), rest.find("#")) if i >= 0], default=len(rest))
+    authority, tail = rest[:cut], rest[cut:]
+    if authority.startswith(WILDCARD_PREFIX):
+        raise ValueError(f"'{raw}': a link can't have a *. wildcard; use the site name *.example.com instead")
+    if "@" in authority or ":" in authority:
+        raise ValueError(f"'{raw}': use a link without a port or a user name")
+    host = normalize_website(authority)
+    if tail in ("", "/") and title is None:
+        return host, None                      # just the site: no start page to keep
+    if tail and not tail.startswith("/"):
+        tail = "/" + tail
+    if not LINK_PATH_RE.match(tail or ""):
+        raise ValueError(f"'{raw}' has characters a link can't have (spaces or quotes)")
+    return host, {"host": host, "url": f"https://{host}{tail or '/'}", "title": title}
+
+
+def split_websites(v: list[str] | None) -> tuple[list[str], list[dict]]:
+    """The allowed-website lines -> (hosts for the allow-list, links). Several links may share
+    a host (two Box folders); the host is listed once."""
+    hosts: list[str] = []
+    links: list[dict] = []
+    for d in v or []:
+        if not isinstance(d, str) or not d.strip():
+            continue
+        h, link = parse_website_entry(d)
+        if h not in hosts:
+            hosts.append(h)
+        if link is not None and all(x["url"] != link["url"] for x in links):
+            links.append(link)
+    if len(hosts) > MAX_WEBSITES:
+        raise ValueError(f"at most {MAX_WEBSITES} websites")
+    if len(links) > MAX_WEBSITE_LINKS:
+        raise ValueError(f"at most {MAX_WEBSITE_LINKS} website links")
+    return hosts, links
+
+
+def clean_website_links(v, hosts: list[str]) -> list[dict]:
+    """Stored / received links, kept only when well formed and their host is on `hosts`."""
+    out: list[dict] = []
+    for x in v or []:
+        if not isinstance(x, dict) or not isinstance(x.get("url"), str):
+            continue
+        try:
+            h, link = parse_website_entry(x["url"])
+        except ValueError:
+            continue
+        if h not in hosts:
+            continue
+        if link is None:
+            link = {"host": h, "url": f"https://{h}/", "title": None}
+        t = x.get("title")
+        link["title"] = _link_title(t) if isinstance(t, str) else link["title"]
+        if all(y["url"] != link["url"] for y in out):
+            out.append(link)
+        if len(out) >= MAX_WEBSITE_LINKS:
+            break
+    return out
+
+
 def external_host(url: str | None) -> str | None:
     """Lowercase hostname of an http(s) URL, or None."""
     if not url:
@@ -441,14 +536,30 @@ class ExamIn(BaseModel):
     # allowed_apps above is still accepted from older editors but no longer stored.
     calculator: Literal["off", "scientific", "graphing"] = "off"
     open_book: bool = False
+    # 2026-10-24: each line a site name or a full link (parse_website_entry): `websites`
+    # keeps the hosts (the allow-list, as before), `website_links` the links (start pages).
+    # website_links is always derived from websites (anything sent in it is ignored).
     websites: list[str] = Field(default_factory=list, max_length=100)
+    website_links: list[dict] = Field(default_factory=list)
+    # 2026-10-24: open book: students may upload their files this many days before the exam's
+    # date (0 = only on "Before you start" once it is open). Needs scheduled_at to mean anything.
+    upload_opens_days: int = Field(default=0, ge=0, le=7)
     # phase 4: language of coding questions that do not pick their own
     default_language: CodeLanguage = "python"
 
     @field_validator("websites")
     @classmethod
     def _websites(cls, v: list[str]) -> list[str]:
-        return normalize_websites(v)
+        # hosts and links are split in _links below; here only the shape is checked
+        split_websites(v)
+        return [x for x in v if isinstance(x, str) and x.strip()]
+
+    @model_validator(mode="after")
+    def _links(self) -> "ExamIn":
+        # only when sent: setting a field marks it as sent (a PUT without websites keeps them)
+        if "websites" in self.model_fields_set:
+            self.websites, self.website_links = split_websites(self.websites)
+        return self
 
     @field_validator("allowed_apps")
     @classmethod
@@ -523,6 +634,7 @@ class ExamIn(BaseModel):
             self.finish_url_contains = fin or None
             # 2026-10-23: the exam tools live in FairPlay's own exam page, not on the website
             self.calculator, self.open_book, self.websites = "off", False, []
+            self.website_links, self.upload_opens_days = [], 0
         else:
             if not self.questions:
                 raise ValueError("add at least one question")

@@ -104,6 +104,15 @@ class Exam(Base):
                                             server_default=false())
     websites: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
                                            server_default=text("'[]'"))
+    # 2026-10-24: allowed websites given as full links ([{"host", "url", "title"}]; each host is
+    # also in `websites`): the page the exam's websites tab opens first. The apps never read it.
+    website_links: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
+                                                server_default=text("'[]'"))
+    # 2026-10-24: open book: students may upload their materials this many days before
+    # scheduled_at (0 = off: only on "Before you start" once the exam is open). The window ends
+    # at scheduled_at or when the exam opens, whichever is first (app.materials.upload_window).
+    upload_opens_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                                   server_default="0")
     # Phase 4: language of coding questions that do not set their own (students never pick)
     default_language: Mapped[str] = mapped_column(String(16), nullable=False, default="python",
                                                   server_default="python")

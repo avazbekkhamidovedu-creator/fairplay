@@ -220,7 +220,7 @@ function ExamHero({
   const meta = [
     exam.room && `Room ${exam.room}`,
     `${exam.duration_min} minutes`,
-    plural(exam.question_count, "question"),
+    exam.question_count != null && plural(exam.question_count, "question"),
   ]
     .filter(Boolean)
     .join(" · ");

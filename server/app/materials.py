@@ -23,8 +23,15 @@ All students of one exam share EXAM_MAX_BYTES (413 past it). An exam's materials
 deleted RETENTION after it closed (cleanup_old_materials: when the process starts serving,
 then at most once an hour, from the exam lists).
 
+2026-10-24 (early upload window): the teacher (DKU OJ: the professor) may let students upload
+1-7 days before the exam's date (Exam.upload_opens_days). The exam then shows on the student's
+pages as "Upcoming - upload your files" with only this upload area (no questions, no package,
+no start); uploads close at the exam's date or when it is opened, whichever is first, and the
+files are then fixed (also on "Before you start"). Only materials: an answer to a file-upload
+question is part of the attempt and is made during the exam (app.answer_files).
+
 Routes:
-  GET    /api/student/exams/{exam_id}/materials          own files + limits (before the exam)
+  GET    /api/student/exams/{exam_id}/materials          own files + limits + the window
   POST   /api/student/exams/{exam_id}/materials          multipart "file" -> 201 file
   DELETE /api/student/exams/{exam_id}/materials/{mid}    204
   GET    /api/student/attempts/{aid}/materials           own files during the attempt
@@ -41,7 +48,7 @@ import logging
 import re
 import time
 import unicodedata
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -56,7 +63,7 @@ from .models import Attempt, Exam, ExamMaterial, User
 from .security import Principal, require_student, require_teacher
 from .services import find_attempt, get_exam_cached, new_id
 from .store import get_store
-from .timeutil import iso, utcnow
+from .timeutil import iso, parse_iso, utcnow
 from .uploads import MULTIPART_OVERHEAD, form_files, read_capped_form
 
 student_router = APIRouter(prefix="/api/student", tags=["materials"])
@@ -75,6 +82,10 @@ TYPES_DETAIL = "Use a PDF, PNG, JPEG, TXT or MD file"
 LOCKED_DETAIL = "Materials can't be changed once you have started the exam"
 TOO_BIG = "Files can be at most 20 MB in all. Remove a file or upload a smaller one."
 NOT_OPEN_BOOK = "This exam is not open book"
+# 2026-10-24: the early upload window (upload_window)
+NOT_YET = "You can add your files when your teacher opens the exam"
+WINDOW_NOT_YET = "Uploads for this exam have not opened yet"
+WINDOW_CLOSED = "Uploads for this exam have closed"
 # 2026-10-23 (review 2): server memory, exam storage and retention (see the module notes)
 UPLOAD_SLOTS = 2
 SLOT_WAIT_S = 20.0
@@ -214,13 +225,52 @@ def _open_book(exam: dict) -> bool:
     return bool(exam.get("open_book")) and (exam.get("mode") or "questions") != "external"
 
 
-async def _can_change(session: AsyncSession, exam: dict, p: Principal) -> tuple[bool, str]:
+def upload_window(exam: dict) -> tuple[datetime, datetime] | None:
+    """2026-10-24: (opens, closes) of an exam's early upload window, naive UTC, or None when
+    it has none (not open book, upload_opens_days 0, or no date). It opens
+    upload_opens_days before scheduled_at and closes at scheduled_at; opening the exam
+    earlier closes it too (see _can_change). `exam` is the cached student view."""
+    if not _open_book(exam) or not exam.get("scheduled_at"):
+        return None
+    try:
+        days = int(exam.get("upload_opens_days") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= days <= 7:
+        return None
+    closes = parse_iso(exam["scheduled_at"])
+    return closes - timedelta(days=days), closes
+
+
+def window_out(exam: dict) -> dict:
+    """The window for the student pages ({"upload_opens_at", "upload_closes_at"}, isos)."""
+    w = upload_window(exam)
+    return {"upload_opens_at": iso(w[0]) if w else None, "upload_closes_at": iso(w[1]) if w else None}
+
+
+async def _can_change(session: AsyncSession, exam: dict, p: Principal, now=None) -> tuple[bool, str]:
+    """May the student add or remove files now?
+    - live, before their start: yes, unless the exam has an early window (then the files were
+      fixed when the window closed: at the exam's date, or when it opened, if earlier);
+    - draft (not open yet): only inside the early window (2026-10-24; before, a draft took
+      uploads at any time although students never saw it);
+    - never once they started, or after the close."""
     if not _open_book(exam):
         return False, NOT_OPEN_BOOK
     if exam.get("status") not in ("draft", "live"):
         return False, "This exam is closed"
     if await find_attempt(session, exam["id"], p.user_id) is not None:
         return False, LOCKED_DETAIL
+    w = upload_window(exam)
+    now = now or utcnow()
+    if exam.get("status") == "live":
+        return (False, WINDOW_CLOSED) if w is not None else (True, "")
+    if w is None:
+        return False, NOT_YET
+    if now < w[0]:
+        return False, WINDOW_NOT_YET
+    if now >= w[1]:
+        return False, WINDOW_CLOSED
     return True, ""
 
 
@@ -232,7 +282,7 @@ async def my_materials(exam_id: str, p: Principal = Depends(require_student),
     can, why = await _can_change(session, exam, p)
     return {"open_book": _open_book(exam), "can_change": can, "reason": None if can else why,
             "files": [file_out(m) for m in files], "used_bytes": sum(int(m.size) for m in files),
-            **limits_out()}
+            **window_out(exam), **limits_out()}
 
 
 async def _usage(session: AsyncSession, exam_id: str, student_id: int) -> tuple[int, int]:
@@ -322,7 +372,7 @@ async def upload_material(exam_id: str, request: Request, p: Principal = Depends
             try:
                 data, digest = await _read_hashed(file, room)
                 await form.close()
-                return await _store_material(session, exam_id, p, filename, data, digest, room, too_big)
+                return await _store_material(session, exam, p, filename, data, digest, room, too_big)
             finally:
                 slots.release()
         finally:
@@ -331,8 +381,9 @@ async def upload_material(exam_id: str, request: Request, p: Principal = Depends
         await store.delete(lock)
 
 
-async def _store_material(session: AsyncSession, exam_id: str, p: Principal, filename: str,
+async def _store_material(session: AsyncSession, exam: dict, p: Principal, filename: str,
                           data: bytearray, digest: str, room: int, too_big: str) -> dict:
+    exam_id = exam["id"]
     if not data:
         raise HTTPException(422, "The file is empty")
     if len(data) > room:
@@ -351,6 +402,13 @@ async def _store_material(session: AsyncSession, exam_id: str, p: Principal, fil
     if await find_attempt(session, exam_id, p.user_id) is not None:
         await session.rollback()
         raise HTTPException(409, LOCKED_DETAIL)
+    # 2026-10-24: the window may have closed (the date passed, or the exam was opened) while
+    # the body was arriving: the status from the database, the time from now.
+    status = (await session.execute(select(Exam.status).where(Exam.id == exam_id))).scalar_one_or_none()
+    can, why = await _can_change(session, {**exam, "status": status}, p)
+    if not can:
+        await session.rollback()
+        raise HTTPException(409, why)
     # 2026-10-23 (review 2): other students' uploads may have filled the exam meanwhile
     if await _exam_usage(session, exam_id) > EXAM_MAX_BYTES:
         await session.rollback()

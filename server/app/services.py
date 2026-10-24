@@ -179,27 +179,55 @@ def exam_default_language(e) -> str:
 
 def tool_settings(e: Exam) -> dict:
     """2026-10-23: the exam tools as stored (teacher view and the student exam cache).
-    Rows from before have the column defaults; website exams never have tools."""
+    Rows from before have the column defaults; website exams never have tools.
+    2026-10-24: + website_links (start pages, their hosts are in websites), companions (sites
+    the lock also opens so a service like Box works, app.site_companions; teacher view) and
+    upload_opens_days (open book: uploads that many days before the date)."""
     if e.mode == "external":
-        return {"calculator": "off", "open_book": False, "websites": []}
+        return {"calculator": "off", "open_book": False, "websites": [], "website_links": [],
+                "companions": [], "upload_opens_days": 0}
+    from .schemas import clean_website_links
+    from .site_companions import companions
     calc = e.calculator if e.calculator in ("scientific", "graphing") else "off"
     websites = list(e.websites or [])
     if (getattr(e, "source", None) or "fairplay") != "fairplay" and websites:
         # security review 2026-10-24: also an exam synced (and started) before the policy
         from .integrations.site_policy import filter_sites
         websites = filter_sites(websites)[0]
-    return {"calculator": calc, "open_book": bool(e.open_book), "websites": websites}
+    return {"calculator": calc, "open_book": bool(e.open_book), "websites": websites,
+            "website_links": clean_website_links(getattr(e, "website_links", None) or [], websites),
+            "companions": companions(websites),
+            "upload_opens_days": upload_days(e)}
+
+
+def upload_days(e) -> int:
+    """2026-10-24: Exam.upload_opens_days in 0..7 (rows from before: 0)."""
+    try:
+        n = int(getattr(e, "upload_opens_days", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return n if 0 <= n <= 7 else 0
 
 
 def student_tools(exam: dict) -> dict:
     """`tools` in the attempt view, the exam list and the offline package. `exam` is the
-    cached student view (entries cached before 2026-10-23 have no tool fields: all off)."""
+    cached student view (entries cached before 2026-10-23 have no tool fields: all off).
+    2026-10-24: `websites` stays the allowed sites the student sees; `allowed_sites` = those
+    plus their companions (app.site_companions), what the page hands the app to open;
+    `website_links` = the start pages ({"host", "url", "title"})."""
     if (exam.get("mode") or "questions") == "external":
-        return {"calculator": "off", "open_book": False, "websites": []}
+        return {"calculator": "off", "open_book": False, "websites": [], "website_links": [],
+                "allowed_sites": []}
+    from .site_companions import allowed_sites
     calc = exam.get("calculator")
+    websites = [w for w in exam.get("websites") or [] if isinstance(w, str)]
+    links = [{"host": x["host"], "url": x["url"], "title": x.get("title")}
+             for x in exam.get("website_links") or []
+             if isinstance(x, dict) and isinstance(x.get("url"), str) and x.get("host") in websites]
     return {"calculator": calc if calc in ("scientific", "graphing") else "off",
             "open_book": bool(exam.get("open_book")),
-            "websites": [w for w in exam.get("websites") or [] if isinstance(w, str)]}
+            "websites": websites, "website_links": links,
+            "allowed_sites": allowed_sites(websites)}
 
 
 def lock_settings(e: Exam) -> dict:

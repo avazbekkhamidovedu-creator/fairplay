@@ -27,7 +27,7 @@ export function UpcomingExamCard({
       : exam.scheduled_at
         ? `Open now · ${isToday(exam.scheduled_at) ? "today" : shortDate(exam.scheduled_at)} ${shortTime(exam.scheduled_at)}`
         : "Open now";
-  const meta = [exam.room && `Room ${exam.room}`, `${exam.duration_min} min`, plural(exam.question_count, "question")]
+  const meta = [exam.room && `Room ${exam.room}`, `${exam.duration_min} min`, exam.question_count != null && plural(exam.question_count, "question")]
     .filter(Boolean)
     .join(" · ");
   const name = showCourse ? examName(exam.course, exam.title) : exam.title;

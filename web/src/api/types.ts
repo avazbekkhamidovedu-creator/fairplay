@@ -451,7 +451,8 @@ export interface StudentExamSummary {
   id: string;
   title: string;
   duration_min: number;
-  question_count: number;
+  /** null while only the early upload window is open (nothing about the questions yet) */
+  question_count: number | null;
   status: ExamStatus;
   course: string;
   room: string;
@@ -1398,4 +1399,48 @@ export interface StudentFeedback {
   /** "answers": only the student's answers (no score, points or feedback) */
   review?: ReviewLevel;
   released?: boolean;
+}
+
+// ---------- 2026-10-24: early upload window; allowed websites as full links ----------
+
+/** An allowed website given as a full link: the page its websites tab opens first. Every
+ *  page of `host` is allowed (the link is only the start page). */
+export interface WebsiteLink {
+  host: string;
+  url: string;
+  title?: string | null;
+}
+/** Sites the lock also opens so a service works (Duke Box: sign-in, scripts, previews). */
+export interface SiteCompanions {
+  /** the allowed entry they belong to */
+  for: string;
+  /** "Duke Box" */
+  name: string;
+  sites: string[];
+}
+export interface ExamTools {
+  /** 2026-10-24: start pages of allowed websites given as links */
+  website_links?: WebsiteLink[];
+  /** 2026-10-24: websites + their companions: what the page hands the app (allowed_sites).
+   *  Missing (older servers): the websites. */
+  allowed_sites?: string[];
+}
+export interface Exam {
+  website_links?: WebsiteLink[];
+  companions?: SiteCompanions[];
+  /** open book: students may upload their files this many days before scheduled_at (0 = off) */
+  upload_opens_days?: number;
+}
+export interface ExamInput {
+  upload_opens_days?: number;
+}
+export interface StudentExamSummary {
+  /** 2026-10-24: a draft exam whose early upload window is open ("Upcoming — upload your
+   *  files"): no questions, no start; uploads close at closes_at. Null otherwise. */
+  upload_window?: { opens_at: string; closes_at: string } | null;
+}
+export interface MaterialsInfo {
+  /** 2026-10-24: the early upload window (null when the exam has none) */
+  upload_opens_at?: string | null;
+  upload_closes_at?: string | null;
 }

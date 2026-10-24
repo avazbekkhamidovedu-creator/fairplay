@@ -380,6 +380,9 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     # Security review 2026-10-24: the sites FairPlay lets the lock open (app.integrations.
     # site_policy) and the ones it refused, with why, for the FairPlay tab in DKU OJ.
     from ..site_policy import filter_sites
+    from ...schemas import clean_website_links
+    from ...services import upload_days
+    from ...site_companions import companions
     websites, refused = filter_sites(list(e.websites or []))
     blocked = [b for b in (e.external_meta or {}).get("websites_blocked") or []
                if isinstance(b, dict) and isinstance(b.get("site"), str)]
@@ -392,6 +395,11 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "closes_at": iso(exam_closes_at(e)), "open_to": open_to,
             "settings": {"calculator": e.calculator or "off", "open_book": bool(e.open_book),
                          "websites": websites,
+                         # 2026-10-24: start pages, sites opened so a service works (Duke Box:
+                         # sign-in, scripts, previews; app.site_companions), early uploads
+                         "website_links": clean_website_links(e.website_links or [], websites),
+                         "companions": companions(websites),
+                         "upload_opens_days": upload_days(e),
                          "websites_blocked": [{"site": b["site"], "reason": str(b.get("reason") or "")}
                                               for b in blocked],
                          "strong_lock": bool(e.require_strong_lock),

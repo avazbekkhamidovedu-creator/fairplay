@@ -13,6 +13,17 @@ external source asks for now passes this policy first:
   the teacher's list: "docs.python.org,*.cppreference.com"): when set, ONLY sites it covers
   may be used.
 
+- 2026-10-24: FAIRPLAY_SITE_POLICY_EXCEPTIONS (comma-separated exact host names; unset =
+  DEFAULT_EXCEPTIONS, "duke.app.box.com,duke.box.com"; set it empty for none): hosts the
+  deny-list does not refuse. Duke Box is the university's own file storage, which professors
+  and students use every day, so a DKU OJ professor may allow it; Box in general (app.box.com,
+  other universities' and companies' Box, Dropbox, Google Drive, OneDrive ...) stays refused.
+  An exception is exact (no subdomains, no wildcard: "*.box.com" is still refused) and lifts
+  only the deny-list: FAIRPLAY_EXTERNAL_SITE_ALLOWLIST, when set, still has to cover it.
+  The trade-off: Box opens the student's OWN Box (every file they keep there, files shared
+  with them, comments) during the exam -- the professor's choice, like open book. The sites
+  Box needs to work (sign-in, scripts, previews) are added by app.site_companions, not here.
+
 Dropped sites are kept with their reason (`websites_blocked: [{"site", "reason"}]`) so the
 source's own page can show the professor what FairPlay removed. FairPlay-native exams are
 not touched: their teacher chose the sites in FairPlay itself.
@@ -25,6 +36,8 @@ import os
 log = logging.getLogger("proctora.integrations")
 
 ENV_ALLOWLIST = "FAIRPLAY_EXTERNAL_SITE_ALLOWLIST"
+ENV_EXCEPTIONS = "FAIRPLAY_SITE_POLICY_EXCEPTIONS"
+DEFAULT_EXCEPTIONS = "duke.app.box.com,duke.box.com"
 WILDCARD = "*."
 
 AI = "AI assistant"
@@ -71,10 +84,26 @@ def _under(host: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
+def exceptions() -> set[str]:
+    """FAIRPLAY_SITE_POLICY_EXCEPTIONS as exact host names (unset: DEFAULT_EXCEPTIONS).
+    Wildcards and anything that is not a plain host name are ignored."""
+    raw = os.environ.get(ENV_EXCEPTIONS)
+    if raw is None:
+        raw = DEFAULT_EXCEPTIONS
+    out = set()
+    for x in raw.split(","):
+        h = x.strip().lower().rstrip(".")
+        if h and "*" not in h and "/" not in h and ":" not in h and "." in h:
+            out.add(h)
+    return out
+
+
 def denied(entry: str) -> str | None:
     """The reason a site entry is refused for an external exam, or None."""
     host, wild = _host(entry)
     if not host:
+        return None
+    if not wild and host in exceptions():
         return None
     for d, why in DENY_EXACT.items():
         if host == d or (wild and _under(d, host)):

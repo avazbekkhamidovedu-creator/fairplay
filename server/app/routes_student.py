@@ -56,6 +56,8 @@ SUBMIT_RETRIES = 3
 OFFLINE_KEY_ASKS = 10
 DEVICE_CHECKS_PER_MIN = 30
 SWAP_REQUESTS_PER_MIN = 10
+# 2026-10-24: the longest early upload window (Exam.upload_opens_days is 0..7)
+UPLOAD_LOOKAHEAD = timedelta(days=7)
 
 
 async def take_code_try(store, lock_key: str, count_key: str, limit: int, window_s: int,
@@ -115,7 +117,9 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
     from .materials import maybe_cleanup_materials
     from .offline import package_id
     await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
+    from .materials import upload_window
     secret = ac.settings_of(request).secret
+    now = utcnow()
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.duration_min, Exam.question_count, Exam.status,
                Attempt.id, Attempt.status, Attempt.submitted_at, Attempt.receipt,
@@ -125,10 +129,15 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                Exam.source, Attempt.external_result,                        # integrations
                Exam.open_to,                                                # 2026-10-23
                Exam.review_after_handin,                                    # 2026-10-24
-               Exam.class_id, Exam.external_meta)                           # 2026-10-24: class_ids
+               Exam.class_id, Exam.external_meta,                           # 2026-10-24: class_ids
+               Exam.upload_opens_days, Exam.website_links)                  # 2026-10-24
         .outerjoin(Attempt, and_(Attempt.exam_id == Exam.id, Attempt.student_id == p.user_id))
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
-        .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None)))
+        # 2026-10-24: + open-book drafts whose early upload window may be open (checked below)
+        .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None),
+                   and_(Exam.status == "draft", Exam.open_book == true(), Exam.upload_opens_days > 0,
+                        Exam.scheduled_at > now, Exam.scheduled_at <= now + UPLOAD_LOOKAHEAD,
+                        member_of_exam(p.user_id))))
         # slice 6: paper exams are printed; students never see them in the app
         .where(or_(Exam.delivery.is_(None), Exam.delivery != "paper"))
         .where(Exam.is_trial == false())     # the sample exam lives only in its own card
@@ -136,8 +145,16 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
          total, score, mode, delivery, code, calc, open_book, websites, source, external_result,
-         open_to, review, class_id, external_meta) in rows:
+         open_to, review, class_id, external_meta, upload_days, website_links) in rows:
         mode = mode or "questions"
+        window = None
+        if status == "draft" and aid is None:
+            # 2026-10-24: "Upcoming - upload your files": listed only while the window is
+            # open; nothing about the questions (no count, no package, no start)
+            window = upload_window({"open_book": open_book, "mode": mode, "scheduled_at": iso(sched),
+                                    "upload_opens_days": upload_days})
+            if window is None or not window[0] <= now < window[1]:
+                continue
         delivery = delivery or ("website" if mode == "external" else "computer")
         attempt = None
         if aid is not None:
@@ -158,7 +175,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         # 2026-10-23: open to selected students only -> listed, but "not open for you yet"
         # (no package, no start) unless this student already started
         open_for_me = aid is not None or is_open_for(open_to, p.user_id)
-        row = {"id": eid, "title": title, "duration_min": dur, "question_count": qc,
+        row = {"id": eid, "title": title, "duration_min": dur, "question_count": None if window else qc,
                     "status": status, "course": course or "", "room": room or "",
                     "open_for_me": open_for_me,
                     "scheduled_at": iso(sched), "mode": mode, "delivery": delivery,
@@ -166,11 +183,24 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                     "package_id": package_id(secret, eid, code, dur) if status == "live" and open_for_me else None,
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
-                                            "websites": websites})}
+                                            "websites": _student_sites(source, websites),
+                                            "website_links": website_links}),
+                    # 2026-10-24: the early upload window (draft exams only), else null
+                    "upload_window": {"opens_at": iso(window[0]), "closes_at": iso(window[1])} if window else None}
         row["class_ids"] = _class_ids(source, class_id, external_meta)
         row.update(_source_fields(source))
         out.append(row)
     return JSONResponse(out)   # perf 0.6.2: plain JSON values; skips FastAPI's re-encoding pass
+
+
+def _student_sites(source: str | None, websites) -> list:
+    """The exam's allowed sites as the student gets them (an external source's pass FairPlay's
+    site policy, like services.tool_settings)."""
+    sites = [w for w in websites or [] if isinstance(w, str)]
+    if (source or "fairplay") != "fairplay" and sites:
+        from .integrations.site_policy import filter_sites
+        sites = filter_sites(sites)[0]
+    return sites
 
 
 def _class_ids(source: str | None, class_id: int | None, meta) -> list[str]:

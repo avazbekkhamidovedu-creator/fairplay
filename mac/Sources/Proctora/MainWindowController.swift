@@ -108,10 +108,20 @@ final class MainWindowController: NSWindowController, LockSurface,
         (function () {
           document.addEventListener('contextmenu', function (e) { e.preventDefault(); }, true);
           document.addEventListener('dragstart', function (e) { e.preventDefault(); }, true);
-          window.open = function () { return null; };
         })();
         """
         ucc.addUserScript(WKUserScript(source: guardJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // 2026-10-24: window.open never opens a window (the exam page gets null as before); in
+        // the allowed-site pane, links and window.open that ask for a new tab open in the pane
+        // and are checked like any frame navigation (FileAccess.swift SiteFrameScript).
+        ucc.addUserScript(WKUserScript(source: SiteFrameScript.make(origin: FilePicker.origin(server)),
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // 2026-10-24: files are picked / dropped only while unlocked, in the exam server's own
+        // page (FilePicker). Off by default in every new page; didFinish and the lock turn it on
+        // or off (applyFileAccess). runOpenPanel refuses on its own too.
+        ucc.addUserScript(WKUserScript(source: FilePicker.guardScript(origin: FilePicker.origin(server),
+                                                                      post: "window.webkit.messageHandlers.proctora.postMessage"),
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: false))
         // Audit W-10: the page drops 'proctora-native' events that lack this nonce, so page
         // JS can't fake "locked"/"unlocked" to its own UI.
         // Audit 2026-10-13: only the FairPlay server's own pages get it, never a website
@@ -151,6 +161,7 @@ final class MainWindowController: NSWindowController, LockSurface,
                     view.load(URLRequest(url: Config.startURL))
                     return
                 }
+                self.noteRoute(u)        // 2026-10-24: FairPlay sign-out clears the other sites' sign-ins
                 // Review 2026-10-14: in-page route changes away from the locked attempt
                 // (e.g. a "Back to home" link) go back to it.
                 let lock = LockdownController.shared
@@ -179,6 +190,85 @@ final class MainWindowController: NSWindowController, LockSurface,
         }
         external.attach(webView: wv, container: content, window: window)
         startBatteryUpdates()
+        // 2026-10-24: allowed-site sign-ins are kept for the day (SiteData). Not when this run
+        // resumes an exam that was locked: that exam keeps them.
+        let endedLocked = CommandLine.arguments.contains("--resume-attempt")
+        if SiteData.shouldClearAtLaunch(lastDay: UserDefaults.standard.string(forKey: SiteData.dayKey),
+                                        today: SiteData.day(Date()), endedLocked: endedLocked) {
+            clearOtherSitesData(reason: "new day")
+        }
+    }
+
+    // MARK: - Files and allowed-site sign-ins (2026-10-24, FileAccess.swift)
+
+    /// The NSOpenPanel on screen (runOpenPanel), cancelled when a lock begins.
+    private var openPanel: NSOpenPanel?
+    /// A signed-in student page was shown since the last sign-out (SiteData.isSignOut).
+    private var sawSignedInPage = false
+
+    /// Files on in the exam page while unlocked, off while locked (pre-exam lock included).
+    private func applyFileAccess() {
+        guard let webView, isServerURL(webView.url) else { return }
+        let on = !LockdownController.shared.isLocked
+        webView.evaluateJavaScript(FilePicker.setScript(allowed: on), completionHandler: nil)
+    }
+
+    private func noteRoute(_ url: URL) {
+        let locked = LockdownController.shared.isLocked
+        if SiteData.isSignedInPath(url.path) {
+            sawSignedInPage = true
+        } else if SiteData.isSignOut(sawSignedInPage: sawSignedInPage, path: url.path, locked: locked) {
+            sawSignedInPage = false
+            clearOtherSitesData(reason: "FairPlay sign-out")
+        }
+    }
+
+    /// Removes every site's web data (cookies, storage, cache) except the exam server's
+    /// (SiteData.keeps): the allowed-site sign-ins go, the offline answers stay.
+    private func clearOtherSitesData(reason: String) {
+        UserDefaults.standard.set(SiteData.day(Date()), forKey: SiteData.dayKey)
+        let store = webView.configuration.websiteDataStore
+        let serverHost = (server.host ?? "").lowercased()
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        store.fetchDataRecords(ofTypes: types) { records in
+            let others = records.filter { !SiteData.keeps(domain: $0.displayName, serverHost: serverHost) }
+            guard !others.isEmpty else { return }
+            store.removeData(ofTypes: types, for: others) {
+                DebugLog.log("web", "other sites' data cleared (\(reason)): \(others.count) site(s)")
+            }
+        }
+    }
+
+    /// 2026-10-24: <input type=file> in the exam server's page while unlocked: the normal open
+    /// panel (files only, several when the input allows it). Refused while locked (pre-exam lock
+    /// included) and for any other page or frame; the page hears {type:"fileRefused"}.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let origin = frame.securityOrigin
+        let originPort = origin.port == 0 ? defaultPort(origin.protocol) : origin.port
+        let fromServer = frame.isMainFrame && origin.protocol.lowercased() == server.scheme?.lowercased()
+            && origin.host.lowercased() == (server.host ?? "").lowercased()
+            && originPort == (server.port ?? defaultPort(server.scheme))
+        let locked = LockdownController.shared.isLocked
+        guard FilePicker.allowed(locked: locked, fromServer: fromServer), openPanel == nil,
+              let win = window, win.attachedSheet == nil else {
+            DebugLog.log("web", "file picker REFUSED (locked=\(locked) server=\(fromServer))")
+            if locked && fromServer { send(FilePicker.refusedMessage) }
+            completionHandler(nil)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        openPanel = panel
+        panel.beginSheetModal(for: win) { [weak self] response in
+            self?.openPanel = nil
+            // A lock that began while the panel was open gets no file.
+            guard response == .OK, !LockdownController.shared.isLocked else { completionHandler(nil); return }
+            completionHandler(panel.urls)
+        }
     }
 
     // MARK: - Battery for the exam top bar (2026-10-23)
@@ -278,6 +368,9 @@ final class MainWindowController: NSWindowController, LockSurface,
             sendState()
         case "flushEvents":
             flushEventQueue()
+        case "fileRefused":
+            // 2026-10-24: the page guard refused a file (FilePicker.guardScript): tell the page.
+            if LockdownController.shared.isLocked { send(FilePicker.refusedMessage) }
         case "attest":
             send(AppSession.shared.attestation(nonce: (body["nonce"] as? String) ?? ""))
         case "session":
@@ -740,6 +833,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let u = webView.url { DebugLog.log("web", "page shown: \(u.host ?? u.scheme ?? "")\(u.path)") }
         pushBattery()
+        applyFileAccess()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -967,6 +1061,9 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     func enterLockedMode() {
         guard let win = window else { return }
+        // 2026-10-24: no file picking while locked: the open panel (if any) is cancelled first,
+        // the page's file inputs and drops are refused (applyFileAccess below).
+        if let panel = openPanel { win.endSheet(panel, returnCode: .cancel) }
         normalFrame = win.frame
         win.styleMask = [.borderless]
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -975,6 +1072,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         coverAllScreens()
         takeFocus()
         win.makeFirstResponder(webView)
+        applyFileAccess()
     }
 
     func exitLockedMode() {
@@ -989,6 +1087,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         win.title = "FairPlay"
         win.setFrame(normalFrame, display: true)
         win.makeFirstResponder(webView)
+        applyFileAccess()                       // 2026-10-24: files work again
     }
 
     func takeFocus() {

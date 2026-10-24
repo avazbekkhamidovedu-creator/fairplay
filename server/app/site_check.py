@@ -5,7 +5,8 @@ frame-ancestors). The browser then shows a blank frame, so the teacher should he
 while choosing the exam's websites, not the student during the exam.
 
   GET /api/tools/site-check?host=docs.python.org   teacher only, rate limited
-      -> {"host": "docs.python.org", "frameable": true | false | null, "reason": "..."}
+      -> {"host": "docs.python.org", "frameable": true | false | null, "reason": "...",
+          "companions": {"name": "Duke Box", "sites": [...]} | null}   (2026-10-24; host may be a link)
 
 `frameable` is null when the site could not be checked (no answer, an error page, or an
 address on a private network). "*.python.org" checks python.org (what the pane opens).
@@ -25,7 +26,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .lms.base import LmsError, public_only_transport
-from .schemas import WILDCARD_PREFIX, normalize_website
+from .schemas import WILDCARD_PREFIX, parse_website_entry
+from .site_companions import companions_for
 from .security import Principal, require_teacher
 from .store import get_store
 
@@ -135,7 +137,8 @@ async def site_check(request: Request, host: str = Query(..., max_length=260),
     if await store.incr(f"sitecheck:{p.user_id}", 60) > CHECKS_PER_MIN:
         raise HTTPException(429, "Too many website checks, wait a minute")
     try:
-        entry = normalize_website(host)
+        # 2026-10-24: a full link checks its site
+        entry, _link = parse_website_entry(host)
     except ValueError as e:
         raise HTTPException(422, str(e)) from None
     bare = entry[len(WILDCARD_PREFIX):] if entry.startswith(WILDCARD_PREFIX) else entry
@@ -143,4 +146,8 @@ async def site_check(request: Request, host: str = Query(..., max_length=260),
             or bare.endswith(".internal"):
         raise HTTPException(422, "That is not a public website")
     own = urlsplit(str(request.base_url)).hostname
-    return await check_site(entry, own)
+    out = dict(await check_site(entry, own))
+    # 2026-10-24: the sites the lock also opens for this one (app.site_companions)
+    name, sites = companions_for(entry)
+    out["companions"] = {"name": name, "sites": sites} if name and sites else None
+    return out

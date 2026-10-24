@@ -24,7 +24,9 @@ def test_student_exam_list(client, teacher, alice, live_exam):
                     "course": "", "room": "", "scheduled_at": None,
                     "mode": "questions", "delivery": "computer",
                     # 2026-10-23: exam tools (all off by default)
-                    "tools": {"calculator": "off", "open_book": False, "websites": []},
+                    "tools": {"calculator": "off", "open_book": False, "websites": [],
+                              "website_links": [], "allowed_sites": []},     # 2026-10-24
+                    "upload_window": None,     # 2026-10-24: early uploads (drafts only)
                     "source": "fairplay",      # 2026-10-23: integrations (app.integrations)
                     "open_for_me": True,       # 2026-10-23: open to all / selected students
                     "class_ids": [str(live_exam["class_id"])]}   # 2026-10-24: course cards

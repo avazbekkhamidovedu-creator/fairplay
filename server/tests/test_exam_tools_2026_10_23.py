@@ -12,6 +12,8 @@ PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 TOOLS = {"calculator": "graphing", "open_book": True, "websites": ["docs.python.org", "en.cppreference.com"]}
+# 2026-10-24: what students get: + the start pages (none here) and the sites the lock opens
+STUDENT_TOOLS = {**TOOLS, "website_links": [], "allowed_sites": TOOLS["websites"]}
 
 
 def create(client, teacher, **extra):
@@ -80,12 +82,12 @@ def test_website_exam_has_no_tools(client, teacher):
 def test_tools_reach_the_student(client, teacher, alice):
     e = open_exam(client, teacher, create(client, teacher, **TOOLS)["id"])
     listed = next(x for x in client.get("/api/student/exams", headers=alice).json() if x["id"] == e["id"])
-    assert listed["tools"] == TOOLS
+    assert listed["tools"] == STUDENT_TOOLS
     a = client.post(f"/api/student/exams/{e['id']}/start", json={"start_code": e["start_code"]},
                     headers=alice).json()
-    assert a["tools"] == TOOLS and a["allowed_apps"] == []
+    assert a["tools"] == STUDENT_TOOLS and a["allowed_apps"] == []
     g = client.get(f"/api/student/attempts/{a['attempt_id']}", headers=alice).json()
-    assert g["tools"] == TOOLS
+    assert g["tools"] == STUDENT_TOOLS
 
 
 def test_offline_package_carries_tools():
@@ -93,11 +95,11 @@ def test_offline_package_carries_tools():
     exam = {"id": "e_1", "title": "T", "duration_min": 5, "questions": [], "allowed_apps": ["excel"], **TOOLS}
     plain = package_plaintext(exam)
     # 2026-10-23 (review 2): plus "the materials are not in here"
-    assert plain["tools"] == {**TOOLS, "materials_need_connection": True} and plain["allowed_apps"] == []
+    assert plain["tools"] == {**STUDENT_TOOLS, "materials_need_connection": True} and plain["allowed_apps"] == []
     # a cache entry from before 2026-10-23 has no tool fields: all off
     old = package_plaintext({"id": "e_1", "title": "T", "duration_min": 5, "questions": []})
-    assert old["tools"] == {"calculator": "off", "open_book": False, "websites": [],
-                            "materials_need_connection": False}
+    assert old["tools"] == {"calculator": "off", "open_book": False, "websites": [], "website_links": [],
+                            "allowed_sites": [], "materials_need_connection": False}
 
 
 def test_old_database_gets_the_tool_columns(tmp_path):

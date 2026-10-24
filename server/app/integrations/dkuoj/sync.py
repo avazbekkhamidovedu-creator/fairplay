@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import ClassMember, Exam, SchoolClass, User
-from ...schemas import normalize_website
+from ...schemas import MAX_WEBSITE_LINKS, clean_website_links, parse_website_entry
 from ..sanitize import clean_markdown
 from ..site_policy import filter_sites
 from ...services import invalidate_exam, new_id
@@ -205,25 +205,41 @@ async def _owner(session: AsyncSession) -> User:
 def _settings(item: dict) -> dict:
     s = item.get("settings") or {}
     calc = s.get("calculator")
-    sites, unusable = [], []
-    for w in s.get("websites") or []:
+    sites, unusable, links = [], [], []
+    # 2026-10-24: `websites` are host names; `website_links` [{host, url, title}] the start pages
+    # (a link in `websites` itself, from an older or newer DKU OJ, is split here as well)
+    raw_links = [x for x in s.get("website_links") or [] if isinstance(x, dict)][:MAX_WEBSITE_LINKS]
+    entries = [(w, None) for w in s.get("websites") or []] + [(x.get("url"), x.get("title")) for x in raw_links]
+    for w, title in entries:
         try:
-            h = normalize_website(str(w))
+            h, link = parse_website_entry(str(w))
         except ValueError as exc:
             log.warning("DKU OJ exam %s: website %r skipped", item.get("key"), w)
             unusable.append({"site": str(w)[:200], "reason": str(exc)[:200]})
             continue
         if h not in sites:
             sites.append(h)
+        if link is not None:
+            if isinstance(title, str) and title.strip():
+                link["title"] = title
+            links.append(link)
     # Security review 2026-10-24: FairPlay's own policy for sites an external source opens
     # in the lock (app.integrations.site_policy); the dropped ones go to websites_blocked.
     sites, blocked = filter_sites(sites[:20])
+    links = clean_website_links(links, sites)
     blocked = (unusable + blocked)[:40]
     if blocked:
         log.warning("DKU OJ exam %s: websites refused by FairPlay: %s", item.get("key"),
                     ", ".join(b["site"] for b in blocked))
+    try:
+        days = int(s.get("upload_opens_days") or 0)
+    except (TypeError, ValueError):
+        days = 0
     return {"calculator": calc if calc in ("off", "scientific", "graphing") else "off",
             "open_book": bool(s.get("open_book")), "websites": sites, "websites_blocked": blocked,
+            "website_links": links,
+            # 2026-10-24: open book: students may upload this many days before start_time
+            "upload_opens_days": days if 0 <= days <= 7 else 0,
             "require_strong_lock": bool(s.get("strong_lock")),
             "resume_needs_approval": s.get("resume_needs_approval") is not False}
 

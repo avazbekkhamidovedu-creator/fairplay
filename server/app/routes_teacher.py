@@ -72,15 +72,19 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     for f in ("course", "room", "scheduled_at", "closes_at", "shuffle_questions", "class_id",
               "resume_needs_approval", "require_strong_lock",
               "calculator", "open_book", "websites",             # 2026-10-23: exam tools
+              "upload_opens_days",                               # 2026-10-24
               "default_language"):                               # phase 4
         if creating or f in body.model_fields_set:
             setattr(e, f, getattr(body, f))
+    if creating or "websites" in body.model_fields_set:
+        e.website_links = list(body.website_links)            # 2026-10-24: derived from websites
     # 2026-10-23: no outside apps any more (calculator, materials and websites are built
     # in). Older editors still send allowed_apps; it is accepted and dropped, so the apps
     # close everything when they lock.
     e.allowed_apps = []
     if body.mode == "external":
         e.calculator, e.open_book, e.websites = "off", False, []
+        e.website_links, e.upload_opens_days = [], 0
     # Slice 3: mode and its fields always come from the body (already normalised by
     # ExamIn: null/[] for "questions" mode, so switching back clears them).
     e.mode = body.mode

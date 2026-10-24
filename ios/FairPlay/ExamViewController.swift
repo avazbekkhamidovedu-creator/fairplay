@@ -1,5 +1,6 @@
 import UIKit
 import WebKit
+import PhotosUI
 import FairPlayCore
 
 /// While locked the edit menu offers only Select / Select All / Undo: no Copy, Paste,
@@ -161,7 +162,6 @@ final class ExamViewController: UIViewController, LockSurface,
         (function () {
           document.addEventListener('contextmenu', function (e) { e.preventDefault(); }, true);
           document.addEventListener('dragstart', function (e) { e.preventDefault(); }, true);
-          window.open = function () { return null; };
           var s = document.createElement('style');
           s.textContent = '*{-webkit-touch-callout:none!important}' +
             'body :not(input):not(textarea):not([contenteditable]):not([contenteditable] *){-webkit-user-select:none}';
@@ -169,6 +169,17 @@ final class ExamViewController: UIViewController, LockSurface,
         })();
         """
         ucc.addUserScript(WKUserScript(source: guardJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        // 2026-10-24: window.open never opens a window (the exam page gets null as before); in
+        // the allowed-site pane, links and window.open that ask for a new tab open in the pane
+        // and are checked like any frame navigation (FairPlayCore FileAccess.swift).
+        ucc.addUserScript(WKUserScript(source: SiteFrameScript.make(origin: FilePicker.origin(server)),
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // 2026-10-24: files are picked / dropped only while unlocked, in the exam server's own
+        // page (FilePicker). Off by default in every new page; didFinish and the lock turn it on
+        // or off (applyFileAccess). present(_:) refuses the pickers on its own too.
+        ucc.addUserScript(WKUserScript(source: FilePicker.guardScript(origin: FilePicker.origin(server),
+                                                                      post: "window.webkit.messageHandlers.proctora.postMessage"),
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.addUserScript(WKUserScript(source: ExamPaths.nonceScript(nonce: bridgeNonce, server: server),
                                        injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // 2026-10-23: where the bundled files are (window.fairplayAssets), for the exam
@@ -214,6 +225,7 @@ final class ExamViewController: UIViewController, LockSurface,
                     view.load(Self.serverRequest(Config.startURL))
                     return
                 }
+                self.noteRoute(u)        // 2026-10-24: FairPlay sign-out clears the other sites' sign-ins
                 let lock = LockdownController.shared
                 let aid = AppSession.shared.exam?.attemptId
                 guard lock.isLocked else { return }
@@ -252,7 +264,82 @@ final class ExamViewController: UIViewController, LockSurface,
             DebugLog.log("app", "last run ended while locked: resuming \(aid)")
             launchURL = server.appendingPathComponent("student/exam/\(aid)")
         }
+        // 2026-10-24: allowed-site sign-ins are kept for the day (SiteData). Not when this run
+        // resumes an exam that was locked: that exam keeps them.
+        let endedLocked = resumeAttempt != nil || resumePage != nil
+        if SiteData.shouldClearAtLaunch(lastDay: UserDefaults.standard.string(forKey: SiteData.dayKey),
+                                        today: SiteData.day(Date()), endedLocked: endedLocked) {
+            clearOtherSitesData(reason: "new day")
+        }
         loadFromServer(launchURL)
+    }
+
+    // MARK: - Files and allowed-site sign-ins (2026-10-24, FairPlayCore FileAccess.swift)
+
+    /// A signed-in student page was shown since the last sign-out (SiteData.isSignOut).
+    private var sawSignedInPage = false
+
+    /// Files on in the exam page while unlocked, off while locked (pre-exam lock included).
+    private func applyFileAccess() {
+        guard let webView, isServerURL(webView.url) else { return }
+        webView.evaluateJavaScript(FilePicker.setScript(allowed: !LockdownController.shared.isLocked))
+    }
+
+    private func noteRoute(_ url: URL) {
+        let locked = LockdownController.shared.isLocked
+        if SiteData.isSignedInPath(url.path) {
+            sawSignedInPage = true
+        } else if SiteData.isSignOut(sawSignedInPage: sawSignedInPage, path: url.path, locked: locked) {
+            sawSignedInPage = false
+            clearOtherSitesData(reason: "FairPlay sign-out")
+        }
+    }
+
+    /// Removes every site's web data (cookies, storage, cache) except the exam server's
+    /// (SiteData.keeps): the allowed-site sign-ins go, the offline answers stay.
+    private func clearOtherSitesData(reason: String) {
+        UserDefaults.standard.set(SiteData.day(Date()), forKey: SiteData.dayKey)
+        let store = WKWebsiteDataStore.default()
+        let serverHost = (server.host ?? "").lowercased()
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        store.fetchDataRecords(ofTypes: types) { records in
+            let others = records.filter { !SiteData.keeps(domain: $0.displayName, serverHost: serverHost) }
+            guard !others.isEmpty else { return }
+            store.removeData(ofTypes: types, for: others) {
+                DebugLog.log("web", "other sites' data cleared (\(reason)): \(others.count) site(s)")
+            }
+        }
+    }
+
+    /// 2026-10-24: WebKit shows the photo / file / camera pickers of an <input type=file> from
+    /// this view controller. While locked (pre-exam lock included) they never appear: the
+    /// picker is cancelled through its own delegate (WebKit then ends the file choice with no
+    /// file) and the page hears {type:"fileRefused"}. The page guard normally refuses earlier.
+    override func present(_ viewControllerToPresent: UIViewController, animated flag: Bool,
+                          completion: (() -> Void)? = nil) {
+        if LockdownController.shared.isLocked, Self.cancelIfFilePicker(viewControllerToPresent) {
+            DebugLog.log("web", "file picker REFUSED while locked: \(type(of: viewControllerToPresent))")
+            send(FilePicker.refusedMessage)
+            return
+        }
+        super.present(viewControllerToPresent, animated: flag, completion: completion)
+    }
+
+    /// True (and the picker told it was cancelled) for the pickers WebKit uses for files.
+    private static func cancelIfFilePicker(_ vc: UIViewController) -> Bool {
+        if let p = vc as? UIDocumentPickerViewController {
+            p.delegate?.documentPickerWasCancelled?(p)
+            return true
+        }
+        if let p = vc as? UIImagePickerController {
+            p.delegate?.imagePickerControllerDidCancel?(p)
+            return true
+        }
+        if let p = vc as? PHPickerViewController {
+            p.delegate?.picker(p, didFinishPicking: [])
+            return true
+        }
+        return false
     }
 
     func reload() {
@@ -424,6 +511,9 @@ final class ExamViewController: UIViewController, LockSurface,
             sendState()
         case "flushEvents":
             flushEventQueue()
+        case "fileRefused":
+            // 2026-10-24: the page guard refused a file (FilePicker.guardScript): tell the page.
+            if LockdownController.shared.isLocked { send(FilePicker.refusedMessage) }
         case "attest":
             send(AppSession.shared.attestation(nonce: (body["nonce"] as? String) ?? ""))
         case "session":
@@ -786,6 +876,7 @@ final class ExamViewController: UIViewController, LockSurface,
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let u = webView.url { DebugLog.log("web", "page shown: \(u.host ?? u.scheme ?? "")\(u.path)") }
         pushBattery()
+        applyFileAccess()
     }
 
     /// Review 2026-10-24: when the exam page's process crashed (last `crashWindow` seconds).
@@ -949,6 +1040,7 @@ final class ExamViewController: UIViewController, LockSurface,
         UIApplication.shared.isIdleTimerDisabled = true     // the iPad doesn't auto-lock mid-exam
         refreshSystemChrome()
         lockStateChanged()
+        applyFileAccess()                                   // 2026-10-24: no files while locked
     }
 
     func exitLockedMode() {
@@ -962,6 +1054,7 @@ final class ExamViewController: UIViewController, LockSurface,
         bar.stopClock()
         UIApplication.shared.isIdleTimerDisabled = false
         refreshSystemChrome()
+        applyFileAccess()                            // 2026-10-24: files work again
     }
 
     private func refreshSystemChrome() {

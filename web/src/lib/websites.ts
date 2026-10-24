@@ -94,3 +94,80 @@ export function entryMatches(host: string, entry: string): boolean {
 export function hostAllowed(host: string, allowed: string[]): boolean {
   return allowed.some((a) => entryMatches(host, a));
 }
+
+// 2026-10-24: allowed websites may come with full links (start pages) and companions.
+
+/** What the page hands the app as allowed_sites: the exam's websites plus the sites a
+ *  service needs to work (the server's `allowed_sites`; older servers: the websites). */
+export function lockSites(tools: { websites?: string[]; allowed_sites?: string[] } | null | undefined): string[] {
+  if (!tools) return [];
+  return [...(tools.allowed_sites ?? tools.websites ?? [])];
+}
+
+export interface SiteEntry {
+  key: string;
+  host: string;
+  url: string;
+  label: string;
+  /** the link's own text below the title ("duke.app.box.com/folder/0") */
+  detail?: string;
+}
+
+/** "https://duke.app.box.com/folder/0" -> "duke.app.box.com/folder/0". */
+export function shortLink(url: string): string {
+  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+}
+
+/** The rows of the websites list: each start page (link) of a site, else the site itself. */
+export function siteEntries(
+  sites: string[],
+  links: { host: string; url: string; title?: string | null }[] | null | undefined,
+): SiteEntry[] {
+  const out: SiteEntry[] = [];
+  for (const host of sites) {
+    const mine = (links ?? []).filter((l) => l.host === host && /^https:\/\//i.test(l.url));
+    if (mine.length === 0) {
+      out.push({ key: host, host, url: siteUrl(host), label: siteLabel(host) });
+      continue;
+    }
+    for (const l of mine)
+      out.push({ key: l.url, host, url: l.url, label: l.title || shortLink(l.url), detail: l.title ? shortLink(l.url) : undefined });
+  }
+  return out;
+}
+
+/** Teacher input: a site name or a full link (optionally after a title: "Course folder
+ *  https://duke.app.box.com/folder/0"). Mirrors server schemas.parse_website_entry. */
+export type WebsiteEntryCheck =
+  | { ok: true; host: string; link: { url: string; title: string | null } | null }
+  | { ok: false; error: string };
+
+export function parseWebsiteEntry(input: string): WebsiteEntryCheck {
+  const raw = input.trim();
+  if (!raw) return { ok: false, error: "Type a website or a link, like docs.python.org or https://duke.app.box.com/folder/0." };
+  let title: string | null = null;
+  let s = raw;
+  const m = /^(.*\S)\s+(https?:\/\/\S+)$/i.exec(raw);
+  if (m) {
+    title = m[1]!.replace(/\s+/g, " ").trim().slice(0, 80) || null;
+    s = m[2]!;
+  }
+  if (!/^https?:\/\//i.test(s)) {
+    if (/\s/.test(s)) return { ok: false, error: `"${raw}" is not a website or a link.` };
+    const r = normalizeWebsite(s);
+    return r.ok ? { ok: true, host: r.host, link: null } : r;
+  }
+  if (s.length > 2000) return { ok: false, error: "That link is too long." };
+  const rest = s.replace(/^https?:\/\//i, "");
+  const cut = rest.search(/[/?#]/);
+  const authority = cut >= 0 ? rest.slice(0, cut) : rest;
+  let tail = cut >= 0 ? rest.slice(cut) : "";
+  if (authority.startsWith(WILDCARD_PREFIX)) return { ok: false, error: "A link can't have a *. wildcard." };
+  if (/[@:]/.test(authority)) return { ok: false, error: "Use a link without a port or a user name." };
+  const r = normalizeWebsite(authority);
+  if (!r.ok) return r;
+  if ((tail === "" || tail === "/") && title === null) return { ok: true, host: r.host, link: null };
+  if (tail && !tail.startsWith("/")) tail = `/${tail}`;
+  if (!/^[A-Za-z0-9._~!$&'()*+,;=:@%/?#[\]-]*$/.test(tail)) return { ok: false, error: `"${raw}" has characters a link can't have.` };
+  return { ok: true, host: r.host, link: { url: `https://${r.host}${tail || "/"}`, title } };
+}

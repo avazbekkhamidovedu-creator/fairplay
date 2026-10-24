@@ -43,6 +43,7 @@ import {
 } from "../../lib/examPrefs";
 import { useStudentIdentity } from "../../lib/useStudentIdentity";
 import { useBattery } from "../../lib/battery";
+import { lockSites } from "../../lib/websites";
 import { AnswerQueue, type SyncStatus } from "../../lib/answerQueue";
 import * as bridge from "../../lib/bridge";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
@@ -449,7 +450,7 @@ function ExamTakingInner() {
         queue.init(a.answers);
         setAnswers(queue.getAnswers());
         appsRef.current = a.allowed_apps;   // 2026-10-14: handed to the app with "lock"
-        sitesRef.current = [...(a.tools?.websites ?? [])];
+        sitesRef.current = lockSites(a.tools);   // 2026-10-24: + companions
         setWaiting(a.needs_approval === true || a.approval === "pending");
         setAttempt(a);
         setDeadline(a.deadline_at);
@@ -614,7 +615,7 @@ function ExamTakingInner() {
         token,
         session,
         allowed_apps: bridge.allowedAppIds(attempt.allowed_apps),
-        allowed_sites: [...(attempt.tools?.websites ?? [])],   // 2026-10-23
+        allowed_sites: lockSites(attempt.tools),   // 2026-10-23; 2026-10-24: + companions
       });
   }, [attempt, connected]);
 
@@ -1357,11 +1358,12 @@ function ExamTakingInner() {
                     <MaterialFileView attemptId={materialsAid} file={t.file} />
                   ) : t.kind === "sites" ? (
                     <div className="xd-tool-pad">
-                      <WebsitesPaneContent sites={tools?.websites ?? []} onOpenSite={(h, u) => openSite(h, u, true)} />
+                      <WebsitesPaneContent sites={tools?.websites ?? []} links={tools?.website_links} onOpenSite={(h, u) => openSite(h, u, true)} />
                     </div>
                   ) : (
                     <WebsitesPaneContent
                       sites={tools?.websites ?? []}
+                      links={tools?.website_links}
                       startUrl={t.url}
                       request={t.seq > 0 ? { url: t.url, seq: t.seq } : null}
                       onAllSites={() => openTab({ id: "sites", kind: "sites" })}

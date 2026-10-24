@@ -174,7 +174,7 @@ export default function BeforeStartPage() {
             <h1 id="before-h">{name}</h1>
             {exam && (
               <p className="stu-muted" style={{ margin: 0 }}>
-                {exam.duration_min} minutes · {plural(exam.question_count, "question")}
+                {exam.duration_min} minutes{exam.question_count != null ? ` · ${plural(exam.question_count, "question")}` : ""}
                 {exam.room ? ` · Room ${exam.room}` : ""}
               </p>
             )}
