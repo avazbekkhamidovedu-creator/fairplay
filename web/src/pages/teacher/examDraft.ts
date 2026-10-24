@@ -88,7 +88,10 @@ export interface DraftExam {
   /** 2026-10-23 (exam tools): replaces the allowed apps (no outside apps any more). */
   calculator: CalculatorMode;
   openBook: boolean;
+  /** 2026-10-24: each a site name or a link ("Title https://…"); the server splits them */
   websites: string[];
+  /** 2026-10-24: open book: uploads open this many days before the date (0 = off) */
+  uploadOpensDays: number;
   /** S3: the teacher approves a student coming back after FairPlay closed (default on). */
   resumeNeedsApproval: boolean;
   /** S6: require the strongest lock (default off). */
@@ -252,6 +255,7 @@ export function draftFromExam(exam?: Exam): DraftExam {
       calculator: "off",
       openBook: false,
       websites: [],
+      uploadOpensDays: 0,
       resumeNeedsApproval: true,
       strongLock: false,
       defaultLanguage: "python",
@@ -274,7 +278,8 @@ export function draftFromExam(exam?: Exam): DraftExam {
     delivery: exam.delivery ?? (exam.mode === "external" ? "website" : "computer"),
     calculator: exam.calculator === "scientific" || exam.calculator === "graphing" ? exam.calculator : "off",
     openBook: exam.open_book === true,
-    websites: [...(exam.websites ?? [])],
+    websites: websiteEntries(exam.websites ?? [], exam.website_links ?? []),
+    uploadOpensDays: typeof exam.upload_opens_days === "number" ? exam.upload_opens_days : 0,
     resumeNeedsApproval: exam.resume_needs_approval !== false,
     strongLock: exam.require_strong_lock === true,
     defaultLanguage: isCodeLanguage(exam.default_language) ? exam.default_language : "python",
@@ -498,8 +503,13 @@ export function toExamInput(d: DraftExam): ExamInput {
     // 2026-10-23: no outside apps; the tools are for exams taken in FairPlay
     allowed_apps: [],
     ...(d.external.mode === "external" || d.delivery === "paper"
-      ? { calculator: "off" as const, open_book: false, websites: [] }
-      : { calculator: d.calculator, open_book: d.openBook, websites: [...d.websites] }),
+      ? { calculator: "off" as const, open_book: false, websites: [], upload_opens_days: 0 }
+      : {
+          calculator: d.calculator,
+          open_book: d.openBook,
+          websites: [...d.websites],
+          upload_opens_days: d.openBook ? d.uploadOpensDays : 0,
+        }),
     resume_needs_approval: d.resumeNeedsApproval,
     require_strong_lock: d.strongLock,
     default_language: d.defaultLanguage,
@@ -527,4 +537,16 @@ export function questionMeta(q: DraftQuestion): string {
   }
   parts.push(`${q.points || 0} ${q.points === "1" ? "pt" : "pts"}`);
   return parts.join(" · ");
+}
+
+/** 2026-10-24: the editor's website lines from a saved exam: a site given as links becomes its
+ *  links ("Title https://…" or the link), any other site its name. */
+export function websiteEntries(websites: string[], links: { host: string; url: string; title?: string | null }[]): string[] {
+  const out: string[] = [];
+  for (const h of websites) {
+    const mine = links.filter((l) => l.host === h);
+    if (mine.length === 0) out.push(h);
+    else for (const l of mine) out.push(l.title ? `${l.title} ${l.url}` : l.url);
+  }
+  return out;
 }

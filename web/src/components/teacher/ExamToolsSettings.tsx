@@ -5,13 +5,25 @@
 import { useEffect, useState } from "react";
 import { toolsApi, type SiteCheck } from "../../api/client";
 import type { CalculatorMode } from "../../api/types";
-import { MAX_WEBSITES, normalizeWebsite } from "../../lib/websites";
+import { MAX_WEBSITES, parseWebsiteEntry, shortLink } from "../../lib/websites";
 import "../../styles/tools.css";
 
 export interface ExamToolsValue {
   calculator: CalculatorMode;
   openBook: boolean;
+  /** 2026-10-24: site names or links ("Title https://…"), as the server takes them */
   websites: string[];
+  /** 2026-10-24: open book: uploads open this many days before the date (0 = off) */
+  uploadOpensDays?: number;
+}
+
+/** 2026-10-24: the choices of "Students can upload their files … before the exam". */
+export const UPLOAD_DAYS = [0, 1, 2, 3, 4, 5, 6, 7] as const;
+
+/** One editor line -> its site (allow-list entry) and link (null for a plain site). */
+function entryOf(line: string): { host: string; url: string | null; title: string | null } {
+  const r = parseWebsiteEntry(line);
+  return r.ok ? { host: r.host, url: r.link?.url ?? null, title: r.link?.title ?? null } : { host: line, url: null, title: null };
 }
 
 // 2026-10-23 (review): many sites refuse to be shown inside another page (the student would
@@ -53,32 +65,48 @@ function useSiteChecks(hosts: string[]): Record<string, SiteCheck> {
   return checks;
 }
 
-export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; onChange: (v: ExamToolsValue) => void }) {
+export function ExamToolsSettings({
+  value,
+  onChange,
+  hasDate = true,
+}: {
+  value: ExamToolsValue;
+  onChange: (v: ExamToolsValue) => void;
+  /** 2026-10-24: the exam has a date (the early upload window counts back from it) */
+  hasDate?: boolean;
+}) {
   const [site, setSite] = useState("");
   const [siteError, setSiteError] = useState<string | null>(null);
   // the website list stays visible while ticked, even when it is still empty
   const [sitesOn, setSitesOn] = useState(value.websites.length > 0);
   const calcOn = value.calculator !== "off";
-  const checks = useSiteChecks(value.websites);
+  const entries = value.websites.map((line) => ({ line, ...entryOf(line) }));
+  const hosts = [...new Set(entries.map((e) => e.host))];
+  const checks = useSiteChecks(hosts);
+  const uploadDays = value.uploadOpensDays ?? 0;
 
   const addSite = () => {
-    const r = normalizeWebsite(site);
+    const r = parseWebsiteEntry(site);
     if (!r.ok) {
       setSiteError(r.error);
       return;
     }
-    if (value.websites.includes(r.host)) {
-      setSiteError(`${r.host} is already on the list.`);
+    const line = r.link ? (r.link.title ? `${r.link.title} ${r.link.url}` : r.link.url) : r.host;
+    const same = entries.find((e) => (r.link ? e.url === r.link.url : e.host === r.host && !e.url));
+    if (same) {
+      setSiteError(`${r.link ? shortLink(r.link.url) : r.host} is already on the list.`);
       return;
     }
-    if (value.websites.length >= MAX_WEBSITES) {
+    if (!hosts.includes(r.host) && hosts.length >= MAX_WEBSITES) {
       setSiteError(`At most ${MAX_WEBSITES} websites.`);
       return;
     }
-    onChange({ ...value, websites: [...value.websites, r.host] });
+    onChange({ ...value, websites: [...value.websites, line] });
     setSite("");
     setSiteError(null);
   };
+  // companions shown once per host (the first line of that host)
+  const shownCompanions = new Set<string>();
 
   return (
     <section className="t-card t-tools" aria-labelledby="tools-h">
@@ -140,6 +168,33 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
             </span>
           </span>
         </label>
+        {value.openBook && (
+          <div className="t-tool-sub">
+            <label className="t-inline-field">
+              <span>Students can upload their files</span>
+              <select
+                className="input t-select-sm"
+                value={uploadDays}
+                onChange={(e) => onChange({ ...value, uploadOpensDays: Number(e.target.value) })}
+                aria-describedby="upload-days-hint"
+                data-testid="upload-days"
+              >
+                {UPLOAD_DAYS.map((n) => (
+                  <option key={n} value={n}>
+                    {n === 0 ? "only on exam day" : n === 1 ? "1 day before the exam" : `${n} days before the exam`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span id="upload-days-hint" className="t-small t-muted">
+              {uploadDays === 0
+                ? "On exam day students add their files right before they start."
+                : hasDate
+                  ? `The exam shows on students' pages ${uploadDays === 1 ? "1 day" : `${uploadDays} days`} before its date with only an upload area (no questions). Uploads close at the exam's start time, or when you open it.`
+                  : "Set the exam's date and time above: uploads open that many days before it."}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="t-tool">
@@ -159,26 +214,47 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
         </label>
         {(sitesOn || value.websites.length > 0) && (
           <div className="t-tool-sub">
-            {value.websites.length > 0 && (
+            {entries.length > 0 && (
               <ul className="t-sites" aria-label="Allowed websites">
-                {value.websites.map((h) => (
-                  <li key={h}>
-                    <span className="mono">{h}</span>
-                    {checks[h]?.frameable === false && (
-                      <span className="t-site-warn" role="note" data-testid="site-warn">
-                        Can&apos;t be shown inside the exam. {checks[h]!.reason}
+                {entries.map(({ line, host: h, url, title }) => {
+                  const comp = checks[h]?.companions;
+                  const showComp = !!comp && comp.sites.length > 0 && !shownCompanions.has(h);
+                  if (showComp) shownCompanions.add(h);
+                  return (
+                    <li key={line}>
+                      <span className="t-site-main">
+                        {url ? (
+                          <>
+                            <span className="t-site-title">{title ?? shortLink(url)}</span>
+                            <span className="mono t-small t-muted">
+                              {title ? `${shortLink(url)} · ` : ""}starts here; all of {h} is allowed
+                            </span>
+                          </>
+                        ) : (
+                          <span className="mono">{h}</span>
+                        )}
                       </span>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      aria-label={`Remove ${h}`}
-                      onClick={() => onChange({ ...value, websites: value.websites.filter((x) => x !== h) })}
-                    >
-                      Remove
-                    </button>
-                  </li>
-                ))}
+                      {checks[h]?.frameable === false && (
+                        <span className="t-site-warn" role="note" data-testid="site-warn">
+                          Can&apos;t be shown inside the exam. {checks[h]!.reason}
+                        </span>
+                      )}
+                      {showComp && (
+                        <span className="t-site-companions" role="note" data-testid="site-companions">
+                          Also opened for {comp!.name} to work: <span className="mono">{comp!.sites.join(", ")}</span>
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        aria-label={`Remove ${url ? (title ?? shortLink(url)) : h}`}
+                        onClick={() => onChange({ ...value, websites: value.websites.filter((x) => x !== line) })}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
             <div className="t-sites-add">
@@ -189,8 +265,8 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
                 id="exam-site"
                 className="input mono"
                 value={site}
-                placeholder="docs.python.org"
-                maxLength={260}
+                placeholder="docs.python.org or https://duke.app.box.com/folder/0"
+                maxLength={2100}
                 onChange={(e) => {
                   setSite(e.target.value);
                   setSiteError(null);
@@ -216,7 +292,8 @@ export function ExamToolsSettings({ value, onChange }: { value: ExamToolsValue; 
             ) : (
               <span id="exam-site-hint" className="t-small t-muted">
                 {/* 2026-10-23 (review): entries match exactly; "*." for a whole site */}
-                docs.python.org — exactly this site; *.python.org — all of python.org. Up to {MAX_WEBSITES}.
+                docs.python.org — exactly this site; *.python.org — all of python.org; a full link (e.g. a Duke Box folder) opens
+                there first and allows every page of its site. A title may go before a link. Up to {MAX_WEBSITES} sites.
               </span>
             )}
           </div>

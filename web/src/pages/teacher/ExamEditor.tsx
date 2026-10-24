@@ -470,8 +470,11 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
 
       {draft.external.mode !== "external" && !isPaper && (
         <ExamToolsSettings
-          value={{ calculator: draft.calculator, openBook: draft.openBook, websites: draft.websites }}
-          onChange={(v) => set({ calculator: v.calculator, openBook: v.openBook, websites: v.websites })}
+          value={{ calculator: draft.calculator, openBook: draft.openBook, websites: draft.websites, uploadOpensDays: draft.uploadOpensDays }}
+          onChange={(v) =>
+            set({ calculator: v.calculator, openBook: v.openBook, websites: v.websites, uploadOpensDays: v.uploadOpensDays ?? 0 })
+          }
+          hasDate={!!draft.date}
         />
       )}
 

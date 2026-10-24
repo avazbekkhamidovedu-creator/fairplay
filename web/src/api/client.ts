@@ -745,6 +745,8 @@ export interface SiteCheck {
   host: string;
   frameable: boolean | null;
   reason: string;
+  /** 2026-10-24: sites the lock also opens so this one works (Duke Box), or null */
+  companions?: { name: string; sites: string[] } | null;
 }
 
 export const toolsApi = {

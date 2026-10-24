@@ -961,3 +961,42 @@ button.stu-filerow:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 2026-10-24: a site given as a link (title + link) and the sites opened with it */
+.t-sites li {
+  flex-wrap: wrap;
+}
+.t-site-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.t-site-main .t-site-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.t-site-main .mono.t-small {
+  overflow-wrap: anywhere;
+}
+.t-site-companions {
+  flex: 1 1 100%;
+  order: 3;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2, #4a5568);
+}
+.t-site-companions .mono {
+  overflow-wrap: anywhere;
+}
+.t-inline-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.t-select-sm {
+  width: auto;
+  min-width: 200px;
+}
