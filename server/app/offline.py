@@ -212,6 +212,7 @@ async def package(exam_id: str, request: Request, p: Principal = Depends(require
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)        # audit S-03
     await require_open_for(session, exam_id, p.user_id)    # 2026-10-23: selected students
+    await _not_handed_in_hidden(session, exam, p.user_id)
     key = f"pkg:{exam_id}:{code}:{exam['duration_min']}:{exam.get('closes_at') or ''}"
     raw = await store.get(key)
     if raw:
@@ -253,4 +254,22 @@ async def package_key(exam_id: str, p: Principal = Depends(require_student),
         raise HTTPException(409, "Exam is not open")
     await require_member(session, exam, p.user_id)
     await require_open_for(session, exam_id, p.user_id)    # 2026-10-23: selected students
+    await _not_handed_in_hidden(session, exam, p.user_id)
     return {"exam_id": exam_id, "key": await _package_secret(session, exam_id)}
+
+
+async def _not_handed_in_hidden(session: AsyncSession, exam: dict, user_id: int) -> None:
+    """2026-10-24 (app.review): a student who handed in an exam whose review level hides the
+    questions ("nothing", "score", "breakdown") gets no package (the questions) while the exam
+    is still live. Exams without a review setting (FairPlay's own) are unchanged."""
+    from .integrations.registry import integration_for
+    from .models import Attempt
+    from .review import review_level, shows_answers
+    if integration_for(exam) is None:
+        return
+    row = (await session.execute(
+        select(Attempt.status, Exam.review_after_handin)
+        .join(Exam, Exam.id == Attempt.exam_id)
+        .where(Attempt.exam_id == exam["id"], Attempt.student_id == user_id))).first()
+    if row is not None and row[0] == "submitted" and not shows_answers(review_level(exam.get("source"), row[1])):
+        raise HTTPException(409, "You handed this exam in.")

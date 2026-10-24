@@ -316,12 +316,13 @@ describe("exam taking page", () => {
     const user = userEvent.setup();
     renderExam();
     expect((await screen.findAllByText(/Question 1 of 3/))[0]).toBeInTheDocument();
-    expect(screen.getByText("All answers saved")).toBeInTheDocument();
+    // layout D: the save status is in the footer, next to the name
+    expect(screen.getByRole("img", { name: "All answers saved" })).toHaveTextContent("Saved");
 
     // MCQ: radio semantics, clickable by option text
     await user.click(screen.getByText("6"));
     expect(screen.getByRole("radio", { name: /6/ })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByText("Saved on this computer")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Saved on this computer" })).toHaveTextContent("Saved on this computer");
 
     // Mark for review is a checkbox (not a button) and is stored per attempt
     const mark = screen.getByRole("checkbox", { name: /Mark for review/ });

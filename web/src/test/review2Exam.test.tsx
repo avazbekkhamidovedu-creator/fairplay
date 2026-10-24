@@ -1,7 +1,7 @@
 // 2026-10-23 review (second pass) on the exam page: a manual hand-in still retrying when
 // the time runs out turns into the time-up hand-in; the side panel's width follows the
 // window; the question list keeps its header while it scrolls.
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttemptView, ExamTools } from "../api/types";
@@ -25,7 +25,7 @@ vi.mock("../api/client", async (importOriginal) => {
 import { NetworkError, setToken, studentApi } from "../api/client";
 import * as bridge from "../lib/bridge";
 import { setRunnerForTests } from "../lib/code/runners";
-import ExamTakingPage from "../pages/student/ExamTakingPage";
+import ExamTakingPage, { SPLITS } from "../pages/student/ExamTakingPage";
 
 const api = studentApi as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const send = (detail: unknown) => window.dispatchEvent(new CustomEvent("proctora-native", { detail }));
@@ -105,28 +105,63 @@ describe("H1: time runs out while a manual hand-in retries offline", () => {
   }, 10000);
 });
 
-describe("M1: the side panel follows the window size", () => {
-  it("is narrowed on a smaller window and gets its width back on a bigger one", async () => {
+describe("layout D: the divider between question and answer", () => {
+  it("moves with the keyboard and the pointer, and is remembered for this exam", async () => {
     nativeApp();
-    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+    SPLITS.clear();
+    // jsdom has no PointerEvent: a MouseEvent with a pointerId is enough here
+    class FakePointer extends MouseEvent {
+      pointerId: number;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 0;
+      }
+    }
+    vi.stubGlobal("PointerEvent", FakePointer);
+    api.getAttempt.mockResolvedValue(view());
+    const { unmount } = renderExam();
+    expect(await screen.findByRole("heading", { name: "2+2?" })).toBeInTheDocument();
+    const card = screen.getByTestId("exam-card");
+    const sep = screen.getByRole("separator", { name: "Resize the question and answer panes" });
+    expect(sep).toHaveAttribute("aria-valuenow", "50");
+    expect(card.style.getPropertyValue("--xd-split")).toBe("50%");
+    fireEvent.keyDown(sep, { key: "ArrowLeft" });
+    expect(sep).toHaveAttribute("aria-valuenow", "45");
+    fireEvent.keyDown(sep, { key: "ArrowRight", shiftKey: true });
+    expect(sep).toHaveAttribute("aria-valuenow", "55");
+    fireEvent.keyDown(sep, { key: "End" });
+    expect(sep).toHaveAttribute("aria-valuenow", "75");
+    fireEvent.keyDown(sep, { key: "ArrowRight" });
+    expect(sep).toHaveAttribute("aria-valuenow", "75");        // kept within limits
+    fireEvent.keyDown(sep, { key: "Home" });
+    expect(sep).toHaveAttribute("aria-valuenow", "25");
+    // pointer: 600 px into a 1000 px wide card -> 60 %
+    vi.spyOn(card, "getBoundingClientRect").mockReturnValue({ left: 0, width: 1000, top: 0, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.pointerDown(sep, { pointerId: 1, clientX: 250 });
+    fireEvent.pointerMove(sep, { pointerId: 1, clientX: 600 });
+    fireEvent.pointerUp(sep, { pointerId: 1 });
+    expect(sep).toHaveAttribute("aria-valuenow", "60");
+    expect(card.style.getPropertyValue("--xd-split")).toBe("60%");
+    // remembered in memory for this exam (a reload of the page component keeps it)
+    unmount();
+    renderExam();
+    expect(await screen.findByRole("separator", { name: "Resize the question and answer panes" })).toHaveAttribute("aria-valuenow", "60");
+    expect(SPLITS.get("e_1:q")).toBe(60);
+    vi.unstubAllGlobals();
+  });
+
+  it("tools on the right, question on the left; Next becomes Review and submit on the last", async () => {
+    nativeApp();
     api.getAttempt.mockResolvedValue(view());
     renderExam();
-    expect(await screen.findByRole("heading", { name: "2+2?" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "More" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Websites/ }));
-    const pane = () => screen.getByRole("complementary", { name: "Websites" });
-    expect(pane().style.width).toBe("520px");
-    Object.defineProperty(window, "innerWidth", { value: 820, configurable: true });
-    act(() => {
-      window.dispatchEvent(new Event("orientationchange"));
-    });
-    expect(pane().style.width).toBe("460px");   // the question keeps 360 px
-    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
-    act(() => {
-      window.dispatchEvent(new Event("resize"));
-    });
-    expect(pane().style.width).toBe("520px");
-    Object.defineProperty(window, "innerWidth", { value: 1024, configurable: true });
+    const prompt = await screen.findByRole("heading", { name: "2+2?" });
+    expect(prompt.closest(".xd-left")).not.toBeNull();
+    const right = document.querySelector(".xd-right") as HTMLElement;
+    expect(within(right).getByRole("checkbox", { name: /Mark for review/ })).toBeInTheDocument();
+    expect(within(right).getByRole("heading", { name: "Choose the right option" })).toBeInTheDocument();
+    expect(within(right).getAllByRole("radio").length).toBeGreaterThan(1);
+    expect(screen.getByRole("button", { name: "Question 1 of 1" })).toHaveTextContent(/1 of 1/);
+    expect(screen.getByRole("button", { name: "Review and submit" })).toBeInTheDocument();
   });
 });
 

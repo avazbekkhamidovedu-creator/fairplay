@@ -81,6 +81,9 @@ function storageValues(): string {
 describe("class login set-up", () => {
   it("shows the first-time hint under the sign-in form", async () => {
     renderLogin();
+    // iPad review: the sign-in username gets no autocorrect / auto-capitals
+    expect(screen.getByLabelText("Username")).toHaveAttribute("autocorrect", "off");
+    expect(screen.getByLabelText("Username")).toHaveAttribute("autocapitalize", "none");
     expect(screen.getByText("First time? Use the class login your professor gave you.")).toBeInTheDocument();
   });
 
@@ -95,6 +98,9 @@ describe("class login set-up", () => {
     expect(screen.getByRole("heading", { name: "Who are you?" })).toHaveFocus();
     expect(screen.getByText("Forgot your login? Ask your professor to reset it.")).toBeInTheDocument();
     expect(screen.getByLabelText("NetID")).toHaveAttribute("autocomplete", "off");
+    // iPad review: no iOS autocorrect / capitals on login fields
+    expect(screen.getByLabelText("NetID")).toHaveAttribute("autocorrect", "off");
+    expect(screen.getByLabelText("NetID")).toHaveAttribute("autocapitalize", "none");
     expect(localStorage.getItem("proctora:token:student")).toBeNull();
 
     reply("/api/setup/identify", { status: 200, body: IDENT });
@@ -112,6 +118,11 @@ describe("class login set-up", () => {
     expect(screen.getByLabelText("Username")).toHaveAttribute("autocomplete", "username");
     expect(screen.getByLabelText("Password")).toHaveAttribute("autocomplete", "new-password");
     expect(screen.getByLabelText("Password again")).toHaveAttribute("autocomplete", "new-password");
+    for (const label of ["Username", "Password", "Password again"]) {
+      expect(screen.getByLabelText(label)).toHaveAttribute("autocorrect", "off");
+      expect(screen.getByLabelText(label)).toHaveAttribute("autocapitalize", "none");
+      expect(screen.getByLabelText(label)).toHaveAttribute("spellcheck", "false");
+    }
 
     reply("/api/setup/account", { status: 200, body: SESSION });
     await user.type(screen.getByLabelText("Username"), "BobLee");

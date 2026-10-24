@@ -188,7 +188,7 @@ export default function ClassLoginSetup({
           </div>
           <div className="t-field">
             <label htmlFor="setup-netid">NetID</label>
-            <input id="setup-netid" className="input" autoComplete="off" autoCapitalize="none" spellCheck={false}
+            <input id="setup-netid" className="input" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               value={netid} onChange={(e) => setNetid(e.target.value)} />
           </div>
           {alert}
@@ -200,7 +200,7 @@ export default function ClassLoginSetup({
         <form onSubmit={onAccount} noValidate aria-label="Choose your own login">
           <div className="t-field">
             <label htmlFor="setup-username">Username</label>
-            <input id="setup-username" className="input" autoComplete="username" autoCapitalize="none"
+            <input id="setup-username" className="input" autoComplete="username" autoCapitalize="none" autoCorrect="off"
               spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)}
               aria-describedby="setup-username-hint" aria-invalid={usernameBad || undefined} />
             <p id="setup-username-hint" className={`pw-summary${usernameBad ? " pw-bad" : ""}`}>

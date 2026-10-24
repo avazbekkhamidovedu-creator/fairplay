@@ -2,6 +2,7 @@
 // tests). Right: the editor on top and the test panel below (Sample tests / Custom input).
 // The language is fixed by the teacher. Hidden tests are never here (the server strips
 // them); nothing on this screen shows a score.
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { AnswerValue, CodeLanguage, CodeLanguageOption, StudentQuestion } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
@@ -19,6 +20,9 @@ interface Props {
   prompt: ReactNode;
   /** 2026-10-23: the attempt, so remembered results never show in another attempt */
   attemptId?: string;
+  /** 2026-10-24 (exam layout D): the problem goes into the exam's left pane (a portal), the
+   *  editor stays here in the right pane. null/undefined: both side by side here. */
+  problemTarget?: HTMLElement | null;
 }
 
 type Tab = "samples" | "custom";
@@ -67,7 +71,7 @@ export function editorLanguageFor(l: CodeLanguageOption): CodeLanguage {
   return "cpp";
 }
 
-export function CodeQuestion({ question, value, onChange, prompt, attemptId = "" }: Props) {
+export function CodeQuestion({ question, value, onChange, prompt, attemptId = "", problemTarget }: Props) {
   // A question may allow several languages (the student picks one; the code
   // of the others is kept on this computer).
   const langOptions = question.languages ?? [];
@@ -208,8 +212,7 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
   const passed = results?.filter((r) => r.status === "pass").length ?? 0;
   const status = busy === "loading" ? (runLang === "python" ? "Loading Python (first run only)…" : "Starting…") : busy === "running" ? "Running…" : null;
 
-  return (
-    <div className="stu-cq" data-testid="code-question">
+  const problemSection = (
       <section className="stu-cq-left" aria-label="Problem">
         {prompt}
         {samples.length > 0 && (
@@ -232,6 +235,11 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
           </div>
         )}
       </section>
+  );
+
+  return (
+    <div className={`stu-cq${problemTarget ? " split" : ""}`} data-testid="code-question">
+      {problemTarget ? createPortal(problemSection, problemTarget) : problemSection}
 
       <section className="stu-cq-right" aria-label="Your code" ref={rightRef}>
         <div className="stu-cq-bar">

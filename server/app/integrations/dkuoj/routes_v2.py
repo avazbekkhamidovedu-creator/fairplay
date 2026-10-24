@@ -440,7 +440,7 @@ async def exam_new_code(key: str, call: BridgeCall = Depends(signed_call),
 async def exam_review(key: str, call: BridgeCall = Depends(signed_call),
                       session: AsyncSession = Depends(get_session)):
     """2026-10-24: the professor changed "Student review after hand-in" in DKU OJ (any time:
-    before, during or after the exam). Body {"review": "nothing|answers|answers_and_results",
+    before, during or after the exam). Body {"review": "nothing|score|breakdown|answers|answers_and_results",
     "updated_at": "<iso>"}; an updated_at older than the value FairPlay has is ignored (the
     newer DKU OJ value wins, whichever of this call and the exam list arrives first)."""
     from ...review import LEVELS

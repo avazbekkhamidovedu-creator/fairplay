@@ -251,9 +251,9 @@ describe("many courses and exams", () => {
     );
     await user.click(await screen.findByRole("tab", { name: "Past · 60" }));
     const panel = screen.getByRole("tabpanel");
-    expect(panel.querySelectorAll(".stu-result-row")).toHaveLength(PAST_SHOWN);
+    expect(panel.querySelectorAll("[data-testid=grade-card]")).toHaveLength(PAST_SHOWN);
     await user.click(within(panel).getByRole("button", { name: "Show all 60 results" }));
-    expect(panel.querySelectorAll(".stu-result-row")).toHaveLength(60);
+    expect(panel.querySelectorAll("[data-testid=grade-card]")).toHaveLength(60);
   });
 });
 

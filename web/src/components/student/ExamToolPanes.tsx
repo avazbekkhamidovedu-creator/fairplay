@@ -16,7 +16,25 @@ import "../../styles/tools.css";
 const KIND_LABEL: Record<MaterialFile["kind"], string> = { pdf: "PDF", png: "PNG", jpg: "JPG", txt: "TXT", md: "MD" };
 export const OFFLINE_MATERIALS = "Materials need the connection. Your answers keep saving on this computer.";
 
-export function MaterialsPaneContent({ attemptId }: { attemptId: string | null }) {
+/** 2026-10-24 (layout D): one material file in its own tab of the exam's left pane. */
+export function MaterialFileView({ attemptId, file }: { attemptId: string | null; file: MaterialFile }) {
+  if (!attemptId)
+    return (
+      <p className="stu-alert warn" role="status">
+        {OFFLINE_MATERIALS}
+      </p>
+    );
+  return <MaterialViewer file={file} load={() => materialBlob(attemptId, file.id)} />;
+}
+
+export function MaterialsPaneContent({
+  attemptId,
+  onOpenFile,
+}: {
+  attemptId: string | null;
+  /** 2026-10-24 (layout D): open the file in its own tab instead of in this list */
+  onOpenFile?: (f: MaterialFile) => void;
+}) {
   const [files, setFiles] = useState<MaterialFile[] | null>(null);
   const [problem, setProblem] = useState<string | null>(attemptId ? null : OFFLINE_MATERIALS);
   const [open, setOpen] = useState<MaterialFile | null>(null);
@@ -72,7 +90,7 @@ export function MaterialsPaneContent({ attemptId }: { attemptId: string | null }
     <ul className="stu-filelist" aria-label="Your materials">
       {files.map((f) => (
         <li key={f.id}>
-          <button type="button" className="stu-filerow" onClick={() => setOpen(f)}>
+          <button type="button" className="stu-filerow" onClick={() => (onOpenFile ? onOpenFile(f) : setOpen(f))}>
             <FileIcon size={22} label={KIND_LABEL[f.kind]} />
             <span className="stu-filerow-name">{f.name}</span>
             <span className="stu-filerow-size">{formatBytes(f.size)}</span>
@@ -90,17 +108,26 @@ export const BLANK_HINT = "Blank page? This site doesn't allow being shown insid
 export function WebsitesPaneContent({
   sites,
   request,
+  startUrl,
+  onOpenSite,
+  onAllSites,
 }: {
   sites: string[];
   /** A link in a question to an allowed site opens here (seq: each click). */
   request?: { url: string; seq: number } | null;
+  /** 2026-10-24 (layout D): a site tab starts on this page (no list first) */
+  startUrl?: string;
+  /** 2026-10-24 (layout D): the list opens each site in its own tab */
+  onOpenSite?: (host: string, url: string) => void;
+  /** 2026-10-24 (layout D): "All sites" goes to the Websites tab */
+  onAllSites?: () => void;
 }) {
   // Our own history of what we opened (the frame's own navigation is on another origin).
-  const [history, setHistory] = useState<string[]>([]);
-  const [index, setIndex] = useState(-1);
+  const [history, setHistory] = useState<string[]>(() => (startUrl ? [startUrl] : []));
+  const [index, setIndex] = useState(startUrl ? 0 : -1);
   const [reload, setReload] = useState(0);
   // "All sites" shows the list again without losing the history
-  const [listOpen, setListOpen] = useState(true);
+  const [listOpen, setListOpen] = useState(!startUrl);
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
   const current = index >= 0 ? history[index] : undefined;
@@ -127,6 +154,10 @@ export function WebsitesPaneContent({
 
   const openSite = (host: string) => {
     const url = siteUrl(host);
+    if (onOpenSite) {
+      onOpenSite(host, url);
+      return;
+    }
     setHistory((h) => [...h.slice(0, index + 1), url]);
     setIndex((i) => i + 1);
     setListOpen(false);
@@ -178,7 +209,7 @@ export function WebsitesPaneContent({
         <span className="stu-web-host" data-testid="website-host" title={current}>
           {host}
         </span>
-        <button type="button" className="stu-btn sm" onClick={() => setListOpen(true)}>
+        <button type="button" className="stu-btn sm" onClick={() => (onAllSites ? onAllSites() : setListOpen(true))}>
           All sites
         </button>
       </div>

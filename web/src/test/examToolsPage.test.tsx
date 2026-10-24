@@ -142,23 +142,50 @@ describe("exam page tools", () => {
     expect(await screen.findByRole("menuitem", { name: /Materials\s*1 file/ })).toBeInTheDocument();
     expect(mat.attemptFile).not.toHaveBeenCalled();                                 // only when opened
     fireEvent.click(screen.getByRole("menuitem", { name: /Materials/ }));
-    expect(screen.getByRole("complementary", { name: "Materials" })).toBeInTheDocument();
-    expect(document.querySelector(".stu-exam")).toHaveClass("has-pane");
-    expect(screen.getByRole("heading", { name: "pi?" })).toBeInTheDocument();         // question stays
+    // layout D: materials open as tabs in the left pane, next to the question
+    const tablist = screen.getByRole("tablist", { name: "Question and materials" });
+    expect(screen.getByRole("tab", { name: /Materials/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Question 2/ })).toHaveAttribute("aria-selected", "false");
+    expect(document.querySelector(".stu-exam")).toHaveClass("has-tabs");
+    expect(screen.getByRole("heading", { name: "Your answer" })).toBeVisible();    // the answer pane stays
     fireEvent.click(await screen.findByRole("button", { name: /notes\.txt/ }));
+    expect(screen.getByRole("tab", { name: /notes\.txt/ })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("F = ma")).toBeInTheDocument();
+    // arrow keys move between the tabs
+    fireEvent.keyDown(tablist, { key: "Home" });
+    expect(screen.getByRole("tab", { name: /Question 2/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Question 2/ })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "pi?" })).toBeVisible();
+    fireEvent.keyDown(tablist, { key: "End" });
+    expect(screen.getByRole("tab", { name: /notes\.txt/ })).toHaveAttribute("aria-selected", "true");
 
     // websites: hidden until asked for
     expect(document.querySelector("iframe")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Websites\s*2 sites/ }));
-    expect(screen.getByRole("complementary", { name: "Websites" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Websites/ })).toHaveAttribute("aria-selected", "true");
     expect(document.querySelector("iframe")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "docs.python.org" }));
+    expect(screen.getByRole("tab", { name: /docs\.python\.org/ })).toHaveAttribute("aria-selected", "true");
     expect(document.querySelector("iframe")?.getAttribute("src")).toBe("https://docs.python.org/");
-    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
-    expect(screen.queryByRole("complementary")).toBeNull();
-    expect(document.querySelector(".stu-exam")).not.toHaveClass("has-pane");
+    // the other tabs stay open (the file keeps its place)
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "¶Question 2", "≡Materials", "TXTnotes.txt", "◎Websites", "◎docs.python.org",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Close docs.python.org" }));
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("tab", { name: /Question 2/ })).toHaveAttribute("aria-selected", "true");
+    // a new question shows its own tab; the material tabs stay
+    fireEvent.click(screen.getByRole("tab", { name: /notes\.txt/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    expect(screen.getByRole("tab", { name: /Question 1/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "2+2?" })).toBeVisible();
+    for (const name of ["Materials", "notes.txt", "Websites"]) {
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(name.replace(".", "\\.")) }));
+      fireEvent.click(screen.getByRole("button", { name: `Close ${name}` }));
+    }
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(document.querySelector(".stu-exam")).not.toHaveClass("has-tabs");
   });
 
   it("an older server (no tools field) shows no tools", async () => {

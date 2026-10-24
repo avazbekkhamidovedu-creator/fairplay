@@ -1,0 +1,217 @@
+/* 2026-10-24: grade cards, style A "score ring" (Grades page, course Past tab, home Past tab).
+   Two columns from 760 px, one on phones. The ring's colour always comes with the number. */
+.stu-gcard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .stu-gcard-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+.stu-past-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.stu-gcard {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  min-height: 112px;
+  box-sizing: border-box;
+  padding: 18px 20px;
+  background: var(--s-surface, #fff);
+  border: 1px solid #e1e4ee;
+  border-radius: 16px;
+  color: var(--s-text, #161a2c);
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.stu-gcard.has-chips {
+  align-items: flex-start;
+}
+a.stu-gcard:hover {
+  border-color: #c9cedc;
+  box-shadow: 0 2px 10px rgba(20, 24, 60, 0.06);
+}
+a.stu-gcard:focus-visible {
+  outline: 3px solid var(--s-primary, #2f4bd8);
+  outline-offset: 2px;
+}
+.stu-ring {
+  flex: none;
+}
+.stu-gcard-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.stu-gcard-course {
+  font-size: 13px;
+  color: #5a6075;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stu-gcard-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stu-gcard-line {
+  font-size: 14px;
+  color: #3a3f55;
+}
+.stu-gcard-action {
+  flex: none;
+  align-self: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #3340d6;
+  white-space: nowrap;
+}
+a.stu-gcard:hover .stu-gcard-action {
+  color: #222c9e;
+}
+.stu-gchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.stu-gchip {
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-variant-numeric: tabular-nums;
+}
+.stu-gchip.good {
+  background: #e7f6ec;
+  color: #145c2c;
+}
+.stu-gchip.mid {
+  background: #fff3d6;
+  color: #7a4100;
+}
+.stu-gchip.low {
+  background: #fde9e7;
+  color: #8f1d14;
+}
+.stu-gchip.pending,
+.stu-gchip.more {
+  background: #eceef4;
+  color: #3a3f55;
+}
+@media (max-width: 480px) {
+  .stu-gcard {
+    gap: 14px;
+    padding: 16px;
+    flex-wrap: wrap;
+  }
+  .stu-gcard .stu-ring {
+    width: 60px;
+    height: 60px;
+  }
+  .stu-gcard-action {
+    flex-basis: 100%;
+    padding-left: 74px;
+  }
+  .stu-gcard-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+
+/* Grades page head: title + summary, course filter */
+.stu-grades-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stu-grades-sum {
+  font-size: 15px;
+  color: #5a6075;
+}
+.stu-gfilter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.stu-gfilter button {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid #d8dbe6;
+  background: #fff;
+  font: inherit;
+  font-size: 14px;
+  color: var(--s-text, #161a2c);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stu-gfilter button[aria-pressed="true"] {
+  background: #161a2c;
+  border-color: #161a2c;
+  color: #fff;
+  font-weight: 600;
+}
+.stu-gfilter button:focus-visible {
+  outline: 3px solid var(--s-primary, #2f4bd8);
+  outline-offset: 2px;
+}
+.stu-gavg {
+  font-weight: 600;
+  color: var(--s-text, #161a2c);
+}
+
+/* review page: score / breakdown levels */
+.stu-bd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+.stu-bd-table th,
+.stu-bd-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eceef4;
+}
+.stu-bd-table th {
+  font-size: 13px;
+  font-weight: 600;
+  color: #5a6075;
+}
+.stu-bd-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.stu-bd-table th.num {
+  text-align: right;
+}
+.stu-fb-ringhead {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}

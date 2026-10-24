@@ -64,6 +64,15 @@ async def attempt_asset(aid: str, name: str, request: Request, p: Principal = De
     integ = registry.integration_for(exam) if exam else None
     if integ is None or (exam.get("status") != "live" and a.status != "in_progress"):
         raise HTTPException(404, "Not found")
+    if a.status != "in_progress":
+        # 2026-10-24 (app.review): handed in while the exam is still live: the pictures are
+        # part of the questions, shown only when the review level shows them
+        from sqlalchemy import select
+        from ..models import Exam
+        from ..review import shows_answers
+        value = (await session.execute(select(Exam.review_after_handin).where(Exam.id == a.exam_id))).scalar()
+        if not shows_answers(integ.review_level(value)):
+            raise HTTPException(404, "Not found")
     found = await integ.asset(session, a.exam_id, name)
     if found is None:
         raise HTTPException(404, "Not found")
@@ -75,7 +84,8 @@ async def grade_asset(exam_id: str, name: str, request: Request, p: Principal = 
                       session: AsyncSession = Depends(get_session)):
     """Pictures of a student's review / grade page (after the exam: no app session needed).
     2026-10-24 (app.review): whenever the teacher lets students see their answers (the
-    prompts are shown with them), released or not; never with review "nothing"."""
+    prompts are shown with them: "answers", "answers_and_results"), released or not; never
+    with "nothing", "score" or "breakdown" (those show no question text)."""
     from sqlalchemy import select
     from ..models import Exam
     from ..review import shows_answers

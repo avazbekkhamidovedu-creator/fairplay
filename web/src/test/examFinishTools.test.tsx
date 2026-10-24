@@ -78,7 +78,7 @@ async function openToolsAndReview() {
   fireEvent.click(screen.getByRole("button", { name: "Calculator" }));
   fireEvent.click(screen.getByRole("button", { name: "More" }));
   fireEvent.click(screen.getByRole("menuitem", { name: /Websites/ }));
-  expect(screen.getByRole("complementary", { name: "Websites" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /Websites/ })).toBeInTheDocument();
   expect(document.querySelector(".stu-calc")).not.toBeNull();
 }
 
@@ -98,17 +98,26 @@ afterEach(() => {
   bridge._resetBridgeForTests();
 });
 
-describe("side panels and focus", () => {
-  it("closing a panel opened from More puts the focus back on More", async () => {
+describe("material tabs and focus", () => {
+  it("closing a tab: focus on the question's tab, or back on More after the last one", async () => {
     nativeApp();
     api.getAttempt.mockResolvedValue(view());
     renderExam();
     expect(await screen.findByRole("heading", { name: "2+2?" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Websites/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
-    expect(screen.queryByRole("complementary")).toBeNull();
-    expect(screen.getByRole("button", { name: "More" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "docs.python.org" }));
+    expect(screen.getByRole("tab", { name: /docs\.python\.org/ })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Close docs.python.org" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Question 1/ })).toHaveFocus());
+    const tab = screen.getByRole("tab", { name: /Websites/ });
+    // Delete on a focused tab closes it too
+    fireEvent.click(tab);
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "Delete" });
+    expect(screen.queryByRole("tab", { name: /Websites/ })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "More" })).toHaveFocus());
   });
 });
 
@@ -121,11 +130,14 @@ describe("no tools while handing in", () => {
     renderExam();
     await openToolsAndReview();
     fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
-    expect(screen.getByRole("complementary", { name: "Websites" })).toBeInTheDocument(); // review: still there
+    // layout D: the material tabs belong to the question screen; they come back with it
+    fireEvent.click(screen.getByRole("button", { name: /Keep working|Back to questions/ }));
+    expect(screen.getByRole("tab", { name: /Websites/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review and submit" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit exam" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes, submit" }));
     await waitFor(() => expect(api.submit).toHaveBeenCalled());
-    expect(screen.queryByRole("complementary", { name: "Websites" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Websites/ })).toBeNull();
     // 2026-10-23 review: hidden but kept (a failed hand-in doesn't lose its contents)
     expect(document.querySelector(".stu-calc.open")).toBeNull();
     expect(document.querySelector(".stu-calc")).toHaveAttribute("aria-hidden", "true");
@@ -143,7 +155,8 @@ describe("no tools while handing in", () => {
     renderExam();
     await openToolsAndReview();
     await waitFor(() => expect(api.submit).toHaveBeenCalled(), { timeout: 4000 });
-    expect(screen.queryByRole("complementary", { name: "Websites" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Websites/ })).toBeNull();
+    expect(document.querySelector("iframe")).toBeNull();
     expect(document.querySelector(".stu-calc.open")).toBeNull();
   });
 });

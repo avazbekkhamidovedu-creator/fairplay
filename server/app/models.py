@@ -121,8 +121,8 @@ class Exam(Base):
                                              server_default=false())
     external_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict,
                                           server_default=text("'{}'"))
-    # 2026-10-24: what students may see after handing in: "nothing" | "answers" |
-    # "answers_and_results" (app.review). Set by the exam's source (DKU OJ: the professor's
+    # 2026-10-24: what students may see after handing in: "nothing" | "score" | "breakdown" |
+    # "answers" | "answers_and_results" (app.review; fits String(24)). Set by the exam's source (DKU OJ: the professor's
     # "Student review after hand-in"); NULL = the source's default. Native exams: unused.
     review_after_handin: Mapped[str | None] = mapped_column(String(24), nullable=True)
     # 2026-10-23: who may start the exam. NULL = everyone the exam is for (its class, LMS

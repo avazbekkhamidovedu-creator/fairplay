@@ -12,6 +12,8 @@ import {
   GlobeIcon,
   CloudCheckIcon,
   DiskIcon,
+  EyeIcon,
+  EyeOffIcon,
   HelpIcon,
   LockIcon,
   MinusIcon,
@@ -47,6 +49,7 @@ export function LockedBar({
   materials,
   websites,
   moreButtonRef,
+  showSync = true,
 }: {
   title: string;
   course?: string;
@@ -72,6 +75,9 @@ export function LockedBar({
   websites?: { count: number; onOpen: () => void };
   /** 2026-10-23: the More button, so focus can come back to it when a side panel closes. */
   moreButtonRef?: Ref<HTMLButtonElement>;
+  /** 2026-10-24 (layout D): false while the question screen shows the save status in its
+   *  footer (the screen-reader announcements stay here). */
+  showSync?: boolean;
 }) {
   const lowTime = remaining < TIMER_FORCE_SHOW_MS;
   const showTime = !timerHidden || lowTime;
@@ -124,8 +130,8 @@ export function LockedBar({
           </span>
         ) : null}
         <div className="stu-lockbar-title">
-          <span className="t">
-            {course && <small>{course} · </small>}
+          {course && <small className="c">{course}</small>}
+          <span className="t" title={title}>
             {title}
           </span>
           {directions && directions.length > 0 && (
@@ -158,9 +164,11 @@ export function LockedBar({
                 type="button"
                 className="stu-timer-toggle"
                 aria-pressed={timerHidden}
+                aria-label={timerHidden ? "Show time" : "Hide time"}
+                title={timerHidden ? "Show time" : "Hide time"}
                 onClick={() => onTimerHidden(!timerHidden)}
               >
-                {timerHidden ? "Show" : "Hide"}
+                {timerHidden ? <EyeOffIcon /> : <EyeIcon />}
               </button>
             )}
           </>
@@ -174,6 +182,7 @@ export function LockedBar({
           {announce}
         </span>
         {/* 2026-10-23 review: on narrow screens only the icon shows; the words stay its label */}
+        {showSync && (
         <span
           className={`stu-sync ${synced ? "synced" : "pending"}`}
           role="img"
@@ -183,6 +192,7 @@ export function LockedBar({
           {synced ? <CloudCheckIcon /> : <DiskIcon />}
           <span className="stu-sync-text">{synced ? "All answers saved" : "Saved on this computer"}</span>
         </span>
+        )}
         {battery && (
           <span
             className={`stu-battery ${tone}`}
@@ -201,6 +211,7 @@ export function LockedBar({
             type="button"
             className={`stu-tool${calculator.open ? " on" : ""}`}
             aria-pressed={calculator.open}
+            title="Calculator"
             onClick={calculator.onToggle}
           >
             <CalculatorIcon />
@@ -215,6 +226,7 @@ export function LockedBar({
             aria-haspopup="menu"
             aria-expanded={open === "more"}
             aria-controls="exam-more-menu"
+            title="More: materials, text size, help"
             onClick={() => setOpen((o) => (o === "more" || o === "help" ? null : "more"))}
           >
             <MoreVerticalIcon />

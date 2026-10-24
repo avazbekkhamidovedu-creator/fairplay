@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, NetworkError, studentApi } from "../../api/client";
-import type { StudentFeedback } from "../../api/types";
+import type { BreakdownQuestion, StudentFeedback } from "../../api/types";
+import { ScoreRing } from "../../components/student/GradeCard";
 import { FeedbackQuestionCard, ExternalFeedbackQuestionCard } from "../../components/student/FeedbackQuestion";
 import { fmtNum, fmtPercent, shortDate } from "../../components/student/format";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
@@ -71,7 +72,83 @@ export default function FeedbackPage() {
   );
 }
 
+/** 2026-10-24: review "score" (the total only) and "breakdown" (plus points per question). */
+function ScoreOnly({ data }: { data: StudentFeedback }) {
+  const eyebrow = [data.course, "Exam", shortDate(data.submitted_at)].filter(Boolean).join(" · ");
+  const released = data.released !== false && typeof data.percent === "number";
+  const rows = (data.questions as unknown as BreakdownQuestion[]).slice().sort((a, b) => a.index - b.index);
+  return (
+    <>
+      <section className="stu-fb-head" aria-labelledby="fb-h" data-testid="score-only">
+        <div className="stu-fb-head-main">
+          <span className="eyebrow">{eyebrow}</span>
+          <h1 id="fb-h">{data.title}</h1>
+          {data.receipt && (
+            <span className="stu-small stu-muted">
+              Receipt <span className="stu-mono">{data.receipt}</span>
+            </span>
+          )}
+        </div>
+        {released ? (
+          <div className="stu-fb-ringhead">
+            <ScoreRing percent={data.percent as number} />
+            <div className="stu-fb-score">
+              <b>
+                {fmtNum(data.score)}
+                <small> / {fmtNum(data.total_points)}</small>
+              </b>
+              <span>points</span>
+            </div>
+          </div>
+        ) : (
+          <span className="stu-pill">Being graded</span>
+        )}
+      </section>
+      <p className="stu-small stu-muted" style={{ margin: 0 }} data-testid="score-only-note">
+        {data.review === "breakdown"
+          ? "Your teacher shares your grade and the points per question. Questions, answers and feedback are not shown."
+          : "Your teacher shares your grade only."}
+      </p>
+      {data.review === "breakdown" && rows.length > 0 && (
+        <section className="stu-card" aria-labelledby="bd-h">
+          <h2 id="bd-h" style={{ margin: 0, fontSize: 18 }}>
+            Points per question
+          </h2>
+          <table className="stu-bd-table" data-testid="breakdown-table">
+            <thead>
+              <tr>
+                <th scope="col">Question</th>
+                <th scope="col" className="num">
+                  Points
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.question_id}>
+                  <th scope="row" style={{ fontWeight: 600, color: "inherit", fontSize: 15 }}>
+                    {r.label}
+                    {r.title ? ` · ${r.title}` : ""}
+                  </th>
+                  <td className="num">
+                    {r.points_awarded === null ? (
+                      <span className="stu-muted">— / {fmtNum(r.points)}</span>
+                    ) : (
+                      `${fmtNum(r.points_awarded)} / ${fmtNum(r.points)}`
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
+  );
+}
+
 function Feedback({ data }: { data: StudentFeedback }) {
+  if (data.review === "score" || data.review === "breakdown") return <ScoreOnly data={data} />;
   const eyebrow = [data.course, "Exam", shortDate(data.submitted_at)].filter(Boolean).join(" · ");
   const questions = [...data.questions].sort((a, b) => a.index - b.index);
   // graded in another system: its points and its feedback

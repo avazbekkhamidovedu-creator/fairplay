@@ -1,7 +1,7 @@
 # DKU OJ ↔ FairPlay bridge, v2: professors use only DKU OJ
 
 Status: build contract (2026-10-24; review fixes 2026-10-24; class-login password viewable, login
-history, strong student passwords, student classes, student review after hand-in §8 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
+history, strong student passwords, student classes, student review after hand-in §8 2026-10-24, five review levels §8 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exam list, package,
 assets, uploads, submissions, results). Everything in v1 stays, except where this file changes it
 (§1 signing replaces the Bearer token; §6 retires the live-room link).
 
@@ -192,7 +192,7 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   end time: DKU OJ files them anyway (`POST exams/<key>/submissions` has no end-time check;
   lateness is judged from FairPlay's `deadline_at`).
 - **`POST /exams/<key>/new-code`** → GET shape (new start code).
-- **`POST /exams/<key>/review`** body `{"review": "nothing" | "answers" | "answers_and_results",
+- **`POST /exams/<key>/review`** body `{"review": "nothing" | "score" | "breakdown" | "answers" | "answers_and_results",
   "updated_at": "<iso>"}` → GET shape (2026-10-24, §8). Idempotent. Any other `review` → 400;
   `updated_at` optional, a string if present (else 400). Not synced yet → 409 (the exam list
   brings it later). Allowed at any time: draft, live or closed.
@@ -330,25 +330,33 @@ Audit: every setup success, failure (also a NetID blocked for the hour:
 - No shared database; every cross call has timeouts; the protocol is versioned (`v2` line in
   the canonical string, `/v1` paths kept for the URLs).
 
-## 8. Student review after hand-in (2026-10-24)
+## 8. Student review after hand-in (2026-10-24; five levels 2026-10-24)
 
 The professor decides in DKU OJ what students can see in FairPlay after handing in, at any time
-(before, during or after the exam). FairPlay enforces it.
+(before, during or after the exam). FairPlay enforces it on every student endpoint; data a level
+does not allow is never sent, not even in fields the page does not show.
 
-| Value | Students see after handing in |
-|---|---|
-| `nothing` (default) | only "Handed in" (receipt, time) |
-| `answers` | their own answers, read-only: no points, no correct answers, no feedback, no class average |
-| `answers_and_results` | their answers; once DKU OJ releases the result (v1 results feed), also the points and feedback |
+| Value | DKU OJ label | Students see after handing in |
+|---|---|---|
+| `nothing` (default) | Nothing (just "Handed in") | only "Handed in" (receipt, time) |
+| `score` | Their grade only | once DKU OJ releases the result: the total score and percent. No questions, no per-question points, no answers, no feedback |
+| `breakdown` | Their grade and points per question | once released: the total, plus per question its number (`label`), `title` and points earned / possible. No question text or options, no answers, no correct answers, no feedback |
+| `answers` | Their own answers (no scores) | their own answers, read-only: no points, no correct answers, no feedback, no class average |
+| `answers_and_results` | Everything: answers, scores and feedback | their answers; once released also the total, the points per question, the correct answers (DKU OJ sends none) and the feedback |
+
+`score` and `breakdown` were added later; the other three values keep their meaning. No class
+average is shown below `answers_and_results`.
 
 DKU OJ:
 - `Contest.fairplay_review` (CharField, choices above, default `nothing`) and
-  `fairplay_review_updated_at` (set whenever the value changes; migration
-  `0221_contest_fairplay_review`).
-- Changed on the assignment's **FairPlay** tab: "Student review after hand-in", three radio
-  options + Save (`POST /contest/<key>/fairplay/review`, CSRF, `contest.is_editable_by`), shown in
-  every state and also when FairPlay is down. Also in the assignment editor's FairPlay panel
-  ("After handing in, students can see", same permission as the other FairPlay fields).
+  `fairplay_review_updated_at` (set whenever the value changes; migrations
+  `0221_contest_fairplay_review`, `0222_contest_fairplay_review_levels` for the five choices).
+  `Contest.FAIRPLAY_REVIEW_HELP` holds the one-line description shown under each choice.
+- Changed on the assignment's **FairPlay** tab: "Student review after hand-in", five radio
+  options, each with its one-line description, + Save (`POST /contest/<key>/fairplay/review`,
+  CSRF, `contest.is_editable_by`), shown in every state and also when FairPlay is down. Also in
+  the assignment editor's FairPlay panel ("After handing in, students can see", a dropdown with
+  the same five labels; same permission as the other FairPlay fields).
 - On a change DKU OJ saves first, then calls `POST /exams/<key>/review` signed (the editor: after
   the commit, 3 s wait; a failure only shows "FairPlay will get the change within a few minutes").
 - The exam list (v1 `GET exams`) carries it in `settings`: `"review": "...", "review_updated_at":
@@ -361,21 +369,36 @@ FairPlay:
   the stored one is ignored, so a list fetched just before the professor's change can't undo it.
   Applied also to running (frozen) and closed exams. Missing/unknown → `nothing`.
 - Enforced in the student API (`app/review.py`):
-  - `GET /api/student/grades/{exam_id}`: `nothing` → 403 `{"detail": "Your teacher has not
-    opened the review for this exam."}`; `answers`, and `answers_and_results` before the release →
-    200 with `"review": "answers", "released": false`, `score`/`percent`/`class_average_percent`
-    null, per question `given`, `points` (the question's maximum), `points_awarded: null`, `status`
-    `answered|unanswered`, `comment: ""`, `correct_answer: null`; `answers_and_results` once
-    released → the full result with `"review": "answers_and_results", "released": true`.
+  - `GET /api/student/grades/{exam_id}`:
+    - `nothing` → 403 `{"detail": "Your teacher has not opened the review for this exam."}`;
+    - `score` → 200 `{"review": "score", "released", "score", "percent", "total_points",
+      "questions": [], "class_average_percent": null, "overall_comment": ""}` (`score`/`percent`
+      null before the release);
+    - `breakdown` → as `score`, with `questions` = `[{"question_id", "index", "label", "title",
+      "points", "points_awarded", "status"}]` only (`points_awarded` null and `status` `pending`
+      before the release or for a question DKU OJ sent no points for; else `correct|partial|wrong|unanswered`);
+    - `answers`, and `answers_and_results` before the release → 200 with `"review": "answers",
+      "released": false`, `score`/`percent`/`class_average_percent` null, per question `given`,
+      `points` (the question's maximum), `points_awarded: null`, `status` `answered|unanswered`,
+      `comment: ""`, `correct_answer: null`;
+    - `answers_and_results` once released → the full result with `"review": "answers_and_results",
+      "released": true`.
   - `GET /api/student/grades` and `GET /api/student/exams`: `review` per DKU OJ exam; `released`
-    is false and `score`/`percent` null unless the level is `answers_and_results` and the result
-    is released.
-  - `GET /api/student/attempts/{aid}` of a handed-in attempt with `nothing`: `questions: []`,
-    `answers: {}` (the done page needs neither).
-  - `GET /api/student/grades/{exam_id}/assets/<name>`: only while answers are shown.
+    is false and `score`/`percent` null unless the level is `score`, `breakdown` or
+    `answers_and_results` and the result is released. With `breakdown` (released) a grade also
+    has `breakdown: [{"index", "label", "points", "points_awarded"}]` (the card's chips).
+  - `GET /api/student/attempts/{aid}` of a handed-in attempt with `nothing`, `score` or
+    `breakdown`: `questions: []`, `answers: {}`, no `answer_files` (the done page needs none).
+  - `GET /api/student/grades/{exam_id}/assets/<name>` and, while the exam is still live, `GET
+    /api/student/attempts/{aid}/assets/<name>` of a handed-in attempt: only while answers are
+    shown (`answers`, `answers_and_results`); else 404.
+  - `GET /api/student/exams/{id}/package` and `/package-key` for a student who handed in, while
+    the exam is live: 409 "You handed this exam in." unless answers are shown.
   - Correct answers never reach students (DKU OJ sends no answer keys).
 - Teacher views are not affected. FairPlay-native exams have no such setting (they keep "release
   grades"); their responses carry no `review`.
-- Web: the Grades list and past-exam rows show "Handed in" (no link) for `nothing`, "See your
-  answers" for `answers` (and before a release), the score + "See feedback" once released; the
-  review page shows the closed message, the answers-only view (no score) or the result.
+- Web: grade cards (score ring) on the Grades page and the Past tabs: `nothing` → "Handed in ·
+  your teacher keeps this one private" (no link); `score` → the ring with the percent and "x / y
+  points" (no link); `breakdown` → the ring plus a chip per question ("Q1 · 4/4"; more than 12 →
+  "All N questions →" opens the grade page with a points table); `answers` → "Your answers →";
+  `answers_and_results` → "Your answers →" before, the ring + "Feedback →" after the release.

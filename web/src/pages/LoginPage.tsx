@@ -141,6 +141,7 @@ export default function LoginPage({ role }: { role: Role }) {
                   className="input"
                   autoComplete="username"
                   autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}

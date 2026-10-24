@@ -63,6 +63,7 @@ export function NewPasswordFields({
             type={shown ? "text" : "password"}
             autoComplete="new-password"
             autoCapitalize="none"
+            autoCorrect="off"
             spellCheck={false}
             aria-describedby={rulesId}
             aria-invalid={password.length > 0 && !check.ok ? true : undefined}
@@ -113,6 +114,7 @@ export function NewPasswordFields({
           type={shown ? "text" : "password"}
           autoComplete="new-password"
           autoCapitalize="none"
+          autoCorrect="off"
           spellCheck={false}
           aria-describedby={typed2 ? matchId : undefined}
           aria-invalid={typed2 && password2.length > 0 && !match ? true : undefined}

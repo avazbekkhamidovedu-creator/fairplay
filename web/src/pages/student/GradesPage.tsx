@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { ApiError, studentApi } from "../../api/client";
 import type { StudentGradeSummary } from "../../api/types";
-import { fmtNum, fmtPercent, shortDate } from "../../components/student/format";
-import { canOpenReview, waitingLabel } from "../../lib/review";
+import { fmtPercent } from "../../components/student/format";
+import { GradeCard, cardState } from "../../components/student/GradeCard";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 
 const NO_COURSE = "Other exams";
@@ -55,12 +54,27 @@ export default function GradesPage() {
   }, []);
 
   const groups = useMemo(() => (grades ? groupByCourse(grades) : []), [grades]);
-  const current = groups.find((g) => g.course === selected) ?? groups[0];
+  const current = groups.find((g) => g.course === selected) ?? null;
+  const items = current ? current.items : grades ?? [];
+  const sum = useMemo(() => gradeSummary(items), [items]);
 
   return (
     <StudentLayout>
       <main className="stu-main" style={{ gap: 24 }}>
-        <h1 className="stu-h1">Grades</h1>
+        <div className="stu-grades-head">
+          <h1 className="stu-h1">Grades</h1>
+          {grades && grades.length > 0 && (
+            <span className="stu-grades-sum" data-testid="grades-summary">
+              {sum}
+              {current && current.average !== null && (
+                <>
+                  {" · "}
+                  <span className="stu-gavg">Average {fmtPercent(current.average)}</span>
+                </>
+              )}
+            </span>
+          )}
+        </div>
         {error && (
           <div className="stu-alert error" role="alert">
             {error}
@@ -77,37 +91,46 @@ export default function GradesPage() {
           )
         ) : (
           <>
-            <section aria-label="Courses" className="stu-course-grid">
-              {groups.map((g) => (
-                <button
-                  key={g.course}
-                  type="button"
-                  className="stu-course"
-                  aria-pressed={g === current}
-                  onClick={() => setSelected(g.course)}
-                >
-                  <span className="c">{g.course}</span>
-                  <span className="p">{fmtPercent(g.average)}</span>
-                  <span className="n">
-                    {[g.graded && `${g.graded} graded`, g.waiting && `${g.waiting} being graded`].filter(Boolean).join(" · ")}
-                  </span>
+            {groups.length > 1 && (
+              <div className="stu-gfilter" role="group" aria-label="Course">
+                <button type="button" aria-pressed={current === null} onClick={() => setSelected(null)}>
+                  All courses
                 </button>
+                {groups.map((g) => (
+                  <button
+                    key={g.course}
+                    type="button"
+                    aria-pressed={g === current}
+                    onClick={() => setSelected(g.course)}
+                    title={g.course}
+                  >
+                    {g.course}
+                  </button>
+                ))}
+              </div>
+            )}
+            <section aria-label={current ? current.course : "All courses"} className="stu-gcard-grid" data-testid="grade-cards">
+              {items.map((g) => (
+                <GradeCard
+                  key={g.exam_id}
+                  headingLevel={2}
+                  d={{
+                    examId: g.exam_id,
+                    course: g.course?.trim() || undefined,
+                    title: g.title,
+                    submittedAt: g.submitted_at,
+                    released: g.released,
+                    score: g.score,
+                    total: g.total_points,
+                    percent: g.percent,
+                    review: g.review,
+                    source: g.source,
+                    breakdown: g.breakdown,
+                  }}
+                />
               ))}
             </section>
-
-            {current && (
-              <section className="stu-card" aria-labelledby="course-h" style={{ gap: 4 }}>
-                <h2 id="course-h" style={{ marginBottom: 8 }}>
-                  {current.course}
-                </h2>
-                <div className="stu-rows">
-                  {current.items.map((g) => (
-                    <GradeRow key={g.exam_id} g={g} />
-                  ))}
-                </div>
-              </section>
-            )}
-            <p className="stu-hint">Scores show once your teacher releases them. Open the feedback to see every question.</p>
+            <p className="stu-hint">Scores show once your teacher releases them.</p>
           </>
         )}
       </main>
@@ -115,34 +138,18 @@ export default function GradesPage() {
   );
 }
 
-function GradeRow({ g }: { g: StudentGradeSummary }) {
-  const open = canOpenReview(g.source, g.review, g.released);
-  const inner = (
-    <>
-      <span className="stu-result-title">
-        {g.title}
-        {g.submitted_at && <small>Submitted {shortDate(g.submitted_at)}</small>}
-      </span>
-      {g.released ? (
-        <>
-          <span className="stu-result-score">
-            {fmtNum(g.score)} / {fmtNum(g.total_points)}
-          </span>
-          <span className="stu-link">Feedback</span>
-        </>
-      ) : (
-        <>
-          <span className="stu-pill">{waitingLabel(g.review)}</span>
-          {open && <span className="stu-link">Your answers</span>}
-        </>
-      )}
-    </>
-  );
-  return open ? (
-    <Link to={`/student/grades/${g.exam_id}`} className="stu-result-row">
-      {inner}
-    </Link>
-  ) : (
-    <div className="stu-result-row">{inner}</div>
-  );
+/** "4 graded · 1 being graded · 1 private" */
+export function gradeSummary(items: StudentGradeSummary[]): string {
+  let graded = 0,
+    grading = 0,
+    handed = 0;
+  for (const g of items) {
+    const s = cardState(g);
+    if (s === "graded") graded++;
+    else if (s === "grading") grading++;
+    else handed++;
+  }
+  return [graded && `${graded} graded`, grading && `${grading} being graded`, handed && `${handed} handed in`]
+    .filter(Boolean)
+    .join(" · ");
 }

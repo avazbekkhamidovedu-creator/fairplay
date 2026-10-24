@@ -1371,11 +1371,28 @@ export interface OfflineExam {
 
 // ---------- 2026-10-24: student review after hand-in (set by the exam's source) ----------
 
-/** "nothing": just "Handed in"; "answers": own answers, read-only; "answers_and_results": plus
- *  points and feedback once released. FairPlay exams are always "answers_and_results". */
-export type ReviewLevel = "nothing" | "answers" | "answers_and_results";
+/** "nothing": just "Handed in"; "score": the total once released; "breakdown": the total and the
+ *  points per question once released (no question text); "answers": own answers, read-only;
+ *  "answers_and_results": everything once released. FairPlay exams are always
+ *  "answers_and_results". */
+export type ReviewLevel = "nothing" | "score" | "breakdown" | "answers" | "answers_and_results";
+/** Review "breakdown": one question's number and points (no text). */
+export interface BreakdownPoint {
+  index: number;
+  label: string;
+  points: number;
+  points_awarded: number | null;
+}
 export interface StudentGradeSummary {
   review?: ReviewLevel;
+  /** only with review "breakdown" once released */
+  breakdown?: BreakdownPoint[];
+}
+/** Review "breakdown" on the grade page: per question its number, title and points only. */
+export interface BreakdownQuestion extends BreakdownPoint {
+  question_id: string;
+  title: string;
+  status: "correct" | "partial" | "wrong" | "unanswered" | "pending";
 }
 export interface StudentFeedback {
   /** "answers": only the student's answers (no score, points or feedback) */

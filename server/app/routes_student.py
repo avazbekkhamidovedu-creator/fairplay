@@ -21,7 +21,8 @@ from . import app_client as ac
 from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_member, require_open_for
 from .app_version import check_app_version
 from .question_types import AnswerError, check_answer, is_extended
-from .review import REVIEW_CLOSED, review_level, shows_answers, shows_results
+from .review import (ALL, ANSWERS, BREAKDOWN, REVIEW_CLOSED, opens_detail, review_level, shows_answers,
+                     shows_breakdown, shows_score)
 from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
                       HeartbeatIn, OfflineKeyIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
@@ -144,9 +145,10 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
             integ = integration_for({"source": source})
             if integ is not None:          # released per student by the external system
                 released, score, total = integ.released(external_result, total)
-            # 2026-10-24 (app.review): no score unless the teacher opened the results
+            # 2026-10-24 (app.review): no score unless the level shows it (score, breakdown,
+            # answers_and_results)
             level = review_level(source, review)
-            released = released and shows_results(level)
+            released = released and shows_score(level)
             show = released and astatus == "submitted"
             attempt = {"attempt_id": aid, "status": astatus, "submitted_at": iso(sub),
                        "receipt": receipt, "released": released,
@@ -951,16 +953,61 @@ async def my_grades(p: Principal = Depends(require_student),
         integ = integration_for({"source": source})
         if integ is not None:
             released, score, total = integ.released(external_result, total)
-        # 2026-10-24 (app.review): "nothing" -> just "Handed in"; "answers" -> no score
+        # 2026-10-24 (app.review): "nothing" / "answers" -> no score; "score", "breakdown",
+        # "answers_and_results" -> the score once released; "breakdown" also its points per
+        # question (the card's chips)
         level = review_level(source, review)
-        released = released and shows_results(level)
-        out.append({"exam_id": eid, "title": title, "course": course or "",
-                    **_source_fields(source),
-                    "submitted_at": iso(sub), "released": released,
-                    "score": num(score or 0.0) if released else None,
-                    "total_points": num(total),
-                    "percent": percent(score or 0.0, total) if released else None,
-                    **({"review": level} if integ is not None else {})})
+        released = released and shows_score(level)
+        row = {"exam_id": eid, "title": title, "course": course or "",
+               **_source_fields(source),
+               "submitted_at": iso(sub), "released": released,
+               "score": num(score or 0.0) if released else None,
+               "total_points": num(total),
+               "percent": percent(score or 0.0, total) if released else None,
+               **({"review": level} if integ is not None else {})}
+        if released and level == BREAKDOWN:
+            row["breakdown"] = [{"index": q["index"], "label": q["label"], "points": q["points"],
+                                 "points_awarded": q["points_awarded"]}
+                                for q in await _breakdown_of(session, eid, p.user_id)]
+        out.append(row)
+    return out
+
+
+async def _breakdown_of(session: AsyncSession, exam_id: str, user_id: int) -> list[dict]:
+    """2026-10-24: points per question of a released external result (review "breakdown")."""
+    e = await session.get(Exam, exam_id)
+    a = await find_attempt(session, exam_id, user_id)
+    integ = integration_for(e) if e is not None else None
+    if e is None or a is None or integ is None:
+        return []
+    return _breakdown_rows(e, a, integ.grades_for(exam_questions(e), a.external_result), True, True)
+
+
+def _qlabel(q: dict, i: int) -> str:
+    return str(q.get("label") or f"Q{i + 1}")
+
+
+def _breakdown_rows(e: Exam, a: Attempt, grades: dict | None, released: bool, external: bool) -> list[dict]:
+    """Review "breakdown": per question only its number / title and points (earned once
+    released). Never the question text, options, answers, correct answers or feedback.
+    external: only questions the source sent points for count as graded."""
+    questions = exam_questions(e)
+    _, _, rows = grade_attempt(questions, a.answers, (grades or {}) if released else {})
+    out = []
+    for i, (q, r) in enumerate(zip(questions, rows)):
+        mx = q.get("points", 1)
+        pts = float(r["points_awarded"])
+        if not released or (external and not r["manual"]):
+            status, awarded = "pending", None
+        elif abs(pts - mx) < 1e-9:
+            status, awarded = "correct", r["points_awarded"]
+        elif pts > 0:
+            status, awarded = "partial", r["points_awarded"]
+        else:
+            status, awarded = ("unanswered" if not is_answered(r["given"]) else "wrong"), r["points_awarded"]
+        out.append({"question_id": q["id"], "index": i, "label": _qlabel(q, i),
+                    "title": str(q.get("title") or ""), "points": mx,
+                    "points_awarded": awarded, "status": status})
     return out
 
 
@@ -987,10 +1034,17 @@ async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
         raise HTTPException(404, "No submitted attempt for this exam")
     integ = integration_for(e)
     level = review_level(e.source, e.review_after_handin)
-    if not shows_answers(level):
+    if not opens_detail(level):
         raise HTTPException(403, REVIEW_CLOSED)
     if integ is not None and integ.grades_externally(e):
         return await _external_grade_detail(session, e, a, integ, level)
+    if level != ALL:
+        # an exam of another source graded here (none today): its released score only, or
+        # the answers, as the level says
+        if level == ANSWERS:
+            return _answers_only(e, a, e.total_points)
+        return _summary(e, a, level, bool(e.grades_released),
+                        a.score if e.grades_released else None, e.total_points, integ)
     if not e.grades_released:
         raise HTTPException(403, "Grades not released yet")
     questions = exam_questions(e)
@@ -1040,8 +1094,10 @@ async def _external_grade_detail(session: AsyncSession, e: Exam, a: Attempt, int
     answer keys exist: correct_answer is always null. 2026-10-24 (app.review): with the review
     level "answers", or before the results are released, only the student's own answers."""
     released, score, total = integ.released(a.external_result, e.total_points)
-    if not (released and shows_results(level)):
+    if level == ANSWERS or (level == ALL and not released):
         return _answers_only(e, a, total)
+    if level != ALL:          # "score" / "breakdown": the numbers only, never the questions
+        return _summary(e, a, level, released, score if released else None, total, integ)
     from .services import student_question
     questions = exam_questions(e)
     _, _, rows = grade_attempt(questions, a.answers, integ.grades_for(questions, a.external_result))
@@ -1079,6 +1135,26 @@ async def _external_grade_detail(session: AsyncSession, e: Exam, a: Attempt, int
         "overall_comment": "", "questions": out_q,
         "result_updated_at": (a.external_result or {}).get("updated_at"),
         "review": "answers_and_results", "released": True,
+    }
+
+
+def _summary(e: Exam, a: Attempt, level: str, released: bool, score, total, integ) -> dict:
+    """2026-10-24 (app.review): review "score" (the total only) or "breakdown" (the total and
+    the points per question). No prompts, options, answers, correct answers, feedback or
+    class average; before the release no score either."""
+    questions = []
+    if shows_breakdown(level):
+        external = integ is not None and integ.grades_externally(e)
+        grades = integ.grades_for(exam_questions(e), a.external_result) if external else a.grades
+        questions = _breakdown_rows(e, a, grades, released, external)
+    return {
+        "exam_id": e.id, "title": e.title, "course": e.course or "", **_source_fields(e.source),
+        "submitted_at": iso(a.submitted_at), "receipt": a.receipt,
+        "score": num(score) if released and score is not None else None,
+        "total_points": num(total),
+        "percent": percent(score, total) if released and score is not None else None,
+        "class_average_percent": None, "overall_comment": "", "questions": questions,
+        "review": level, "released": released,
     }
 
 

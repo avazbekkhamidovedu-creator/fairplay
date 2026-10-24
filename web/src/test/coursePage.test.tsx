@@ -1,6 +1,6 @@
 // 2026-10-24: a course's own page (Active / Past), the home page's "Your tests" tabs,
 // More -> Text size − / +, and the centred start-code boxes.
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -172,30 +172,33 @@ describe("course page", () => {
     await user.click(screen.getByRole("tab", { name: /Past/ }));
     expect(screen.getByTestId("where")).toHaveTextContent("?tab=past");
     const panel = screen.getByTestId("tests-past");
-    const row = (id: string) => within(panel).getByText(`Exam ${id}`).closest(".stu-result-row") as HTMLElement;
+    const row = (id: string) => within(panel).getByText(`Exam ${id}`).closest("[data-testid=grade-card]") as HTMLElement;
+    // style A grade cards, two columns on a laptop
+    expect(within(panel).getByTestId("past-cards")).toHaveClass("stu-gcard-grid");
 
     const rel = row("rel");
-    expect(await within(rel).findByTestId("result-score")).toHaveTextContent("8 / 1080%");
-    expect(rel).toHaveTextContent("Handed in Oct 12");
+    expect(await within(rel).findByRole("img", { name: "80 percent" })).toBeInTheDocument();
+    await waitFor(() => expect(rel).toHaveTextContent("8 / 10 points · Oct 12"));
     expect(rel).toHaveAttribute("href", "/student/grades/rel");
-    expect(rel).toHaveTextContent("See feedback");
+    expect(rel).toHaveTextContent("Feedback");
+    expect(rel).not.toHaveTextContent("CS 101");          // the course is the page
 
     const wait = row("wait");
-    expect(within(wait).getByTestId("result-status")).toHaveTextContent("Being graded");
-    expect(wait.tagName).toBe("DIV");
+    expect(wait).toHaveTextContent("Handed in Oct 12 · being graded");
+    expect(within(wait).getByTestId("ring-grading")).toBeInTheDocument();
+    expect(wait.tagName).toBe("ARTICLE");
 
     const ans = row("ans");
-    expect(within(ans).queryByTestId("result-status")).toBeNull();
-    expect(ans).toHaveTextContent("Handed in Oct 12");
+    expect(ans).toHaveTextContent("Handed in Oct 12 · scores are not shared");
     expect(ans).toHaveAttribute("href", "/student/grades/ans");
-    expect(ans).toHaveTextContent("See your answers");
-    expect(within(ans).queryByTestId("result-score")).toBeNull();
+    expect(ans).toHaveTextContent("Your answers");
+    expect(within(ans).queryByTestId("score-ring")).toBeNull();
 
     const none = row("none");
-    expect(within(none).queryByTestId("result-status")).toBeNull();
-    expect(none).toHaveTextContent("Handed in Oct 12");
-    expect(none.tagName).toBe("DIV");
-    expect(none).not.toHaveTextContent("See your answers");
+    expect(none).toHaveTextContent("Handed in Oct 12 · your teacher keeps this one private");
+    expect(within(none).getByTestId("ring-handed-in")).toBeInTheDocument();
+    expect(none.tagName).toBe("ARTICLE");
+    expect(none).not.toHaveTextContent("Your answers");
   });
 
   it("the tabs work with the arrow keys and ?tab=past opens Past", async () => {
@@ -265,7 +268,8 @@ describe("home page: Your tests [Active | Past]", () => {
 
     await user.click(within(tests).getByRole("tab", { name: /Past/ }));
     const past = within(tests).getByTestId("tests-past");
-    expect(await within(past).findByTestId("result-score")).toHaveTextContent("15 / 2075%");
+    expect(await within(past).findByRole("img", { name: "75 percent" })).toBeInTheDocument();
+    await waitFor(() => expect(within(past).getByTestId("grade-line")).toHaveTextContent("15 / 20 points"));
     expect(within(past).getByRole("link", { name: "All grades →" })).toHaveAttribute("href", "/student/grades");
     // the course cards stay above the tests
     const courses = screen.getByTestId("courses");

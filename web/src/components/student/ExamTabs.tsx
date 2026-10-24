@@ -325,8 +325,8 @@ export function PastList({
     );
   }
   return (
-    <div className="stu-card stu-past-card">
-      <div className="stu-rows">
+    <div className="stu-past-list">
+      <div className="stu-gcard-grid" data-testid="past-cards">
         {(all ? past : past.slice(0, shown)).map((e) => (
           <PastExamRow key={e.id} exam={e} grade={grades.get(e.id)} showCourse={showCourse} />
         ))}

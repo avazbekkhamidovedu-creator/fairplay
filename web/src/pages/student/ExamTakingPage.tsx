@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError, NetworkError, currentStudentId, getToken, contentApi, slice6Api, studentApi } from "../../api/client";
-import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent, StudentQuestion } from "../../api/types";
+import type { AllowedApp, AnswerMap, AnswerValue, AttemptView, IntegrityEvent, MaterialFile, StudentQuestion } from "../../api/types";
 import { MarkdownContent, type ExamLinks } from "../../components/MarkdownContent";
 import { FileUploadInput, FillBlankQuestion } from "../../components/student/QuestionInputs";
 import { attemptAssetContext, forgetAssets, prefetchAssets } from "../../lib/questionAssets";
@@ -60,15 +69,40 @@ import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student
 import { QuestionImages } from "../../components/QuestionImages";
 import { TrialExit } from "../../components/student/TrialExit";
 import { Calculator } from "../../components/student/Calculator";
-import { MaterialsPaneContent, WebsitesPaneContent } from "../../components/student/ExamToolPanes";
-import { ToolPane, clampPaneWidth, readPaneWidth } from "../../components/student/ToolPane";
-import { BookIcon, GlobeIcon } from "../../components/student/icons";
+import { MaterialFileView, MaterialsPaneContent, WebsitesPaneContent } from "../../components/student/ExamToolPanes";
+import { CloudCheckIcon, DiskIcon, WidenIcon } from "../../components/student/icons";
+import "../../styles/exam-d.css";
 import { forgetAttemptMaterials, loadAttemptMaterials } from "../../lib/materials";
 import "../../styles/student.css";
 
 export const HEARTBEAT_MS = 5000;
 export const EVENT_RETRY_MS = 3000;
 export const SUBMIT_RETRY_MS = 3000;
+
+/** 2026-10-24 (layout D): material tabs in the left pane (at most MAX_TABS; the oldest goes). */
+export type MatTab =
+  | { id: "files"; kind: "files" }
+  | { id: string; kind: "file"; file: MaterialFile }
+  | { id: "sites"; kind: "sites" }
+  | { id: string; kind: "site"; host: string; url: string; seq: number };
+export const MAX_TABS = 6;
+const FILE_BADGE: Record<MaterialFile["kind"], string> = { pdf: "PDF", png: "IMG", jpg: "IMG", txt: "TXT", md: "MD" };
+function tabInfo(t: MatTab): { id: string; label: string; badge: string } {
+  if (t.kind === "files") return { id: t.id, label: "Materials", badge: "≡" };
+  if (t.kind === "sites") return { id: t.id, label: "Websites", badge: "◎" };
+  if (t.kind === "file") return { id: t.id, label: t.file.name, badge: FILE_BADGE[t.file.kind] ?? "FILE" };
+  return { id: t.id, label: t.host, badge: "◎" };
+}
+
+/** The question pane's share of the card (percent), per exam, in memory only. */
+export const SPLITS = new Map<string, number>();
+export const SPLIT_MIN = 25;
+export const SPLIT_MAX = 75;
+export const SPLIT_DEFAULT = 50;
+export const SPLIT_CODE = 42;
+export function clampSplit(v: number): number {
+  return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, Math.round(v)));
+}
 
 /** "Mark for review" flags are local only, kept per attempt in localStorage. */
 export const marksStorageKey = (aid: string) => `proctora:marks:${aid}`;
@@ -766,8 +800,13 @@ function ExamTakingInner() {
     promptRef.current?.focus();
   }, [current, phase]);
 
-  const goTo = (i: number) => {
+  // 2026-10-24 (layout D): a new question always shows on its own tab (the material tabs stay)
+  const go = (i: number) => {
     setCurrent(i);
+    setActiveTab("question");
+  };
+  const goTo = (i: number) => {
+    go(i);
     setPhase("exam");
   };
 
@@ -818,18 +857,55 @@ function ExamTakingInner() {
     setCalcOpen(false);
     calcButtonRef.current?.focus();
   };
-  const [pane, setPane] = useState<null | "materials" | "websites">(null);
-  // a link in a question to an allowed website opens in the Websites panel
-  const [siteRequest, setSiteRequest] = useState<{ url: string; seq: number } | null>(null);
+  // 2026-10-24 (layout D): materials and allowed websites open as tabs in the left pane,
+  // next to the question ("Question 3 | Formula sheet.pdf | docs.python.org").
+  const [matTabs, setMatTabs] = useState<MatTab[]>([]);
+  const [activeTab, setActiveTab] = useState<string>("question");
+  const openTab = useCallback((t: MatTab) => {
+    setMatTabs((prev) => {
+      const i = prev.findIndex((x) => x.id === t.id);
+      if (i >= 0) {
+        if (t.kind !== "site") return prev;
+        const old = prev[i] as Extract<MatTab, { kind: "site" }>;
+        if (old.url === t.url && t.seq === 0) return prev;
+        const next = [...prev];
+        next[i] = { ...t, seq: old.seq + 1 };       // the open tab goes to the new page
+        return next;
+      }
+      const next = [...prev, t];
+      return next.length > MAX_TABS ? next.slice(next.length - MAX_TABS) : next;
+    });
+    setActiveTab(t.id);
+  }, []);
+  const closeTab = (id: string) => {
+    setMatTabs((prev) => prev.filter((t) => t.id !== id));
+    setActiveTab("question");
+    // the focus goes to the question tab (it stays when other tabs are left)
+    setTimeout(() => {
+      const tab = document.getElementById("xd-tab-question");
+      if (tab) tab.focus();
+      else moreButtonRef.current?.focus();      // the last tab: back to More, where it came from
+    }, 0);
+  };
+  const openFile = useCallback((f: MaterialFile) => openTab({ id: `file:${f.id}`, kind: "file", file: f }), [openTab]);
+  const openSite = useCallback(
+    (host: string, url: string) => openTab({ id: `site:${host}`, kind: "site", host, url, seq: 0 }),
+    [openTab],
+  );
   const examLinks = useMemo<ExamLinks>(
     () => ({
       allowed: [...(attempt?.tools?.websites ?? [])],
       onOpen: (url) => {
-        setPane("websites");
-        setSiteRequest((r) => ({ url, seq: (r?.seq ?? 0) + 1 }));
+        let host = url;
+        try {
+          host = new URL(url).host;
+        } catch {
+          /* keep the text */
+        }
+        openSite(host, url);
       },
     }),
-    [attempt?.tools?.websites],
+    [attempt?.tools?.websites, openSite],
   );
   // fp-asset pictures: from the attempt asset URL (or copies the view already carries)
   const assetAid = connected ? realAidRef.current : null;
@@ -846,26 +922,14 @@ function ExamTakingInner() {
       if (names.length) prefetchAssets(assetsFor(qq), names);
     }
   }, [attempt, assetAid, assetsFor]);
-  // 2026-10-23: a side panel opens from More; closing it puts the focus back there
+  // 2026-10-23: the More button (focus comes back there when a tab closes and nothing else is left)
   const moreButtonRef = useRef<HTMLButtonElement>(null);
-  const closePane = () => {
-    setPane(null);
-    moreButtonRef.current?.focus();
-  };
-  const [paneWidth, setPaneWidth] = useState(() =>
-    clampPaneWidth(readPaneWidth(), typeof window === "undefined" ? 1280 : window.innerWidth),
-  );
-  // 2026-10-23 review: a smaller window (or the iPad turned) keeps the panel within limits;
-  // a bigger one gives back the width the student chose.
-  useEffect(() => {
-    const fit = () => setPaneWidth(clampPaneWidth(readPaneWidth(), window.innerWidth));
-    window.addEventListener("resize", fit);
-    window.addEventListener("orientationchange", fit);
-    return () => {
-      window.removeEventListener("resize", fit);
-      window.removeEventListener("orientationchange", fit);
-    };
-  }, []);
+  // 2026-10-24 (layout D): the divider between the question and the answer, remembered per
+  // exam in memory (code questions have their own); the code problem is portalled left.
+  const cardRef = useRef<HTMLElement>(null);
+  const [problemEl, setProblemEl] = useState<HTMLDivElement | null>(null);
+  const [, setSplitTick] = useState(0);
+  const splitDrag = useRef<number | null>(null);
   const [materialCount, setMaterialCount] = useState<number | null>(null);
   const materialsAid = connected ? realAidRef.current : null;
   useEffect(() => {
@@ -985,14 +1049,91 @@ function ExamTakingInner() {
   );
 
   const isLast = current === questions.length - 1;
-  // 2026-10-23: no calculator or side panel while handing in or once the time is up
+  // 2026-10-23: no calculator or materials while handing in or once the time is up
   const toolsShown = (phase === "exam" || phase === "review") && !waitPanel && !stopPanel && remaining > 0;
-  const paneShown = toolsShown && !!pane && (pane === "materials" ? !!tools?.open_book : (tools?.websites?.length ?? 0) > 0);
+  const tabs = toolsShown
+    ? matTabs.filter((t) => (t.kind === "files" || t.kind === "file" ? !!tools?.open_book : (tools?.websites?.length ?? 0) > 0))
+    : [];
+  const shownTab = tabs.some((t) => t.id === activeTab) ? activeTab : "question";
+  const onTabKey = (e: ReactKeyboardEvent) => {
+    const ids = ["question", ...tabs.map((t) => t.id)];
+    const i = ids.indexOf(shownTab);
+    let n = -1;
+    if (e.key === "ArrowRight") n = (i + 1) % ids.length;
+    else if (e.key === "ArrowLeft") n = (i - 1 + ids.length) % ids.length;
+    else if (e.key === "Home") n = 0;
+    else if (e.key === "End") n = ids.length - 1;
+    else if ((e.key === "Delete" || e.key === "Backspace") && shownTab !== "question") {
+      e.preventDefault();
+      closeTab(shownTab);
+      return;
+    } else return;
+    e.preventDefault();
+    setActiveTab(ids[n]!);
+    document.getElementById(`xd-tab-${ids[n]}`)?.focus();
+  };
+  // the divider: per exam in memory; code questions start with more room for the editor
+  const isCode = q?.type === "code";
+  const splitKey = `${attempt.exam_id}:${isCode ? "code" : "q"}`;
+  const split = SPLITS.get(splitKey) ?? (isCode ? SPLIT_CODE : SPLIT_DEFAULT);
+  const setSplit = (v: number) => {
+    SPLITS.set(splitKey, clampSplit(v));
+    setSplitTick((t) => t + 1);
+  };
+  const wide = isCode && split <= SPLIT_MIN;
+  const toggleWide = () => {
+    if (wide) setSplit(SPLITS.get(`${splitKey}:before`) ?? SPLIT_CODE);
+    else {
+      SPLITS.set(`${splitKey}:before`, split);
+      setSplit(SPLIT_MIN);
+    }
+  };
+  const onSplitDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    splitDrag.current = e.pointerId;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* tests */
+    }
+    e.preventDefault();
+  };
+  const onSplitMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (splitDrag.current !== e.pointerId || !cardRef.current) return;
+    const r = cardRef.current.getBoundingClientRect();
+    if (r.width > 0) setSplit(Math.round(((e.clientX - r.left) / r.width) * 100));
+  };
+  const onSplitKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 10 : 5;
+    if (e.key === "ArrowLeft") setSplit(split - step);
+    else if (e.key === "ArrowRight") setSplit(split + step);
+    else if (e.key === "Home") setSplit(SPLIT_MIN);
+    else if (e.key === "End") setSplit(SPLIT_MAX);
+    else if (e.key === "Enter") setSplit(isCode ? SPLIT_CODE : SPLIT_DEFAULT);
+    else return;
+    e.preventDefault();
+  };
+  const askText = !q
+    ? null
+    : q.type === "mcq"
+      ? q.multiple
+        ? "Choose all that apply"
+        : q.true_false
+          ? "True or false?"
+          : "Choose the right option"
+      : q.type === "essay"
+        ? "Write your answer"
+        : q.type === "file_upload"
+          ? "Upload your answer"
+          : q.type === "fill_blank"
+            ? "Fill in the blanks"
+            : q.type === "code"
+              ? null
+              : "Your answer";
 
   return (
     <div
-      className={`stu stu-exam${paneShown ? " has-pane" : ""}`}
-      style={{ ["--stu-text-scale" as string]: String(textSize), ["--stu-pane-w" as string]: `${paneWidth}px` }}
+      className={`stu stu-exam exam-d${showExam && q ? " xd-fill" : ""}${tabs.length > 0 ? " has-tabs" : ""}`}
+      style={{ ["--stu-text-scale" as string]: String(textSize) }}
     >
       <NotLockedBanner />
       <LockedBar
@@ -1007,12 +1148,13 @@ function ExamTakingInner() {
         textSize={textSize}
         onTextSize={changeTextSize}
         calculator={calcMode && toolsShown ? { open: calcOpen, onToggle: toggleCalc, buttonRef: calcButtonRef } : undefined}
-        materials={tools?.open_book && toolsShown ? { count: materialCount, onOpen: () => setPane("materials") } : undefined}
+        materials={tools?.open_book && toolsShown ? { count: materialCount, onOpen: () => openTab({ id: "files", kind: "files" }) } : undefined}
         websites={
           tools && tools.websites.length > 0 && toolsShown
-            ? { count: tools.websites.length, onOpen: () => setPane("websites") }
+            ? { count: tools.websites.length, onOpen: () => openTab({ id: "sites", kind: "sites" }) }
             : undefined
         }
+        showSync={!(showExam && q)}
         directions={
           attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length, richExam ? totalPoints : undefined)
         }
@@ -1108,31 +1250,147 @@ function ExamTakingInner() {
 
       {showExam && q && (
         <>
-          <div className={`stu-exam-body${q.type === "code" ? " code" : ""}`}>
-            <main className={`stu-paper stu-question${q.type === "code" ? " stu-cq-paper" : ""}`} aria-labelledby="question-prompt">
-              <div className="stu-qhead">
-                <span className="stu-qnum" aria-hidden="true">
-                  {current + 1}
-                </span>
-                <span className="sr-only">
-                  Question {current + 1} of {questions.length}
-                </span>
-                <span className="stu-qhead-pts" data-testid="question-points">
-                  {q.label ? `${q.label} · ` : ""}
-                  {q.points} {q.points === 1 ? "point" : "points"}
-                  {typeLabel}
-                  {q.partial && (
-                    <>
-                      {" · "}
-                      <span className="stu-partial">partial credit</span>
-                    </>
+          <main
+            ref={cardRef}
+            className={`xd-card${q.type === "code" ? " code" : ""}`}
+            aria-labelledby="question-prompt"
+            data-testid="exam-card"
+            style={{ ["--xd-split" as string]: `${split}%` }}
+          >
+            <div className="xd-left">
+              {tabs.length > 0 && (
+                <div className="xd-tabs">
+                  <div role="tablist" aria-label="Question and materials" className="xd-tablist" onKeyDown={onTabKey}>
+                    {[{ id: "question", label: `Question ${current + 1}`, badge: "¶" }, ...tabs.map(tabInfo)].map((t) => {
+                      const on = shownTab === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          role="tab"
+                          id={`xd-tab-${t.id}`}
+                          aria-selected={on}
+                          aria-controls={`xd-panel-${t.id}`}
+                          tabIndex={on ? 0 : -1}
+                          className="xd-tab"
+                          title={t.label}
+                          onClick={() => setActiveTab(t.id)}
+                        >
+                          <span className={`xd-tab-badge${t.badge === "PDF" ? " pdf" : ""}`} aria-hidden="true">
+                            {t.badge}
+                          </span>
+                          <span className="xd-tab-label">{t.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {shownTab !== "question" && (
+                    <button
+                      type="button"
+                      className="xd-tab-close"
+                      aria-label={`Close ${tabInfo(tabs.find((t) => t.id === shownTab)!).label}`}
+                      title="Close this tab"
+                      onClick={() => closeTab(shownTab)}
+                    >
+                      <CloseIcon size={16} />
+                    </button>
                   )}
-                </span>
+                </div>
+              )}
+              <div
+                className="xd-left-body"
+                {...(tabs.length > 0
+                  ? { role: "tabpanel", id: "xd-panel-question", "aria-labelledby": "xd-tab-question", hidden: shownTab !== "question" }
+                  : {})}
+              >
+                <div className="xd-qmeta">
+                  <span className="xd-eyebrow" aria-hidden="true">
+                    Question {current + 1}
+                  </span>
+                  <span className="sr-only">
+                    Question {current + 1} of {questions.length}
+                  </span>
+                  <span className="stu-qhead-pts" data-testid="question-points">
+                    {q.label ? `${q.label} · ` : ""}
+                    {q.points} {q.points === 1 ? "point" : "points"}
+                    {typeLabel}
+                    {q.partial && (
+                      <>
+                        {" · "}
+                        <span className="stu-partial">partial credit</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+                {q.type === "code" ? (
+                  <div className="xd-problem" ref={setProblemEl} />
+                ) : q.type === "fill_blank" ? (
+                  <>
+                    <QuestionImages images={q.images} />
+                    {q.title && <p className="stu-qtitle">{q.title}</p>}
+                    <p className="xd-hint">Type your answers in the blanks.</p>
+                  </>
+                ) : (
+                  promptNode(q)
+                )}
+              </div>
+              {tabs.map((t) => (
+                <div
+                  key={t.id}
+                  role="tabpanel"
+                  id={`xd-panel-${t.id}`}
+                  aria-labelledby={`xd-tab-${t.id}`}
+                  className={`xd-left-tool ${t.kind}`}
+                  hidden={shownTab !== t.id}
+                >
+                  {t.kind === "files" ? (
+                    <div className="xd-tool-pad">
+                      <MaterialsPaneContent attemptId={materialsAid} onOpenFile={openFile} />
+                    </div>
+                  ) : t.kind === "file" ? (
+                    <MaterialFileView attemptId={materialsAid} file={t.file} />
+                  ) : t.kind === "sites" ? (
+                    <div className="xd-tool-pad">
+                      <WebsitesPaneContent sites={tools?.websites ?? []} onOpenSite={openSite} />
+                    </div>
+                  ) : (
+                    <WebsitesPaneContent
+                      sites={tools?.websites ?? []}
+                      startUrl={t.url}
+                      request={t.seq > 0 ? { url: t.url, seq: t.seq } : null}
+                      onAllSites={() => openTab({ id: "sites", kind: "sites" })}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div
+              className="xd-divider"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the question and answer panes"
+              aria-valuenow={split}
+              aria-valuemin={SPLIT_MIN}
+              aria-valuemax={SPLIT_MAX}
+              aria-valuetext={`Question pane ${split} percent`}
+              tabIndex={0}
+              onPointerDown={onSplitDown}
+              onPointerMove={onSplitMove}
+              onPointerUp={() => (splitDrag.current = null)}
+              onPointerCancel={() => (splitDrag.current = null)}
+              onKeyDown={onSplitKey}
+            >
+              <span aria-hidden="true" />
+            </div>
+
+            <div className="xd-right">
+              <div className="xd-tools" role="group" aria-label="Question tools">
                 <button
                   type="button"
                   role="checkbox"
                   aria-checked={isMarked}
-                  className="stu-mark"
+                  className="stu-mark xd-pill"
                   onClick={() => toggleMark(q.id)}
                 >
                   <BookmarkIcon />
@@ -1141,16 +1399,34 @@ function ExamTakingInner() {
                 {q.type === "mcq" && !q.multiple && !q.true_false && (
                   <button
                     type="button"
-                    className="stu-crossout-tool"
+                    className="stu-crossout-tool xd-pill"
                     aria-pressed={crossMode}
                     aria-label="Cross out answers"
                     title="Cross out answers"
                     onClick={flipCrossMode}
                   >
                     <CrossOutIcon />
+                    <span aria-hidden="true">Cross out answers</span>
+                  </button>
+                )}
+                {q.type === "code" && (
+                  <button
+                    type="button"
+                    className="xd-pill xd-wide"
+                    aria-pressed={wide}
+                    onClick={toggleWide}
+                    title="Give the editor more room (the divider moves)"
+                  >
+                    <WidenIcon />
+                    Wide editor
                   </button>
                 )}
               </div>
+              {askText && (
+                <h2 className="xd-ask" id="answer-heading">
+                  {askText}
+                </h2>
+              )}
 
               {q.type === "code" ? (
                 <CodeQuestion
@@ -1160,44 +1436,35 @@ function ExamTakingInner() {
                   value={answers[q.id]}
                   onChange={(v) => setAnswer(q.id, v)}
                   prompt={promptNode(q)}
+                  problemTarget={problemEl}
                 />
               ) : q.type === "fill_blank" ? (
-                <>
-                  <QuestionImages images={q.images} />
-                  {q.title && <p className="stu-qtitle">{q.title}</p>}
-                  <FillBlankQuestion
-                    key={q.id}
-                    question={q}
-                    value={answers[q.id]}
-                    onChange={(v) => setAnswer(q.id, v)}
-                    labelledBy="question-prompt"
-                    promptRef={promptRef}
-                    assets={assetsFor(q)}
-                    links={examLinks}
-                  />
-                </>
+                <FillBlankQuestion
+                  key={q.id}
+                  question={q}
+                  value={answers[q.id]}
+                  onChange={(v) => setAnswer(q.id, v)}
+                  labelledBy="question-prompt"
+                  promptRef={promptRef}
+                  assets={assetsFor(q)}
+                  links={examLinks}
+                />
               ) : q.type === "file_upload" ? (
-                <>
-                  {promptNode(q)}
-                  <FileUploadInput
-                    key={q.id}
-                    question={q}
-                    value={answers[q.id]}
-                    onChange={(v) => setAnswer(q.id, v)}
-                    attemptId={attemptId}
-                    upload={(file) => call((aid) => contentApi.uploadAnswerFile(aid, q.id, file))}
-                    onUploaded={(f) => rememberUpload(attemptId, f)}
-                    knownFiles={attempt.answer_files}
-                    assets={assetsFor(q)}
-                    links={examLinks}
-                  />
-                </>
+                <FileUploadInput
+                  key={q.id}
+                  question={q}
+                  value={answers[q.id]}
+                  onChange={(v) => setAnswer(q.id, v)}
+                  attemptId={attemptId}
+                  upload={(file) => call((aid) => contentApi.uploadAnswerFile(aid, q.id, file))}
+                  onUploaded={(f) => rememberUpload(attemptId, f)}
+                  knownFiles={attempt.answer_files}
+                  assets={assetsFor(q)}
+                  links={examLinks}
+                />
               ) : (
                 <>
-                  {promptNode(q)}
-
                   {q.type === "essay" && <RubricPanel question={q} />}
-
                   <AnswerInput
                     key={q.id}
                     question={q}
@@ -1211,10 +1478,10 @@ function ExamTakingInner() {
                   />
                 </>
               )}
-            </main>
-          </div>
+            </div>
+          </main>
 
-          <nav className="stu-bottombar" aria-label="Questions">
+          <nav className="stu-bottombar xd-foot" aria-label="Questions">
             <div className="stu-bottombar-inner">
               <span className="stu-who" data-testid="student-identity">
                 {me && (
@@ -1223,6 +1490,17 @@ function ExamTakingInner() {
                     <span className="netid">{me.netId}</span>
                   </>
                 )}
+                <span
+                  className={`stu-sync xd-sync ${sync === "synced" ? "synced" : "pending"}`}
+                  role="img"
+                  aria-label={sync === "synced" ? "All answers saved" : "Saved on this computer"}
+                  title={sync === "synced" ? "All answers saved" : "Saved on this computer"}
+                >
+                  {sync === "synced" ? <CloudCheckIcon /> : <DiskIcon />}
+                  <span className="stu-sync-text" aria-hidden="true">
+                    {sync === "synced" ? "Saved" : "Saved on this computer"}
+                  </span>
+                </span>
               </span>
 
               <button
@@ -1237,16 +1515,12 @@ function ExamTakingInner() {
                 <span className="stu-lbl-long">Question </span>
                 <span className="stu-lbl-short">Q</span>
                 {current + 1}
+                <span className="xd-of"> of {questions.length}</span>
                 <ChevronIcon className="chev" />
               </button>
 
               <div className="stu-bottombar-nav">
-                <button
-                  type="button"
-                  className="stu-btn lg"
-                  onClick={() => setCurrent((c) => Math.max(0, c - 1))}
-                  disabled={current === 0}
-                >
+                <button type="button" className="stu-btn lg" onClick={() => go(Math.max(0, current - 1))} disabled={current === 0}>
                   <ArrowLeftIcon />
                   Back
                 </button>
@@ -1257,12 +1531,12 @@ function ExamTakingInner() {
                     aria-label="Review and submit"
                     onClick={() => setPhase("review")}
                   >
-                    {/* 2026-10-23 review: "Review" when the bar is narrow (side panel open) */}
+                    {/* "Review" when the bar is narrow */}
                     <span className="stu-lbl-long" aria-hidden="true">Review and submit</span>
                     <span className="stu-lbl-short" aria-hidden="true">Review</span>
                   </button>
                 ) : (
-                  <button type="button" className="stu-btn primary lg" onClick={() => setCurrent((c) => c + 1)}>
+                  <button type="button" className="stu-btn primary lg" onClick={() => go(current + 1)}>
                     Next
                     <ArrowRightIcon />
                   </button>
@@ -1320,7 +1594,7 @@ function ExamTakingInner() {
                           aria-label={`Question ${i + 1}, ${state}`}
                           aria-current={isCurrent ? "step" : undefined}
                           onClick={() => {
-                            setCurrent(i);
+                            go(i);
                             closeNav(false);
                           }}
                         >
@@ -1389,19 +1663,8 @@ function ExamTakingInner() {
       {/* 2026-10-23 review: stays mounted (hidden) while handing in, so a failed hand-in
           doesn't lose what is in it */}
       {calcMode && calcMounted && (
-        <Calculator mode={calcMode} open={calcOpen && toolsShown} onClose={closeCalc} paneWidth={paneShown ? paneWidth : 0} />
+        <Calculator mode={calcMode} open={calcOpen && toolsShown} onClose={closeCalc} paneWidth={0} />
       )}
-      {paneShown && pane === "materials" && (
-        <ToolPane title="Materials" icon={<BookIcon />} labelId="pane-materials-h" width={paneWidth} onWidth={setPaneWidth} onClose={closePane}>
-          <MaterialsPaneContent attemptId={materialsAid} />
-        </ToolPane>
-      )}
-      {paneShown && pane === "websites" && tools && (
-        <ToolPane title="Websites" icon={<GlobeIcon />} labelId="pane-websites-h" width={paneWidth} onWidth={setPaneWidth} onClose={closePane}>
-          <WebsitesPaneContent sites={tools.websites} request={siteRequest} />
-        </ToolPane>
-      )}
-
       {phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam" && (
         <div className="stu-toast" role="status">
           {submitError ?? "Time is up. Submitting your answers…"}

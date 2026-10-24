@@ -127,12 +127,13 @@ describe("exam top bar", () => {
     }
     const { rerender } = render(<Bar remaining={20 * 60_000} />);
     expect(screen.getByRole("timer", { name: "Time left" }).textContent).toBe("20:00");
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+    // layout D: an eye button named "Hide time" / "Show time"
+    fireEvent.click(screen.getByRole("button", { name: "Hide time" }));
     expect(screen.getByRole("timer", { name: "Timer hidden" }).textContent).toBe("");
-    expect(screen.getByRole("button", { name: "Show" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Show time" })).toHaveAttribute("aria-pressed", "true");
     rerender(<Bar remaining={4 * 60_000} />);
     expect(screen.getByRole("timer", { name: "Time left" }).textContent).toBe("4:00");
-    expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show time" })).toBeNull();
   });
 
   it("opens Directions and the More menu (text size, help)", () => {
@@ -164,11 +165,13 @@ describe("exam top bar", () => {
     expect(screen.queryByRole("dialog", { name: "Help" })).toBeNull();
   });
 
-  it("shows the save status in our words", () => {
+  it("shows the save status in our words (or leaves it to the question screen's footer)", () => {
     const { rerender } = render(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} />);
     expect(screen.getByText("All answers saved")).toBeInTheDocument();
     rerender(<LockedBar title="Midterm" locked native sync="pending" remaining={60_000} />);
     expect(screen.getByText("Saved on this computer")).toBeInTheDocument();
+    rerender(<LockedBar title="Midterm" locked native sync="pending" remaining={60_000} showSync={false} />);
+    expect(screen.queryByText("Saved on this computer")).toBeNull();
   });
 
   it("shows the battery from the app and warns when low", () => {
