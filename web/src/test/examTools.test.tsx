@@ -185,10 +185,10 @@ describe("top bar tools", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    const items = screen.getAllByRole("menuitem").map((i) => i.getAttribute("aria-label") ?? i.textContent);
     expect(items[0]).toBe("Materials3 files");
     expect(items[1]).toBe("Websites1 site");
-    expect(items[2]).toMatch(/^Text size/);
+    expect(items.slice(2, 5)).toEqual(["Smaller text", "Text size 100%", "Larger text"]);
     fireEvent.click(screen.getByRole("menuitem", { name: /Materials/ }));
     expect(openMat).toHaveBeenCalled();
     expect(screen.queryByRole("menu")).toBeNull();

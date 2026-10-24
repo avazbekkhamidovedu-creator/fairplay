@@ -432,8 +432,12 @@
   flex: 0 0 auto;
 }
 @media (max-width: 640px) {
+  /* the text takes the row; the status wraps under it, past the date tile */
+  .stu-exam-item.scheduled .stu-exam-item-body {
+    flex: 1 1 calc(100% - 64px);
+  }
   .stu-exam-item.scheduled > .stu-pill {
-    margin-left: 64px; /* under the text, past the date tile */
+    margin-left: 64px;
   }
 }
 

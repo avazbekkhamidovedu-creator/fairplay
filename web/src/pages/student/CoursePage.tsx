@@ -129,6 +129,7 @@ export default function CoursePage() {
                   <PastList
                     past={past}
                     grades={grades}
+                    showCourse={false}
                     empty={
                       <>
                         <h3>No finished exams yet</h3>

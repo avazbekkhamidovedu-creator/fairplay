@@ -164,6 +164,7 @@ export default function StudentHome() {
                 past={past}
                 grades={grades}
                 shown={HOME_PAST_SHOWN}
+                expandable={false}
                 empty={
                   <>
                     <h3>No results yet</h3>
@@ -172,7 +173,7 @@ export default function StudentHome() {
                 }
                 footer={
                   <Link to="/student/grades" className="stu-link stu-past-more">
-                    All grades →
+                    {past.length > HOME_PAST_SHOWN ? `All ${past.length} results on Grades →` : "All grades →"}
                   </Link>
                 }
               />

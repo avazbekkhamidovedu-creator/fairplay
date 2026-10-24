@@ -6,7 +6,8 @@ import { AnswerInput } from "../components/student/AnswerInput";
 import { LockedBar } from "../components/student/LockedBar";
 import { batteryTone } from "../lib/battery";
 import {
-  nextTextSize,
+  stepTextSize,
+  TEXT_SIZES,
   readCrossed,
   readTextSize,
   readTimerHidden,
@@ -71,8 +72,12 @@ describe("exam preferences (this device only)", () => {
     expect(readTimerHidden("a1")).toBe(true);
     expect(readTimerHidden("a2")).toBe(false);
     expect(readTextSize()).toBe(1);
-    expect(nextTextSize(1)).toBe(1.15);
-    expect(nextTextSize(1.3)).toBe(1);
+    expect(stepTextSize(1, 1)).toBe(1.15);
+    expect(stepTextSize(1, -1)).toBe(0.9);
+    // 2026-10-24: no wrap-around at the ends
+    expect(stepTextSize(1.5, 1)).toBe(1.5);
+    expect(stepTextSize(0.9, -1)).toBe(0.9);
+    expect([...TEXT_SIZES]).toEqual([0.9, 1, 1.15, 1.3, 1.5]);
     writeTextSize(1.3);
     expect(readTextSize()).toBe(1.3);
     localStorage.setItem("fairplay:textsize", "9");
@@ -131,7 +136,7 @@ describe("exam top bar", () => {
   });
 
   it("opens Directions and the More menu (text size, help)", () => {
-    let size = 0;
+    let size = 0 as number;
     render(
       <LockedBar
         title="Midterm"
@@ -141,15 +146,18 @@ describe("exam top bar", () => {
         sync="synced"
         remaining={60 * 60_000}
         directions={examDirections(60, 22)}
-        onTextSize={() => (size += 1)}
+        textSize={1}
+        onTextSize={(n) => (size = n)}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Directions" }));
     expect(screen.getByText("22 questions · 60 minutes.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     expect(screen.queryByText("22 questions · 60 minutes.")).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Text size/ }));
-    expect(size).toBe(1);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Larger text" }));
+    expect(size).toBe(1.15);
+    // the menu stays open for the next step
+    expect(screen.getByRole("menu", { name: "More" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Help" }));
     expect(screen.getByRole("dialog", { name: "Help" })).toHaveTextContent("Raise your hand");
     fireEvent.keyDown(document, { key: "Escape" });

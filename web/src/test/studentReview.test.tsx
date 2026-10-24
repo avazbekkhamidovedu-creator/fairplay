@@ -86,7 +86,8 @@ describe("past exam row", () => {
 
   it("nothing: just handed in, no link", () => {
     row(past({ review: "nothing" }));
-    expect(screen.getByText("Handed in")).toBeInTheDocument();
+    expect(screen.getByText(/^Handed in/)).toBeInTheDocument();
+    expect(screen.queryByText("Being graded")).toBeNull();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(screen.queryByText(/See your answers|See feedback/)).not.toBeInTheDocument();
   });
@@ -95,7 +96,8 @@ describe("past exam row", () => {
     row(past({ review: "answers" }));
     expect(screen.getByRole("link")).toHaveAttribute("href", "/student/grades/e1");
     expect(screen.getByText("See your answers")).toBeInTheDocument();
-    expect(screen.getByText("Handed in")).toBeInTheDocument();
+    expect(screen.getByText(/^Handed in/)).toBeInTheDocument();
+    expect(screen.queryByText("Being graded")).toBeNull();
   });
 
   it("answers and results: answers while being graded, feedback once released", () => {

@@ -6,7 +6,16 @@ import { examName, fmtNum, fmtPercent, shortDate } from "./format";
 /** One past exam: percent + "See feedback" when released, else "Being graded" (or "Handed in"),
  *  with "See your answers" when the teacher lets students review them (2026-10-24).
  *  2026-10-24: with the grade (GET /api/student/grades) the score shows as "8 / 10" too. */
-export function PastExamRow({ exam, grade }: { exam: StudentExamSummary; grade?: StudentGradeSummary }) {
+export function PastExamRow({
+  exam,
+  grade,
+  showCourse = true,
+}: {
+  exam: StudentExamSummary;
+  grade?: StudentGradeSummary;
+  /** false on a course's own page (the course is the page) */
+  showCourse?: boolean;
+}) {
   const a = exam.attempt;
   // the grade list and the exam list apply the same review rule on the server
   const released = !!a?.released || !!grade?.released;
@@ -18,11 +27,13 @@ export function PastExamRow({ exam, grade }: { exam: StudentExamSummary; grade?:
       ? `${fmtNum(grade.score)} / ${fmtNum(grade.total_points)}`
       : null;
   const handedIn = a?.submitted_at ?? grade?.submitted_at;
+  const name = showCourse ? examName(exam.course, exam.title) : exam.title;
+  const waiting = waitingLabel(review);
   const inner = (
     <>
       <span className="stu-result-title">
-        <span className="stu-clamp-2" title={examName(exam.course, exam.title)}>
-          {examName(exam.course, exam.title)}
+        <span className="stu-clamp-2" title={name}>
+          {name}
         </span>
       </span>
       <span className="stu-result-date">{handedIn ? `Handed in ${shortDate(handedIn)}` : "Handed in"}</span>
@@ -36,9 +47,12 @@ export function PastExamRow({ exam, grade }: { exam: StudentExamSummary; grade?:
         </>
       ) : (
         <>
-          <span className="stu-pill" data-testid="result-status">
-            {waitingLabel(review)}
-          </span>
+          {/* "Handed in" is said by the date already; only "Being graded" gets a pill */}
+          {waiting !== "Handed in" && (
+            <span className="stu-pill" data-testid="result-status">
+              {waiting}
+            </span>
+          )}
           {open && <span className="stu-link">See your answers</span>}
         </>
       )}

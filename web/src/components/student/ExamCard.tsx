@@ -5,7 +5,16 @@ import type { StudentExamSummary } from "../../api/types";
 import { NOT_OPEN_FOR_YOU } from "../../pages/student/useStudentExams";
 import { examName, isToday, monthDay, plural, shortDate, shortTime } from "./format";
 
-export function UpcomingExamCard({ exam, headingLevel = 2 }: { exam: StudentExamSummary; headingLevel?: 2 | 3 }) {
+export function UpcomingExamCard({
+  exam,
+  headingLevel = 2,
+  showCourse = true,
+}: {
+  exam: StudentExamSummary;
+  headingLevel?: 2 | 3;
+  /** 2026-10-24: false on a course's own page */
+  showCourse?: boolean;
+}) {
   const navigate = useNavigate();
   const inProgress = exam.attempt?.status === "in_progress";
   // 2026-10-23: opened for selected students only, and this student isn't one (yet)
@@ -21,7 +30,7 @@ export function UpcomingExamCard({ exam, headingLevel = 2 }: { exam: StudentExam
   const meta = [exam.room && `Room ${exam.room}`, `${exam.duration_min} min`, plural(exam.question_count, "question")]
     .filter(Boolean)
     .join(" · ");
-  const name = examName(exam.course, exam.title);
+  const name = showCourse ? examName(exam.course, exam.title) : exam.title;
   const H = headingLevel === 3 ? "h3" : "h2";
   return (
     <article className="stu-exam-item live" data-testid="exam-card">

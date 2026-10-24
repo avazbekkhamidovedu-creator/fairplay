@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StudentClass, StudentExamSummary } from "../api/types";
 import { setToken } from "../api/client";
-import { COURSES_SHOWN, COURSE_PAST_SHOWN, examInCourse, sortCourses } from "../components/student/Courses";
+import { COURSES_SHOWN, examInCourse, sortCourses } from "../components/student/Courses";
 import ExamsPage, { PAST_SHOWN } from "../pages/student/ExamsPage";
 import StudentHome, { HOME_OPEN_SHOWN } from "../pages/student/StudentHome";
 
@@ -123,7 +123,8 @@ describe("course cards", () => {
     expect(within(dku).getByText("DKU OJ")).toBeInTheDocument();
     expect(within(dku).getByTestId("course-upcoming")).toHaveTextContent("2 upcoming exams");
     expect(dku).toHaveTextContent(/Next:\s*Midterm 1/);
-    expect(dku).toHaveAttribute("aria-pressed", "false");
+    // 2026-10-24: a card is a link to the course's own page
+    expect(dku).toHaveAttribute("href", "/student/courses/dkuoj%3A31");
 
     const native = cards[1]!;
     expect(native).toHaveTextContent("Calculus I");
@@ -135,27 +136,22 @@ describe("course cards", () => {
     expect(within(dku).getByTitle("CS 101 Programming")).toBeInTheDocument();
   });
 
-  it("clicking a card shows that course's exams; clicking again closes it", async () => {
+  it("clicking a card opens the course page (no panel under the cards any more)", async () => {
     const user = userEvent.setup();
-    routes["GET /api/student/exams"] = {
-      status: 200,
-      body: [exam(1, { title: "Quiz 3", course: "CS 101" }), exam(2, { title: "Calc quiz", course: "Calculus I" }), submitted(3)],
-    };
+    routes["GET /api/student/exams"] = { status: 200, body: [exam(1, { title: "Quiz 3", course: "CS 101" })] };
     routes["GET /api/student/classes"] = { status: 200, body: [DKU, NATIVE] };
-    renderHome();
+    render(
+      <MemoryRouter initialEntries={["/student"]}>
+        <Routes>
+          <Route path="/student" element={<StudentHome />} />
+          <Route path="/student/courses/:classId" element={<p>course page</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
     const [dku] = await screen.findAllByTestId("course-card");
-    await user.click(dku!);
-    expect(dku).toHaveAttribute("aria-pressed", "true");
-    const panel = await screen.findByTestId("course-exams");
-    expect(within(panel).getByRole("heading", { name: "CS 101 Programming" })).toHaveFocus();
-    expect(within(panel).getByText("Live now · 1")).toBeInTheDocument();
-    expect(within(panel).getByText("Exam 3", { exact: false })).toBeInTheDocument();
-    expect(within(panel).getByText("Coming up")).toBeInTheDocument();
-    expect(within(panel).getByText("Midterm 1")).toBeInTheDocument();
-    expect(within(panel).getByText("Finished · 1")).toBeInTheDocument();
-    expect(within(panel).queryByText(/Calc quiz/)).not.toBeInTheDocument();
-    await user.click(dku!);
     expect(screen.queryByTestId("course-exams")).not.toBeInTheDocument();
+    await user.click(dku!);
+    expect(await screen.findByText("course page")).toBeInTheDocument();
   });
 
   it("empty state when the student has no courses", async () => {
@@ -240,21 +236,9 @@ describe("many courses and exams", () => {
     routes["GET /api/student/classes"] = { status: 200, body: [] };
     renderHome();
     expect(await screen.findByText("Open now · 12")).toBeInTheDocument();
+    expect(screen.getByTestId("tests-active")).toBeInTheDocument();
     expect(screen.getAllByTestId("exam-card")).toHaveLength(HOME_OPEN_SHOWN);
     expect(screen.getByRole("link", { name: "See all 12 open exams →" })).toHaveAttribute("href", "/student/exams");
-  });
-
-  it("a course with many finished exams collapses them", async () => {
-    const user = userEvent.setup();
-    routes["GET /api/student/exams"] = { status: 200, body: Array.from({ length: 9 }, (_, i) => submitted(i)) };
-    routes["GET /api/student/classes"] = { status: 200, body: [DKU] };
-    renderHome();
-    await user.click((await screen.findAllByTestId("course-card"))[0]!);
-    const panel = await screen.findByTestId("course-exams");
-    expect(within(panel).getByText("Finished · 9")).toBeInTheDocument();
-    expect(within(panel).getAllByText(/^CS 101/).length).toBeGreaterThanOrEqual(COURSE_PAST_SHOWN);
-    await user.click(within(panel).getByRole("button", { name: "Show all 9" }));
-    expect(within(panel).getByRole("button", { name: "Show fewer" })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("Exams page: 60 past exams show the first ones, then Show all", async () => {

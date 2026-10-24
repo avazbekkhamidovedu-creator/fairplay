@@ -271,7 +271,7 @@ export function ActiveList({
           ) : (
             <div className="stu-exam-list">
               {live.map((e) => (
-                <UpcomingExamCard key={e.id} exam={e} headingLevel={3} />
+                <UpcomingExamCard key={e.id} exam={e} headingLevel={3} showCourse={!!showCourse} />
               ))}
             </div>
           )}
@@ -304,7 +304,12 @@ export function PastList({
   shown = 10,
   empty,
   footer,
+  showCourse = true,
+  expandable = true,
 }: {
+  showCourse?: boolean;
+  /** false: no "Show all" here (the home page links to the Grades page instead) */
+  expandable?: boolean;
   past: StudentExamSummary[];
   grades: Map<string, StudentGradeSummary>;
   shown?: number;
@@ -323,10 +328,10 @@ export function PastList({
     <div className="stu-card stu-past-card">
       <div className="stu-rows">
         {(all ? past : past.slice(0, shown)).map((e) => (
-          <PastExamRow key={e.id} exam={e} grade={grades.get(e.id)} />
+          <PastExamRow key={e.id} exam={e} grade={grades.get(e.id)} showCourse={showCourse} />
         ))}
       </div>
-      {past.length > shown && (
+      {expandable && past.length > shown && (
         <button type="button" className="stu-btn quiet sm stu-show-all" aria-expanded={all} onClick={() => setAll((v) => !v)}>
           {all ? "Show fewer" : `Show all ${past.length}`}
         </button>
