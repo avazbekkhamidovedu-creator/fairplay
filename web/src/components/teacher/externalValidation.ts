@@ -351,7 +351,7 @@ export function canvasCodeWarning(code: string | null | undefined): string | nul
 }
 
 export const FINISH_REGEX_RULE =
-  "Leave empty for the pattern above, or write a plain pattern of up to 300 characters with no look-ahead, look-behind, back-references or named groups, and no repeated group that contains a choice (|) or another repeat.";
+  "Leave empty for the pattern above, or write a plain pattern of up to 300 characters with no look-ahead, look-behind, back-references or named groups, and no repeated group that contains a choice (|), another repeat or another group.";
 
 export const MAX_REPEAT_COUNT = 100;
 export const MAX_UNBOUNDED_QUANTIFIERS = 8;
@@ -359,6 +359,7 @@ export const MAX_UNBOUNDED_QUANTIFIERS = 8;
 interface GroupFrame {
   alt: boolean;
   quant: boolean;
+  nested: boolean;
 }
 
 /**
@@ -398,6 +399,13 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       continue;
     }
     if (c === "(") {
+      const flags = i === 0 ? /^\(\?[ims]+\)/.exec(p) : null;
+      if (flags) {
+        i += flags[0].length;
+        prevQuant = false;
+        lastClosed = null;
+        continue;
+      }
       if (p[i + 1] === "?") {
         const rest = p.slice(i + 2, i + 4);
         if (rest.startsWith("P<")) return "Named groups are not supported.";
@@ -409,7 +417,9 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       } else {
         i += 1;
       }
-      stack.push({ alt: false, quant: false });
+      const parentFrame = stack[stack.length - 1];
+      if (parentFrame) parentFrame.nested = true;
+      stack.push({ alt: false, quant: false, nested: false });
       prevQuant = false;
       lastClosed = null;
       continue;
@@ -466,8 +476,8 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
         }
         return c === "+" ? "Possessive repeats are not supported." : "A repeat cannot follow another repeat.";
       }
-      if (repeats && lastClosed && (lastClosed.alt || lastClosed.quant))
-        return "A group that is repeated cannot contain a choice (|) or another repeat.";
+      if ((repeats || c === "{") && lastClosed && (lastClosed.alt || lastClosed.quant || lastClosed.nested))
+        return "A group that is repeated cannot contain a choice (|), another repeat or another group.";
       if (open && ++unbounded > MAX_UNBOUNDED_QUANTIFIERS)
         return `Use at most ${MAX_UNBOUNDED_QUANTIFIERS} open-ended repeats (*, + or {n,}).`;
       const top = stack[stack.length - 1];

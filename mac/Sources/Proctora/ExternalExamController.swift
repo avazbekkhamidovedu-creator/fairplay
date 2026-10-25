@@ -87,6 +87,8 @@ final class ExternalExamController {
     private var canvasBusy = false
     private var canvasHelpShown = false
     private var finishWork: DispatchWorkItem?
+    private var finishFromPopup = false
+    private var popupObservation: NSKeyValueObservation?
     private var popupView: WKWebView?
     private var popupClose: NSButton?
 
@@ -188,7 +190,7 @@ final class ExternalExamController {
     }
 
     /// Call for every allowed main-frame navigation and URL change.
-    func checkFinishURL(_ url: URL?) {
+    func checkFinishURL(_ url: URL?, popup: WKWebView? = nil) {
         guard let session, !finishing, let url else { return }
         guard finishHit(url, session: session) else { return }
         if !session.canvas {
@@ -200,13 +202,16 @@ final class ExternalExamController {
         }
         guard finishWork == nil else { return }
         let aid = session.attemptId
+        let source: WKWebView? = popup ?? webView
+        finishFromPopup = popup != nil
         // Give the site a moment to show its own "submitted" confirmation, then check again
         // that the same exam is still on a finish page.
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.finishWork = nil
+            self.finishFromPopup = false
             guard let current = self.session, current.attemptId == aid, !self.finishing,
-                  let live = self.webView?.url, self.finishHit(live, session: current) else { return }
+                  let live = source?.url, self.finishHit(live, session: current) else { return }
             self.finish(reason: "finish_url")
         }
         finishWork = work
@@ -414,6 +419,13 @@ final class ExternalExamController {
         container.addSubview(button, positioned: .above, relativeTo: child)
         popupView = child
         popupClose = button
+        popupObservation = child.observe(\.url, options: [.new]) { [weak self, weak child] wv, _ in
+            let url = wv.url
+            DispatchQueue.main.async {
+                guard let self, let child, self.popupView === child else { return }
+                self.checkFinishURL(url, popup: child)
+            }
+        }
         return child
     }
 
@@ -421,6 +433,11 @@ final class ExternalExamController {
 
     func closePopup(ifView view: WKWebView? = nil) {
         if let view, view !== popupView { return }
+        popupObservation?.invalidate(); popupObservation = nil
+        if finishFromPopup {
+            finishWork?.cancel(); finishWork = nil
+            finishFromPopup = false
+        }
         popupView?.stopLoading()
         popupView?.navigationDelegate = nil
         popupView?.uiDelegate = nil

@@ -179,12 +179,21 @@ describe("finish pattern rules", () => {
     ["a{1,101}", /at most 100/],
     ["a**", /follow another repeat/],
     ["a*+", /Possessive/],
-    ["(?i)a", /plain/],
+    ["a(?i)", /plain/],
+    ["((a))*", /repeated/],
+    ["(?:(?:a)b){2,}", /repeated/],
+    ["(a|b){1}", /repeated/],
     ["[a", /not closed/],
     ["a)", /no matching/],
     ["a\\", /backslash/],
   ])("refuses %s", (p, msg) => {
     expect(validateFinishRegex(p)).toMatch(msg);
+  });
+
+  it("accepts what the server accepts: a leading (?i) and groups that are not repeated", () => {
+    for (const ok of ["(?i)thanks", "(?is)a", "(?:(?:a)b)?c", "(ab){2}", "((a)b)c", "/quizzes/\\d+/(submissions/\\d+|history)"]) {
+      expect(validateFinishRegex(ok)).toBeNull();
+    }
   });
 
   it("limits open-ended repeats to eight", () => {

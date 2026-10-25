@@ -171,7 +171,9 @@ def validate_regex(pattern: str) -> str:
                                  "(?i) flag")
             else:
                 i += 1
-            stack.append({"alt": False, "quant": False})
+            if stack:
+                stack[-1]["nested"] = True
+            stack.append({"alt": False, "quant": False, "nested": False})
             prev, closed = "none", None
             continue
         if c == "|":
@@ -224,10 +226,12 @@ def validate_regex(pattern: str) -> str:
         total += 1
         if hi is None:
             unbounded += 1
-        if prev == "group" and closed is not None and (hi is None or hi > 1) \
-                and (closed["alt"] or closed["quant"]):
-            raise ValueError("finish_url_regex repeats a group that has an | or a repeat inside "
-                             "(catastrophic backtracking)")
+        # The Mac app refuses any group followed by * + or {..} that holds a choice, a repeat or
+        # another group (CanvasFinish.isSafe), so the server refuses the same shapes.
+        if prev == "group" and closed is not None and (hi is None or hi > 1 or c == "{") \
+                and (closed["alt"] or closed["quant"] or closed["nested"]):
+            raise ValueError("finish_url_regex repeats a group that has an |, a repeat or another "
+                             "group inside (catastrophic backtracking)")
         if stack:
             stack[-1]["quant"] = True
         i = end

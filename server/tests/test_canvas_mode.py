@@ -239,6 +239,8 @@ def test_canvas_fields_need_external_mode(app_client):
     r"(?P<id>\d+)/ok", r"(?<id>\d+)/ok", r"a{,5}", r"a{", r"a}", r"\Z", r"\h", r"\p{L}",
     r"[[a-z]&&[^b]]", r"[a--b]", r"(?i:a)", r"x(?i)", r"*a", r"a|*", r"((ab)+c)+", r"(\d{2}){3}",
     r"a{101}", r"a{2}{3}", r"(?(1)a|b)", "\\", r"\k<n>",
+    # the Mac app (CanvasFinish.isSafe) refuses these, so the server must too
+    r"(?:(?:[ab])){2,}", r"[ab](\d(?:\.)\d){2,}\.", r"((/))*", r"(a|b){1}", r"((a)b){2}",
 ])
 def test_regex_rejected(app_client, rx):
     t = login(app_client, "teacher")
@@ -250,7 +252,7 @@ def test_regex_rejected(app_client, rx):
 @pytest.mark.parametrize("rx", [
     r"/quizzes/\d+/(submissions/\d+|history)", r"done|finished", r"^https://x\.edu/[a-z]+$",
     r"(?:ab)+c", r"a+?b", r"[\])]+x", r"(?i)thanks", r"a{2,5}b", r"(https?://)?x\.edu/\d+",
-    r"/quizzes/\d+/submissions/\d+",
+    r"/quizzes/\d+/submissions/\d+", r"(?:(?:a)b)?c", r"(ab){2}", r"((a)b)c",
 ])
 def test_regex_accepted_and_kept(app_client, rx):
     t = login(app_client, "teacher")
