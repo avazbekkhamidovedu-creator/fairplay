@@ -949,7 +949,8 @@ async def canvas_code(aid: str, body: CanvasCodeIn, request: Request,
     msg = ac.canvas_code_message(aid, a.session_id, a.device_id, body.ts)
     if not ac.verify(settings, msg, body.proof):
         await refuse(403, ac.APP_PROOF_DETAIL, "app proof did not match")
-    if abs(int(time.time() * 1000) - body.ts) > cm.PROOF_FRESH_MS:
+    skew = int(time.time() * 1000) - body.ts
+    if skew > cm.PROOF_FRESH_MS or -skew > cm.PROOF_FUTURE_MS:
         await refuse(403, ac.APP_PROOF_DETAIL, "app proof is out of date")
     if not await store.setnx(f"ccr:{aid}:{body.ts}", "1", cm.PROOF_REPLAY_TTL_S):
         await refuse(409, "This request was already used. Try again.", "proof used twice")
@@ -958,16 +959,16 @@ async def canvas_code(aid: str, body: CanvasCodeIn, request: Request,
         await refuse(409, "The access code is not available. Ask your teacher for help.",
                      "no access code stored")
     per_attempt = f"cc:{aid}"
-    if int(await store.get(per_attempt) or 0) >= cm.CODE_REQUESTS_PER_ATTEMPT:
+    if await store.incr(per_attempt, cm.CODE_ATTEMPT_WINDOW_S) > cm.CODE_REQUESTS_PER_ATTEMPT:
         await refuse(429, "Too many requests for the access code. Ask your teacher for help.",
                      "too many requests for this attempt",
                      retry_after=await store.ttl(per_attempt))
     exam_key = f"ccx:{a.exam_id}"
     if await store.incr(exam_key, 60) > await cm.exam_budget(session, store, exam):
+        await store.incrby(per_attempt, -1, cm.CODE_ATTEMPT_WINDOW_S)
         await refuse(429, "Too many requests, wait a moment and try again",
                      "too many requests for this exam", flag=False,
                      retry_after=await store.ttl(exam_key))
-    await store.incr(per_attempt, cm.CODE_ATTEMPT_WINDOW_S)
     await ac.add_event(session, store, aid, a.exam_id, "canvas_code_issued", "")
     return JSONResponse({"code": code, "valid_for_s": cm.CODE_VALID_FOR_S},
                         headers={"Cache-Control": "no-store"})

@@ -137,7 +137,9 @@ def test_create_fills_defaults_and_hides_code(app_client):
     assert e["external_kind"] == "canvas"
     assert e["canvas"] == {"quiz_type": "classic", "access_code_source": "manual",
                            "code_status": "set", "removed_hosts": [],
-                           "remove_code_in_canvas": False}
+                           "remove_code_in_canvas": False, "open_book": False,
+                           "sign_in_hosts": canvas_mode.sso_hosts(),
+                           "scope": {"course_id": "12", "item_kind": "quizzes", "item_id": "34"}}
     assert e["finish_url_regex"] == canvas_mode.DEFAULT_FINISH["classic"]
     assert "canvas.test" in e["allowed_domains"]
     assert "login.microsoftonline.com" in e["allowed_domains"]
@@ -158,11 +160,27 @@ def test_quiz_type_from_url_and_new_domains(app_client):
     assert not any("quiz-lti" in d for d in a["allowed_domains"])
 
 
-def test_unknown_link_needs_quiz_type(app_client):
+@pytest.mark.parametrize("path", ["/somewhere", "/courses/12", "/courses/12/quizzes",
+                                  "/courses/12/pages/3", "/courses/12/quizzes/34x"])
+def test_link_without_one_quiz_is_refused(app_client, path):
     t = login(app_client, "teacher")
-    b = body(url=f"{CANVAS}/somewhere", canvas={"access_code_source": "manual"})
-    assert app_client.post("/api/exams", json=b, headers=t).status_code == 422
-    b["canvas"]["quiz_type"] = "new"
+    for quiz_type in (None, "new"):
+        canvas = {"access_code_source": "manual"}
+        if quiz_type:
+            canvas["quiz_type"] = quiz_type
+        b = body(url=f"{CANVAS}{path}", canvas=canvas)
+        r = app_client.post("/api/exams", json=b, headers=t)
+        assert r.status_code == 422 and "must open one quiz or assignment" in r.text
+    e = create(app_client, t, body(canvas={"access_code_source": "manual"}))
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(url=f"{CANVAS}{path}"), headers=t)
+    assert r.status_code == 422 and "must open one quiz or assignment" in r.text
+    assert teacher_view(app_client, t, e)["external_url"] == QUIZ
+
+
+def test_plain_website_exam_may_have_any_link(app_client):
+    t = login(app_client, "teacher")
+    b = {"title": "Site", "duration_min": 30, "mode": "external",
+         "external_url": f"{CANVAS}/somewhere", "questions": []}
     assert app_client.post("/api/exams", json=b, headers=t).status_code == 201
 
 
@@ -238,6 +256,8 @@ def test_canvas_fields_need_external_mode(app_client):
     r"(a{1,1000}){1,1000}", "x+" * 60, ".*" * 30, "a?" * 20 + "a" * 20, r"(?:a|b){2,5}",
     r"(?P<id>\d+)/ok", r"(?<id>\d+)/ok", r"a{,5}", r"a{", r"a}", r"\Z", r"\h", r"\p{L}",
     r"[[a-z]&&[^b]]", r"[a--b]", r"(?i:a)", r"x(?i)", r"*a", r"a|*", r"((ab)+c)+", r"(\d{2}){3}",
+    ".*.*.*.*.*.*.*.*x", r".*.*x", r"\w+\w+", r".+.*", r"a+a+", r"x+X+", r"\d+\d*x", r"(.*).*x",
+    r"[ab]+[bc]*", r"\D+\w+", r".*x.*y.*", r"\d+\.\d+/\d+",
     r"a{101}", r"a{2}{3}", r"(?(1)a|b)", "\\", r"\k<n>",
     # the Mac app (CanvasFinish.isSafe) refuses these, so the server must too
     r"(?:(?:[ab])){2,}", r"[ab](\d(?:\.)\d){2,}\.", r"((/))*", r"(a|b){1}", r"((a)b){2}",
@@ -253,6 +273,7 @@ def test_regex_rejected(app_client, rx):
     r"/quizzes/\d+/(submissions/\d+|history)", r"done|finished", r"^https://x\.edu/[a-z]+$",
     r"(?:ab)+c", r"a+?b", r"[\])]+x", r"(?i)thanks", r"a{2,5}b", r"(https?://)?x\.edu/\d+",
     r"/quizzes/\d+/submissions/\d+", r"(?:(?:a)b)?c", r"(ab){2}", r"((a)b)c",
+    r"a+b+", r"\d+\s+", r".*x.*", r"a+\d*", r"\w+\s*done",
 ])
 def test_regex_accepted_and_kept(app_client, rx):
     t = login(app_client, "teacher")
@@ -376,7 +397,9 @@ def test_new_quiz_managed_falls_back_to_manual(app_client, fake):
     e = create(app_client, t, body(url=NEW_QUIZ, canvas={"access_code_source": "managed"}))
     assert e["canvas"] == {"quiz_type": "new", "access_code_source": "manual",
                            "code_status": "not_set", "removed_hosts": [],
-                           "remove_code_in_canvas": False}
+                           "remove_code_in_canvas": False, "open_book": False,
+                           "sign_in_hosts": canvas_mode.sso_hosts(),
+                           "scope": {"course_id": "12", "item_kind": "assignments", "item_id": "56"}}
     assert "Set the code in Canvas" in e["canvas_notice"] and "No access code" in e["canvas_notice"]
     r = open_(app_client, t, e)
     assert r.status_code == 409 and r.json()["detail"]["code"] == "canvas_code_failed"
@@ -408,7 +431,10 @@ def test_student_views_never_carry_code(app_client, manual_live):
     t, e = manual_live
     h, a, hs = student_start(app_client, e)
     assert a["external_kind"] == "canvas"
-    assert a["canvas"] == {"quiz_type": "classic", "access_code_source": "manual"}
+    assert a["canvas"] == {"quiz_type": "classic", "access_code_source": "manual", "open_book": False,
+                           "scope": {"course_id": "12", "item_kind": "quizzes", "item_id": "34"}}
+    assert a["canvas_scope"] == {"course_id": "12", "item_kind": "quizzes", "item_id": "34",
+                                 "open_book": False}
     assert a["finish_url_regex"] == canvas_mode.DEFAULT_FINISH["classic"]
     code_req(app_client, hs, a)
     surfaces = [
@@ -564,7 +590,7 @@ def test_old_database_gets_new_columns(tmp_path, static_dir):
         pass
     con = sqlite3.connect(db)
     for col in ("finish_url_regex", "external_kind", "canvas_quiz_type", "canvas_code_source",
-                "canvas_code_enc", "canvas_code_failed"):
+                "canvas_code_enc", "canvas_code_failed", "canvas_open_book"):
         con.execute(f"ALTER TABLE exams DROP COLUMN {col}")
     con.commit()
     con.close()
@@ -984,3 +1010,214 @@ def test_managed_code_not_in_logs_or_output(app_client, fake, caplog, capfd):
     out = capfd.readouterr()
     assert code not in caplog.text and code not in out.out and code not in out.err
     assert code not in json.dumps(events(app_client, t, e))
+
+
+# ---------------------------------------------------------------- restricted browser scope
+@pytest.mark.parametrize("path,scope", [
+    ("/courses/12/quizzes/34", ("12", "quizzes", "34")),
+    ("/courses/12/quizzes/34/take", ("12", "quizzes", "34")),
+    ("/courses/12/quizzes/34/", ("12", "quizzes", "34")),
+    ("/courses/12/assignments/56", ("12", "assignments", "56")),
+    ("/courses/12/quizzes/34?x=1#top", ("12", "quizzes", "34")),
+    ("/courses/12/quizzes/34x", None),
+    ("/courses/12/quizzes/", None),
+    ("/courses/12", None),
+    ("/courses/ab/quizzes/34", None),
+    ("/courses/12/pages/34", None),
+    ("/courses/12/quizzes/34/edit", ("12", "quizzes", "34")),
+    ("/courses/12/assignments/9/submissions/3", ("12", "assignments", "9")),
+    ("/courses/12/quizzes/34;x=1", None),
+    ("/courses/12/quizzes/34/%2e%2e/x", None),
+    ("/courses/12/../12/quizzes/34", None),
+    ("/courses/12/quizzes/34\\x", None),
+    ("/courses/12/quizzes/34 x", None),
+    ("/courses/" + "1" * 21 + "/quizzes/34", None),
+    ("/courses/12/quizzes/" + "9" * 21, None),
+    ("/courses/12/quizzes/" + "9" * 20, ("12", "quizzes", "9" * 20)),
+    ("/courses/\u0661\u0662/quizzes/34", None),
+    ("/Courses/12/quizzes/34", None),
+])
+def test_scope_of_link(path, scope):
+    got = canvas_mode.scope_of(CANVAS + path)
+    if scope is None:
+        assert got is None
+    else:
+        assert got == {"course_id": scope[0], "item_kind": scope[1], "item_id": scope[2]}
+
+
+def test_saved_exam_without_scope_still_reads_and_runs(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual", "access_code": MANUAL_CODE}))
+    assert e["canvas"]["open_book"] is False
+    db_exec(app_client, "UPDATE exams SET external_url = ? WHERE id = ?", f"{CANVAS}/somewhere", e["id"])
+    v = teacher_view(app_client, t, e)
+    assert v["canvas"]["scope"] is None and v["canvas"]["open_book"] is False
+    h, a, hs = student_start(app_client, open_(app_client, t, e).json())
+    assert a["canvas_scope"] is None and a["canvas"]["scope"] is None
+
+
+def test_scope_follows_link_on_every_save_and_client_cannot_set_it(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual",
+                                           "scope": {"course_id": "999", "item_kind": "quizzes",
+                                                     "item_id": "999"}}))
+    assert e["canvas"]["scope"] == {"course_id": "12", "item_kind": "quizzes", "item_id": "34"}
+    other = f"{CANVAS}/courses/77/quizzes/88"
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(url=other), headers=t)
+    assert r.status_code == 200, r.text
+    assert r.json()["canvas"]["scope"] == {"course_id": "77", "item_kind": "quizzes", "item_id": "88"}
+    assert teacher_view(app_client, t, e)["canvas"]["scope"]["course_id"] == "77"
+
+
+def test_open_book_write_and_keep(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual", "open_book": True}))
+    assert e["canvas"]["open_book"] is True
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(title="Again"), headers=t)
+    assert r.json()["canvas"]["open_book"] is True
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(canvas={"quiz_type": "classic"}), headers=t)
+    assert r.json()["canvas"]["open_book"] is True
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(canvas={"open_book": False}), headers=t)
+    assert r.json()["canvas"]["open_book"] is False
+    assert teacher_view(app_client, t, e)["canvas"]["open_book"] is False
+    listed = [x for x in app_client.get("/api/exams", headers=t).json() if x["id"] == e["id"]][0]
+    assert listed["canvas"]["open_book"] is False
+
+
+def test_open_book_reset_when_leaving_canvas(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual", "open_book": True}))
+    plain = {**body(), "external_kind": None}
+    plain.pop("canvas", None)
+    r = app_client.put(f"/api/exams/{e['id']}", json=plain, headers=t)
+    assert r.status_code == 200 and r.json()["canvas"] is None
+    back = app_client.put(f"/api/exams/{e['id']}", json=body(canvas={"access_code_source": "manual"}),
+                          headers=t)
+    assert back.json()["canvas"]["open_book"] is False
+
+
+def test_student_views_carry_scope_and_open_book(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual", "access_code": MANUAL_CODE,
+                                           "open_book": True}))
+    live = open_(app_client, t, e).json()
+    h, a, hs = student_start(app_client, live)
+    assert a["canvas_scope"] == {"course_id": "12", "item_kind": "quizzes", "item_id": "34",
+                                 "open_book": True}
+    got = app_client.get(f"/api/student/attempts/{a['attempt_id']}", headers=hs).json()
+    assert got["canvas_scope"] == a["canvas_scope"]
+    assert got["canvas"]["open_book"] is True and got["canvas"]["scope"]["item_id"] == "34"
+
+
+def test_hydrate_then_save_unchanged_keeps_open_book_and_scope(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual", "access_code": MANUAL_CODE,
+                                           "open_book": True}))
+    got = teacher_view(app_client, t, e)
+    again = {**body(canvas=got["canvas"]), "allowed_domains": got["allowed_domains"]}
+    r = app_client.put(f"/api/exams/{e['id']}", json=again, headers=t)
+    assert r.status_code == 200, r.text
+    assert r.json()["canvas"]["open_book"] is True
+    assert r.json()["canvas"]["scope"] == {"course_id": "12", "item_kind": "quizzes", "item_id": "34"}
+
+
+def test_put_without_canvas_block_keeps_scope_and_open_book(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(canvas={"access_code_source": "manual", "open_book": True}))
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(title="Renamed"), headers=t)
+    assert r.status_code == 200, r.text
+    assert r.json()["canvas"]["scope"] == {"course_id": "12", "item_kind": "quizzes", "item_id": "34"}
+    assert r.json()["canvas"]["open_book"] is True
+
+
+def test_plain_external_attempt_has_no_canvas_scope(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, {"title": "Site", "duration_min": 30, "mode": "external",
+                               "external_url": "https://example.com/exam", "questions": []})
+    live = open_(app_client, t, e).json()
+    h = login(app_client, "alice")
+    r = app_client.post(f"/api/student/exams/{e['id']}/start", headers=h,
+                        json={"start_code": live["start_code"], "client": proof(app_client, h, e["id"], DEV_A)})
+    assert r.status_code == 200, r.text
+    assert "canvas_scope" not in r.json()
+    assert "canvas_scope" not in app_client.get(f"/api/student/attempts/{r.json()['attempt_id']}", headers=h).json()
+
+
+# ---------------------------------------------------------------- hardening round
+def test_regex_rule_is_fast_on_pathological_patterns():
+    started = time.monotonic()
+    for rx in (".*" * 150, r"\w+" * 100, "(" * 150):
+        with pytest.raises(ValueError):
+            canvas_mode.validate_regex(rx)
+    assert time.monotonic() - started < 1
+
+
+@pytest.mark.parametrize("url", [
+    f"{CANVAS}/courses/12/quizzes/34\\x", f"{CANVAS}/courses/12/quizzes/34 x",
+    f"{CANVAS}/courses/12/quizzes/34%2e", f"{CANVAS}/courses/12/quizzes/34;x=1",
+    f"{CANVAS}/courses/12/../12/quizzes/34", 
+    "https://teacher@canvas.test/courses/12/quizzes/34", "https://canvas.test./courses/12/quizzes/34",
+    "https://canvas.test:443./courses/12/quizzes/34",
+    f"{CANVAS}/courses/12/quizzes/34?a=%41",
+])
+def test_unclean_canvas_link_refused(app_client, url):
+    t = login(app_client, "teacher")
+    r = app_client.post("/api/exams", json=body(url=url, canvas={"access_code_source": "manual"}),
+                        headers=t)
+    assert r.status_code == 422, url
+    e = create(app_client, t, body(canvas={"access_code_source": "manual"}))
+    r = app_client.put(f"/api/exams/{e['id']}", json=body(url=url), headers=t)
+    assert r.status_code == 422, url
+
+
+def test_clean_links_with_query_and_fragment_accepted(app_client):
+    t = login(app_client, "teacher")
+    e = create(app_client, t, body(url=f"{CANVAS}/courses/12/quizzes/34?module_item_id=5#top",
+                                   canvas={"access_code_source": "manual"}))
+    assert e["canvas"]["scope"]["item_id"] == "34"
+
+
+def test_quiz_ids_ascii_digits_only():
+    arabic = "\u0661\u0662"
+    assert canvas_mode.quiz_ids(f"{CANVAS}/courses/{arabic}/quizzes/34") is None
+    assert canvas_mode.quiz_ids(f"{CANVAS}/courses/12/quizzes/{arabic}") is None
+    assert canvas_mode.infer_quiz_type(f"{CANVAS}/courses/{arabic}/quizzes/34") is None
+    assert canvas_mode.infer_quiz_type(f"{CANVAS}/courses/12/assignments/{arabic}") is None
+    assert canvas_mode.quiz_ids(QUIZ) == ("12", "34")
+
+
+def test_replay_window_covers_the_whole_freshness_window():
+    assert canvas_mode.PROOF_REPLAY_TTL_S >= 2 * canvas_mode.PROOF_FRESH_MS / 1000 + 5
+
+
+def test_future_timestamp_refused(app_client, manual_live):
+    t, e = manual_live
+    h, a, hs = student_start(app_client, e)
+    now = int(time.time() * 1000)
+    far = code_req(app_client, hs, a, ts=now + 120_000)
+    assert far.status_code == 403 and far.json()["detail"] == APP_PROOF_DETAIL
+    near = code_req(app_client, hs, a, ts=now + 10_000)
+    assert near.status_code == 200 and near.json()["code"] == MANUAL_CODE
+
+
+def test_attempt_limit_holds_under_parallel_requests(app_client, manual_live):
+    from concurrent.futures import ThreadPoolExecutor
+    t, e = manual_live
+    h, a, hs = student_start(app_client, e)
+    stamps = [fresh_ts() for _ in range(canvas_mode.CODE_REQUESTS_PER_ATTEMPT * 2)]
+    with ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda ts: code_req(app_client, hs, a, ts=ts).status_code, stamps))
+    assert codes.count(200) == canvas_mode.CODE_REQUESTS_PER_ATTEMPT
+    assert codes.count(429) == len(stamps) - canvas_mode.CODE_REQUESTS_PER_ATTEMPT
+
+
+def test_exam_busy_refusal_does_not_use_up_attempt_requests(app_client, manual_live, monkeypatch):
+    t, e = manual_live
+    h, a, hs = student_start(app_client, e)
+    monkeypatch.setattr(canvas_mode, "CODE_REQUESTS_PER_EXAM_PER_MIN", 1)
+    monkeypatch.setattr(canvas_mode, "CODE_REQUESTS_PER_STUDENT_FACTOR", 0)
+    assert code_req(app_client, hs, a).status_code == 200
+    for _ in range(canvas_mode.CODE_REQUESTS_PER_ATTEMPT + 2):
+        assert code_req(app_client, hs, a).status_code == 429
+    from app.store import get_store
+    assert asyncio.run(get_store().get(f"cc:{a['attempt_id']}")) == "1"

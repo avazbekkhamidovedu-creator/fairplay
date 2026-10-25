@@ -1,6 +1,7 @@
 # Canvas mode end-to-end results (2026-10-25)
 
-Last full run: 156 checks, 156 passed, 0 failed (`xvfb-run -a python3 e2e/canvas-mode/run_all.py`).
+Last full run (2026-10-26, includes the restricted browser sections below): 610 checks, 610 passed, 0 failed.
+Earlier run before the restricted browser sections: 156 checks, 156 passed, 0 failed (`xvfb-run -a python3 e2e/canvas-mode/run_all.py`).
 Server suites after the fixes below: pytest 904 passed; vitest 725 passed (69 files); `tsc` (both configs) clean.
 
 ## What runs
@@ -32,6 +33,23 @@ Observed, not asserted: a sign-in popup served with `Cross-Origin-Opener-Policy:
 | 5c Close: code cleared in the fake Canvas, stored code gone, reopen rotates to a new code | 7 / 0 |
 | 5d Leak scan (server log, teacher results/events, student views) for every code seen | 3 / 0 |
 | 6 Regression: plain website exam (no canvas fields, no Canvas call, non-mac start ok, code endpoint 409, external-done hand-in) | 8 / 0 |
+
+## Restricted Canvas browser (addendum of 2026-10-26)
+
+Sections 7a-7c and 8a-8i. Swift read at: CanvasMode.swift 7d87dc9a9f24, ExternalExamController.swift b87e183b07cf (sha256 prefixes).
+
+- `canvas_nav.py`: Python port of `CanvasNavigation` (phases, percent-encoded segment matching, refusals of `%2f %5c %2e %00` and backslash, `.`/`..`/empty segments, case-exact, always-blocked roots, other course, open-book roots, download segments and `download` / `download_frd` query names, login allowed in both phases, `entersQuiz`, `isLanding`, `isSignIn`, `fillOrigin` with scope).
+- 7a: every table in `CanvasModeTests.swift` is parsed at run time and replayed against the port (497 expectations). 7b: 7759 generated paths x 8 modes against an independent regex oracle written from the contract (62072 decisions). 7c: 95 hand-written look-alike paths in lobby / quiz / quiz + open book, 32 look-alike hosts / schemes / ports / userinfo, popup plans. Mutations checked: encoded slashes allowed, item id prefix match, fill gate ignoring the scope (all caught); dropping `inbox` from the always-blocked list is not caught because the lobby / quiz allow-list already refuses it.
+- 8a: open-book and scope through the real teacher UI and API (create, PUT omitted keeps, toggle, scope follows the link, client-sent scope ignored, odd / unclean links refused 422, student view and `openExternal` payload carry `canvas_scope`).
+- 8b-8h: the full student journey in Chromium (CDP `Fetch` pauses every Document request and redirect hop, `Page.frameNavigated` for commit) and in WebKit (`wkhost.py`, WebKitGTK with a real `decide-policy` delegate that holds each decision): sign-in through a fake `go.` host and a fake SAML host, landing on the dashboard, one auto-open of the exam link, other course and Inbox blocked, quiz list ok, second quiz with its own code form never gets the code (item-exact gate and in-script path check), phase flips at `/take`, other pages blocked, open book on allows files / pages / modules and off blocks them, downloads blocked, `pushState` and `replaceState` to `/conversations` detected and recovered, Back and "Go to my quiz", finish detected. 8h repeats it for an assignment link, 8i checks the scope-less link is refused.
+- Run only this part: `CANVAS_E2E_ONLY=restricted`. Extra needs: `/etc/hosts` line `127.0.0.1 canvas.fake.test sso.fake.test other.fake.test go.fake.test saml.fake.test` (check `config.py` for the exact names), and `/usr/bin/python3.12` with `gir1.2-webkit2-4.1` for `wkhost.py`. Run the driver with the system python (Playwright); the server venv is `CANVAS_E2E_SERVER_PY`.
+
+Findings in Swift (not edited):
+- Warm SSO (session already valid, so no sign-in page is ever shown) leaves `signInSeen` false, so the exam link is never auto-opened (ExternalExamController.swift lines 103, 195, 482, 543). Suggested fix: also set `signInSeen` when the first committed page after start is a landing page that is not the start URL.
+
+Bugs fixed in server / web in this part: none needed (the odd-link handling was changed by the main session during the run; expectations follow it).
+
+Not covered in this part: real WKWebView delegate behaviour (WebKitGTK stands in; `decidePolicyFor` ordering for form posts, `WKNavigationAction` for `window.open`, `didCommit` timing may differ), the Swift code itself (the port is a reading of it), real Canvas markup / SPA routing, New Quizzes on the quiz-lti host, iPad and Windows.
 
 ## Bugs found and fixed (server and web)
 

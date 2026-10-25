@@ -1,7 +1,7 @@
 // Native bridge to the FairPlay Mac app (CONTRACT.md "Native bridge").
 // In a normal browser every call is a no-op and isNative() is false.
 
-import type { IntegrityEvent } from "../api/types";
+import type { CanvasScopeView, IntegrityEvent } from "../api/types";
 
 /** What the app's "state" message says. app_version / platform (S2) and sealed_pending
  *  (S5) are missing from older app builds. */
@@ -88,6 +88,8 @@ export interface OpenExternalParams {
   /** Canvas mode: "canvas" makes the app fill the access code itself. */
   kind?: "canvas";
   finish_url_regex?: string | null;
+  /** Canvas mode: the course and item the student may reach in Canvas. */
+  canvas_scope?: CanvasScopeView | null;
   deadline_at: string;
   server_time: string;
   title: string;
@@ -367,6 +369,7 @@ export function openExternal(params: OpenExternalParams): boolean {
     allowed_domains: [...params.allowed_domains],
     finish_url_contains: params.finish_url_contains ?? null,
     ...(params.kind === "canvas" ? { kind: "canvas" as const, finish_url_regex: params.finish_url_regex ?? null } : {}),
+    ...(params.kind === "canvas" && params.canvas_scope ? { canvas_scope: { ...params.canvas_scope } } : {}),
     deadline_at: params.deadline_at,
     server_time: params.server_time,
     title: params.title,

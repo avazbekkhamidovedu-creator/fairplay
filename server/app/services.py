@@ -233,6 +233,13 @@ def student_tools(exam: dict) -> dict:
             "allowed_sites": allowed_sites(websites)}
 
 
+def canvas_scope_of(canvas: dict | None) -> dict | None:
+    scope = (canvas or {}).get("scope")
+    if not scope:
+        return None
+    return {**scope, "open_book": bool((canvas or {}).get("open_book"))}
+
+
 def lock_settings(e: Exam) -> dict:
     """S3 / S6 exam settings (teacher view and the student-side exam cache)."""
     return {"resume_needs_approval": e.resume_needs_approval is not False,
@@ -458,6 +465,8 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "tools": student_tools(exam),
         **({"finish_url_regex": exam.get("finish_url_regex"), "external_kind": exam.get("external_kind"),
             "canvas": exam.get("canvas")} if external else {}),
+        **({"canvas_scope": canvas_scope_of(exam.get("canvas"))}
+           if external and exam.get("external_kind") == "canvas" else {}),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
         "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)
         # integrations: "fairplay" or the external system's id (+ its display name)

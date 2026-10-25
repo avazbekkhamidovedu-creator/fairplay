@@ -14,6 +14,8 @@ import {
   validateExternalSettings,
   validateFinishRegex,
   isAutoCanvasHost,
+  canvasLinkKind,
+  CANVAS_NO_SCOPE_HINT,
   type ExternalSettingsValue,
 } from "../components/teacher/externalValidation";
 import { errorText, eventLabel } from "../components/teacher/util";
@@ -63,7 +65,7 @@ describe("canvas helpers", () => {
   });
 
   it("builds the request with a write-only code only for manual", () => {
-    expect(externalExamInput(canvasValue()).canvas).toEqual({ quiz_type: "classic", access_code_source: "managed" });
+    expect(externalExamInput(canvasValue()).canvas).toEqual({ quiz_type: "classic", access_code_source: "managed", open_book: false, removed_hosts: [] });
     const manual = externalExamInput(canvasValue({ canvas_code_source: "manual", canvas_access_code: " abc123 " }));
     expect(manual).toMatchObject({
       external_kind: "canvas",
@@ -136,7 +138,7 @@ describe("Canvas settings form", () => {
     expect(screen.getByTestId("canvas-new-warning")).toHaveTextContent(/cannot be set up automatically/);
     expect(screen.getByLabelText(/FairPlay sets and changes it/)).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Canvas access code"), { target: { value: "secret99" } });
-    expect(out().canvas).toEqual({ quiz_type: "new", access_code_source: "manual", access_code: "secret99" });
+    expect(out().canvas).toEqual({ quiz_type: "new", access_code_source: "manual", access_code: "secret99", open_book: false, removed_hosts: [] });
   });
 
   it("types the code in a hidden field and sends an override pattern", () => {
@@ -196,16 +198,157 @@ describe("finish pattern rules", () => {
     }
   });
 
-  it("limits open-ended repeats to eight", () => {
-    expect(validateFinishRegex("a*b*c*d*e*f*g*h*")).toBeNull();
-    expect(validateFinishRegex("a*b*c*d*e*f*g*h*i*")).toMatch(/at most 8/);
-    expect(validateFinishRegex("a+b+c+d+e+f+g+h{2,}i{3,}")).toMatch(/at most 8/);
+  it("limits open-ended repeats to two", () => {
+    expect(validateFinishRegex("a*b*")).toBeNull();
+    expect(validateFinishRegex("a*b*c*")).toMatch(/at most 2/);
+    expect(validateFinishRegex(".*".repeat(8) + "x")).not.toBeNull();
+    expect(validateFinishRegex("a+x{2,}y{3,}")).toMatch(/at most 2/);
+  });
+
+  it("refuses neighbouring repeats that can match the same characters", () => {
+    for (const bad of [".*.*x", "\\w+\\w+", ".+.*", "a+a+", "x+X+", "(.*).*x", "\\d+\\d*x", "[ab]+[bc]*", "\\D+\\w+"])
+      expect(validateFinishRegex(bad), bad).toMatch(/Two repeats in a row/);
+    for (const ok of ["a+b+", "\\d+\\s+", ".*x.*", "a+\\d*", "\\w+\\s*done", "\\d+\\.\\d+"])
+      expect(validateFinishRegex(ok), ok).toBeNull();
   });
 
   it("does not use the JS engine to decide", () => {
     expect(validateFinishRegex("(?<n>a)")).not.toBeNull();
     expect(validateFinishRegex("a{,3}")).not.toBeNull();
     expect(validateFinishRegex("[[:alpha:]]+")).toBeNull();
+  });
+});
+
+describe("Canvas open book", () => {
+  it("is off by default, has a name, and lists what students can open", () => {
+    render(<Harness initial={canvasValue()} linked />);
+    const box = screen.getByRole("checkbox", { name: /Open book: students may also open this course's pages, modules and files/ });
+    expect(box).not.toBeChecked();
+    expect(screen.getByTestId("canvas-access-line")).toHaveTextContent(
+      "Students can sign in to Canvas and open the dashboard, the course home and the quiz and assignment lists, then this quiz. Once it starts they can only open that quiz.",
+    );
+    expect(out()).toMatchObject({ canvas: { open_book: false } });
+  });
+
+  it("adds the open-book items and sends open_book when ticked", () => {
+    render(<Harness initial={canvasValue()} linked />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Open book/ }));
+    expect(screen.getByTestId("canvas-access-line")).toHaveTextContent(/only open that quiz, plus this course's pages, modules and files \(view only; downloads stay blocked\)\./);
+    expect(out()).toMatchObject({ canvas: { open_book: true } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Open book/ }));
+    expect(out()).toMatchObject({ canvas: { open_book: false } });
+  });
+
+  it("reads the saved choice and does not show the box for other websites", () => {
+    const v = externalSettingsFrom({
+      mode: "external",
+      external_url: CLASSIC,
+      external_kind: "canvas",
+      canvas: { quiz_type: "classic", access_code_source: "manual", open_book: true },
+    });
+    expect(v.canvas_open_book).toBe(true);
+    expect(externalExamInput(v).canvas).toMatchObject({ open_book: true });
+    render(<Harness initial={v} linked />);
+    expect(screen.getByRole("checkbox", { name: /Open book/ })).toBeChecked();
+    expect(out()).toMatchObject({ canvas: { open_book: true } });
+    expect(externalSettingsFrom({ mode: "external", external_url: CLASSIC, external_kind: "canvas" }).canvas_open_book).toBe(false);
+  });
+
+  it("says assignment for an assignment link", () => {
+    render(<Harness initial={canvasValue({ external_url: "https://canvas.dku.edu/courses/12/assignments/9" })} linked />);
+    expect(screen.getByTestId("canvas-access-line")).toHaveTextContent(/then this assignment\. Once it starts they can only open that assignment\./);
+  });
+
+  it("shows the link hint and hides open book when the link has no quiz", () => {
+    render(<Harness initial={canvasValue({ external_url: "https://canvas.dku.edu/courses/12" })} linked />);
+    expect(screen.getByTestId("canvas-no-scope")).toHaveTextContent(CANVAS_NO_SCOPE_HINT);
+    expect(screen.queryByRole("checkbox", { name: /Open book/ })).toBeNull();
+    expect(screen.queryByTestId("canvas-access-line")).toBeNull();
+    expect(validateExternalSettings(canvasValue({ external_url: "https://canvas.dku.edu/courses/12" })).external_url).toBe(CANVAS_NO_SCOPE_HINT);
+    expect(validateExternalSettings(canvasValue({ external_url: "https://canvas.dku.edu/courses/12/quizzes/3/edit" })).external_url).toBeUndefined();
+  });
+
+  it("reads the link kind like the server", () => {
+    expect(canvasLinkKind("https://c.test/courses/1/quizzes/2/take")).toBe("quizzes");
+    expect(canvasLinkKind("https://c.test/courses/1/assignments/2;x=1")).toBe("assignments");
+    expect(canvasLinkKind("https://c.test/courses/1/quizzes/2x")).toBeNull();
+    expect(canvasLinkKind("https://c.test/courses/1")).toBeNull();
+    expect(canvasLinkKind("nope")).toBeNull();
+  });
+
+  it("always sends removed_hosts, even when the last host is added back", () => {
+    render(<Harness initial={canvasValue({ canvas_removed_hosts: ["login.microsoft.com"] })} linked />);
+    expect((out().canvas as { removed_hosts: string[] }).removed_hosts).toEqual(["login.microsoft.com"]);
+    fireEvent.click(screen.getByRole("button", { name: "Add login.microsoft.com back" }));
+    expect((out().canvas as { removed_hosts: string[] }).removed_hosts).toEqual([]);
+  });
+
+  it("loads the removed hosts of a saved exam so they show as removed", () => {
+    const v = externalSettingsFrom({
+      mode: "external",
+      external_url: CLASSIC,
+      external_kind: "canvas",
+      allowed_domains: ["canvas.dku.edu", "login.microsoftonline.com"],
+      canvas: { quiz_type: "classic", access_code_source: "manual", removed_hosts: ["login.microsoft.com"] },
+    });
+    expect(v.canvas_removed_hosts).toEqual(["login.microsoft.com"]);
+    render(<Harness initial={v} linked />);
+    expect(screen.getByRole("button", { name: "Add login.microsoft.com back" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove login.microsoft.com" })).toBeNull();
+    expect((out().canvas as { removed_hosts: string[] }).removed_hosts).toEqual(["login.microsoft.com"]);
+  });
+
+  it("uses the sign-in sites the server reports", () => {
+    const v = externalSettingsFrom({
+      mode: "external",
+      external_url: CLASSIC,
+      external_kind: "canvas",
+      allowed_domains: ["canvas.dku.edu", "sso.school.edu"],
+      canvas: { quiz_type: "classic", access_code_source: "manual", sign_in_hosts: ["sso.school.edu"] },
+    });
+    expect(v.allowed_domains).toEqual([]);
+    render(<Harness initial={v} linked />);
+    expect(screen.getByRole("button", { name: "Remove sso.school.edu" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove login.microsoft.com" })).toBeNull();
+  });
+
+  it("forces a typed code for assignments too", () => {
+    const link = "https://canvas.dku.edu/courses/12/assignments/9";
+    expect(effectiveCodeSource(canvasValue({ external_url: link, canvas_quiz_type: "assignment" }))).toBe("manual");
+    expect(effectiveCodeSource(canvasValue({ external_url: link, canvas_quiz_type: "assignment", canvas_code_source: "managed" }))).toBe("manual");
+    expect(effectiveCodeSource(canvasValue())).toBe("managed");
+    expect(validateExternalSettings(canvasValue({ external_url: link, canvas_quiz_type: "assignment" })).canvas_access_code).toMatch(/Type the access code/);
+    render(<Harness initial={canvasValue({ external_url: link, canvas_quiz_type: "assignment" })} linked />);
+    expect(screen.getByLabelText(/FairPlay sets and changes it/)).toBeDisabled();
+    expect(screen.getByLabelText("Canvas access code")).toBeInTheDocument();
+  });
+
+  it("refuses control characters in the typed code", () => {
+    const v = canvasValue({ canvas_code_source: "manual", canvas_access_code: "ab\u0007cd" });
+    expect(validateExternalSettings(v).canvas_access_code).toMatch(/letters, numbers/);
+    expect(validateExternalSettings({ ...v, canvas_access_code: "abc d" }).canvas_access_code).toBeUndefined();
+  });
+
+  it("is absent from a plain website exam", () => {
+    render(<Harness initial={canvasValue({ external_kind: null })} />);
+    expect(screen.queryByRole("checkbox", { name: /Open book/ })).toBeNull();
+    expect("canvas" in out()).toBe(false);
+  });
+
+  it("shows the access line in the teacher exam view", () => {
+    const base = { id: "e1", mode: "external", external_kind: "canvas" } as unknown as Exam;
+    const canvas = { quiz_type: "classic" as const, access_code_source: "manual" as const, code_status: "set" as const };
+    const SCOPE = { course_id: "1", item_kind: "quizzes" as const, item_id: "2" };
+    const { rerender } = render(<CanvasExamInfo exam={{ ...base, canvas: { ...canvas, scope: SCOPE } }} />);
+    expect(screen.getByTestId("canvas-access-line")).toHaveTextContent(
+      "Students can sign in to Canvas and open the dashboard, the course home and the quiz and assignment lists, then this quiz. Once it starts they can only open that quiz.",
+    );
+    rerender(<CanvasExamInfo exam={{ ...base, canvas: { ...canvas, scope: { course_id: "1", item_kind: "assignments", item_id: "2" } } }} />);
+    expect(screen.getByTestId("canvas-access-line")).toHaveTextContent(/then this assignment/);
+    rerender(<CanvasExamInfo exam={{ ...base, canvas: { ...canvas, scope: null } }} />);
+    expect(screen.queryByTestId("canvas-access-line")).toBeNull();
+    rerender(<CanvasExamInfo exam={{ ...base, canvas: { ...canvas, open_book: true, scope: SCOPE } }} />);
+    expect(screen.getByTestId("canvas-access-line")).toHaveTextContent(/plus this course's pages, modules and files/);
   });
 });
 
@@ -221,7 +364,7 @@ describe("Canvas form details", () => {
   it("shows and hides the code, turns autocomplete off and keeps the value as typed", () => {
     render(<Harness initial={canvasValue({ canvas_code_source: "manual" })} linked />);
     const input = screen.getByLabelText("Canvas access code");
-    expect(input).toHaveAttribute("autocomplete", "off");
+    expect(input).toHaveAttribute("autocomplete", "new-password");
     fireEvent.change(input, { target: { value: " ab cd " } });
     expect(screen.getByTestId("canvas-code-space-warning")).toHaveTextContent(/exactly as you entered/);
     expect((out().canvas as { access_code: string }).access_code).toBe(" ab cd ");
@@ -268,7 +411,8 @@ describe("Canvas form details", () => {
     expect((out().canvas as { removed_hosts: string[] }).removed_hosts).toEqual(["login.microsoftonline.com"]);
     fireEvent.click(screen.getByRole("button", { name: "Add login.microsoftonline.com back" }));
     expect(chips).toHaveTextContent("login.microsoftonline.com");
-    expect("removed_hosts" in (out().canvas as object)).toBe(false);
+    expect((out().canvas as { removed_hosts: string[] }).removed_hosts).toEqual([]);
+    expect(chips).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Remove extra.example.org" }));
     expect(out().allowed_domains).toEqual([]);
   });
@@ -366,6 +510,21 @@ describe("bridge openExternal for Canvas", () => {
     const plain = post.mock.calls[post.mock.calls.length - 1]![0] as Record<string, unknown>;
     expect("kind" in plain).toBe(false);
     expect("finish_url_regex" in plain).toBe(false);
+    expect("canvas_scope" in plain).toBe(false);
+  });
+
+  it("passes canvas_scope for canvas only when it is present", () => {
+    const post = vi.fn();
+    (window as unknown as { webkit: unknown }).webkit = { messageHandlers: { proctora: { postMessage: post } } };
+    const scope = { course_id: "12", item_kind: "quizzes" as const, item_id: "34", open_book: true };
+    bridge.openExternal({ ...params, kind: "canvas", finish_url_regex: "x$", canvas_scope: scope });
+    expect(post).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "canvas", canvas_scope: scope }));
+    bridge.openExternal({ ...params, kind: "canvas", finish_url_regex: "x$", canvas_scope: null });
+    const none = post.mock.calls[post.mock.calls.length - 1]![0] as Record<string, unknown>;
+    expect("canvas_scope" in none).toBe(false);
+    bridge.openExternal({ ...params, canvas_scope: scope });
+    const plain = post.mock.calls[post.mock.calls.length - 1]![0] as Record<string, unknown>;
+    expect("canvas_scope" in plain).toBe(false);
   });
 });
 
@@ -417,6 +576,20 @@ describe("student ExternalExamPage for Canvas", () => {
     expect(document.body.textContent).not.toMatch(/canvas-code|access_code/);
   });
 
+  it("sends canvas_scope to the app when the attempt has one", async () => {
+    const scope = { course_id: "12", item_kind: "quizzes" as const, item_id: "34", open_book: false };
+    const spy = await run({ external_kind: "canvas", finish_url_regex: "x$", canvas_scope: scope });
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0]![0]).toMatchObject({ kind: "canvas", canvas_scope: scope });
+  });
+
+  it("sends no canvas_scope when the attempt has none", async () => {
+    const spy = await run({ external_kind: "canvas", finish_url_regex: "x$", canvas_scope: null });
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const sent = spy.mock.calls[0]![0] as unknown as Record<string, unknown>;
+    expect("canvas_scope" in sent).toBe(false);
+  });
+
   it("says Canvas exams are not available when the app cannot open one", async () => {
     const spy = await run({ external_kind: "canvas", finish_url_regex: "x$" });
     spy.mockReturnValue(false);
@@ -429,5 +602,20 @@ describe("student ExternalExamPage for Canvas", () => {
     const sent = spy.mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect("kind" in sent).toBe(false);
     expect(screen.queryByTestId("canvas-note")).toBeNull();
+  });
+});
+
+describe("Canvas page and form wording", () => {
+  it("shows the code hint only for the typed source", () => {
+    const first = render(<Harness initial={canvasValue({ canvas_code_source: "managed" })} linked />);
+    expect(document.getElementById("exam-canvas-code-hint")).toBeNull();
+    first.unmount();
+    render(<Harness initial={canvasValue({ canvas_code_source: "manual" })} linked />);
+    expect(document.getElementById("exam-canvas-code-hint")).not.toBeNull();
+  });
+
+  it("keeps one name on the show and hide button", () => {
+    render(<Harness initial={canvasValue({ canvas_code_source: "manual" })} linked />);
+    expect(screen.getByRole("button", { name: "Show access code" })).not.toHaveAttribute("aria-pressed");
   });
 });

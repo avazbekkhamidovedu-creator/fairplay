@@ -1,7 +1,7 @@
 // Slice 3: "Where do students answer?" — questions in FairPlay, or an exam held on another
 // website (Canvas quiz, Google Form, Moodle…) that the Mac app opens inside the lockdown.
 // Self-contained: the parent keeps the value and sends externalExamInput(value) on save.
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { CanvasQuizType, Delivery, ExamMode } from "../../api/types";
 import {
   splitDomainText,
@@ -14,6 +14,9 @@ import {
   detectCanvasQuizType,
   effectiveCodeSource,
   canvasCodeWarning,
+  canvasAccessLine,
+  canvasLinkKind,
+  CANVAS_NO_SCOPE_HINT,
   CANVAS_SIGN_IN_HOSTS,
   FINISH_REGEX_RULE,
   normalizeDomains,
@@ -103,6 +106,8 @@ export function ExternalExamSettings({
   }, [value.allowed_domains]);
 
   const [showCode, setShowCode] = useState(false);
+  const chipsRef = useRef<HTMLUListElement>(null);
+  const focusChips = () => chipsRef.current?.focus();
   const set = (patch: Partial<ExternalSettingsValue>) => onChange({ ...value, ...patch });
   const external = value.mode === "external";
   // Audit W-09: the same list the app enforces (the exam address may open only its folder).
@@ -114,8 +119,9 @@ export function ExternalExamSettings({
   const detected = detectCanvasQuizType(value.external_url);
   const codeSource = effectiveCodeSource(value);
   const canvasHost = urlHost(value.external_url);
+  const linkKind = canvasLinkKind(value.external_url);
   const removedHosts = value.canvas_removed_hosts ?? [];
-  const signInHosts = CANVAS_SIGN_IN_HOSTS.filter((h) => !removedHosts.includes(h));
+  const signInHosts = (value.canvas_sign_in_hosts ?? CANVAS_SIGN_IN_HOSTS).filter((h) => !removedHosts.includes(h));
   const codeWarning = canvasCodeWarning(value.canvas_access_code);
   const removeTeacherHost = (host: string) => {
     const next = normalizeDomains(value.allowed_domains).filter((d) => d !== host);
@@ -237,6 +243,11 @@ export function ExternalExamSettings({
                 {errors.external_url}
               </p>
             )}
+            {canvas && !linkKind && !errors.external_url && value.external_url?.trim() && (
+              <p className="ext-hint ext-warn" role="note" data-testid="canvas-no-scope">
+                {CANVAS_NO_SCOPE_HINT}
+              </p>
+            )}
             {!errors.external_url && urlWarning && <p className="ext-hint ext-warn">{urlWarning}</p>}
           </div>
 
@@ -261,7 +272,7 @@ export function ExternalExamSettings({
                   ? `Detected from the link: ${CANVAS_QUIZ_TYPE_LABEL[detected]}. Change it only if this is wrong.`
                   : "FairPlay could not tell the type from the link, so it assumes a Classic Quiz. Choose the right one."}
               </p>
-              {quizType === "new" && (
+              {quizType !== "classic" && (
                 <p className="ext-hint ext-warn" role="note" data-testid="canvas-new-warning">
                   New Quizzes cannot be set up automatically. FairPlay cannot set or change their access code, so
                   you type the code yourself and it stays as you set it in Canvas.
@@ -276,7 +287,7 @@ export function ExternalExamSettings({
                     type="radio"
                     name={`${name}-code`}
                     checked={codeSource === "managed"}
-                    disabled={quizType === "new"}
+                    disabled={quizType !== "classic"}
                     onChange={() => set({ canvas_code_source: "managed" })}
                   />
                   <span>
@@ -318,7 +329,7 @@ export function ExternalExamSettings({
                     id="exam-canvas-code-input"
                     className="ext-input"
                     type={showCode ? "text" : "password"}
-                    autoComplete="off"
+                    autoComplete="new-password"
                     autoCapitalize="off"
                     autoCorrect="off"
                     spellCheck={false}
@@ -331,7 +342,6 @@ export function ExternalExamSettings({
                   <button
                     type="button"
                     className="ext-code-toggle"
-                    aria-pressed={showCode}
                     aria-label={showCode ? "Hide access code" : "Show access code"}
                     onClick={() => setShowCode((x) => !x)}
                   >
@@ -350,10 +360,34 @@ export function ExternalExamSettings({
                   )}
                 </>
               )}
-              <p id="exam-canvas-code-hint" className="ext-hint">
-                The code is never shown again after you save, to you or to students. If you lose a typed code, set
-                a new one in Canvas and enter it here.
-              </p>
+              {codeSource === "manual" && (
+                <p id="exam-canvas-code-hint" className="ext-hint">
+                  The code is never shown again after you save, to you or to students. If you lose a typed code, set
+                  a new one in Canvas and enter it here.
+                </p>
+              )}
+
+              {linkKind && (
+                <>
+                  <label className="ext-choice" htmlFor="exam-canvas-open-book" data-testid="canvas-open-book">
+                    <input
+                      id="exam-canvas-open-book"
+                      type="checkbox"
+                      checked={value.canvas_open_book === true}
+                      aria-describedby="exam-canvas-access"
+                      onChange={(e) => set({ canvas_open_book: e.target.checked })}
+                    />
+                    <span>
+                      <span className="ext-choice-title">
+                        Open book: students may also open this course's pages, modules and files
+                      </span>
+                    </span>
+                  </label>
+                  <p id="exam-canvas-access" className="ext-hint" data-testid="canvas-access-line">
+                    {canvasAccessLine(value.canvas_open_book, linkKind, quizType)}
+                  </p>
+                </>
+              )}
             </div>
           )}
 
@@ -400,7 +434,7 @@ export function ExternalExamSettings({
                   Students can open these sites. FairPlay adds the Canvas site{quizType === "new" ? ", the New Quizzes sites" : ""} and
                   the sign-in sites when you save. Remove a sign-in site you do not use.
                 </p>
-                <ul className="ext-chips" aria-labelledby="exam-allowed-preview" data-testid="canvas-chips">
+                <ul className="ext-chips" aria-labelledby="exam-allowed-preview" data-testid="canvas-chips" tabIndex={-1} ref={chipsRef}>
                   {canvasHost && (
                     <li title="The Canvas site is always allowed" data-locked="true">
                       {canvasHost} <span className="ext-chip-lock">always allowed</span>
@@ -413,7 +447,10 @@ export function ExternalExamSettings({
                         type="button"
                         className="ext-chip-x"
                         aria-label={`Remove ${h}`}
-                        onClick={() => set({ canvas_removed_hosts: [...removedHosts, h] })}
+                        onClick={() => {
+                          set({ canvas_removed_hosts: [...removedHosts, h] });
+                          focusChips();
+                        }}
                       >
                         ×
                       </button>
@@ -424,7 +461,10 @@ export function ExternalExamSettings({
                     .map((d) => (
                       <li key={d} title={describeEntry(d)}>
                         {d}
-                        <button type="button" className="ext-chip-x" aria-label={`Remove ${d}`} onClick={() => removeTeacherHost(d)}>
+                        <button type="button" className="ext-chip-x" aria-label={`Remove ${d}`} onClick={() => {
+                          removeTeacherHost(d);
+                          focusChips();
+                        }}>
                           ×
                         </button>
                       </li>
@@ -439,7 +479,10 @@ export function ExternalExamSettings({
                         type="button"
                         className="ext-link-btn"
                         aria-label={`Add ${h} back`}
-                        onClick={() => set({ canvas_removed_hosts: removedHosts.filter((x) => x !== h) })}
+                        onClick={() => {
+                          set({ canvas_removed_hosts: removedHosts.filter((x) => x !== h) });
+                          focusChips();
+                        }}
                       >
                         {h} (add back)
                       </button>

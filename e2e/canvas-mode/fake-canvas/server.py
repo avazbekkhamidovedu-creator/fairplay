@@ -23,9 +23,13 @@ from urllib.parse import parse_qs, urlsplit
 CANVAS_HOST = "canvas.fake.test"
 SSO_HOST = "sso.fake.test"
 OTHER_HOST = "other.fake.test"
+GO_HOST = "go.fake.test"
+SAML_HOST = "saml.fake.test"
 TOKEN = "fake-canvas-teacher-token-0001"
 ADMIN_PORT = 9444
 QUIZ = "/courses/1/quizzes/1"
+QUIZ2 = "/courses/1/quizzes/2"
+QUIZ2_CODE = "second-quiz-own-code"
 
 lock = threading.Lock()
 state: dict = {}
@@ -35,7 +39,9 @@ def reset() -> None:
     with lock:
         state.clear()
         state.update({"code": "", "sessions": {}, "wrong": 0, "accepted": 0, "submitted": 0,
-                      "api_calls": [], "page_hits": [], "typed_on_decoy": 0, "set_calls": 0})
+                      "api_calls": [], "page_hits": [], "typed_on_decoy": 0, "set_calls": 0,
+                      "require_login": False, "warm_sso": False, "quiz2_posts": 0, "quiz2_real_code": 0,
+                      "quiz2_ok": 0, "downloads": 0, "attachments": 0, "logins": 0})
 
 
 reset()
@@ -48,6 +54,7 @@ def page(title: str, body: str, extra_head: str = "") -> bytes:
 
 ACCESS_FORM = """
 <h1>Quiz access</h1>
+%(links)s
 %(error)s
 <form class="access_code_form" id="access_code_form" action="/courses/1/quizzes/1/take" method="post" accept-charset="UTF-8">
   <input type="hidden" name="authenticity_token" value="tok">
@@ -111,6 +118,96 @@ POPUP_BODY = """
 """
 
 
+SIDE_LINKS = """
+<nav id="sidelinks">
+  <a id="l_dash" href="/">Dashboard</a>
+  <a id="l_course1" href="/courses/1">Course 1</a>
+  <a id="l_course2" href="/courses/2">Course 2</a>
+  <a id="l_quizlist" href="/courses/1/quizzes">Quizzes</a>
+  <a id="l_quiz1" href="/courses/1/quizzes/1">Quiz 1</a>
+  <a id="l_quiz2" href="/courses/1/quizzes/2">Quiz 2</a>
+  <a id="l_files" href="/courses/1/files">Files</a>
+  <a id="l_pages" href="/courses/1/pages/p1">Page p1</a>
+  <a id="l_modules" href="/courses/1/modules">Modules</a>
+  <a id="l_inbox" href="/conversations">Inbox</a>
+  <a id="l_calendar" href="/calendar">Calendar</a>
+  <a id="l_dots" href="/courses/1/quizzes/1/../2">dots</a>
+  <a id="l_enc" href="/courses/1/quizzes/1%2f..%2f2">encoded</a>
+  <a id="l_download" href="/courses/1/files/77/download">Download</a>
+  <a id="l_file" href="/courses/1/files/77">File 77</a>
+  <a id="l_asglist" href="/courses/1/assignments">Assignments</a>
+  <a id="l_asg" href="/courses/1/assignments/9">Assignment 9</a>
+  <a id="l_asg10" href="/courses/1/assignments/10">Assignment 10</a>
+  <a id="l_asg_sub" href="/courses/1/assignments/9/submissions/1">Assignment 9 submission</a>
+  <a id="l_asg_done" href="/courses/1/assignments/9/submission-confirmation">Assignment 9 confirmation</a>
+  <a id="l_attach" href="/courses/1/files/88">File 88 (sent as attachment)</a>
+  <a id="l_rootfile" href="/files/77">Root file 77</a>
+  <a id="l_wiki" href="/courses/1/wiki/w1">Wiki</a>
+  <a id="l_other" href="https://other.fake.test/blocked">Other site</a>
+  <button id="spa_pages" onclick="history.pushState({}, '', '/courses/1/pages/p1'); document.getElementById('route').textContent = location.pathname;">SPA to pages</button>
+  <button id="spa_dash" onclick="history.pushState({}, '', '/'); document.getElementById('route').textContent = location.pathname;">SPA to dashboard</button>
+  <span id="route"></span>
+</nav>
+"""
+
+DASHBOARD_BODY = """
+<h1>Dashboard</h1>
+<div id="cards">
+  <a class="card" id="course1" href="/courses/1">Fake Course 1</a>
+  <a class="card" id="course2" href="/courses/2">Fake Course 2</a>
+</div>
+<nav id="global">
+  <a id="nav_inbox" href="/conversations">Inbox</a>
+  <a id="nav_calendar" href="/calendar">Calendar</a>
+  <a id="nav_profile" href="/profile">Account</a>
+</nav>
+<button id="spa_inbox">Inbox (single page)</button>
+<button id="spa_replace">Calendar (replace)</button>
+<p id="route"></p>
+<script>
+  function render() { document.getElementById('route').textContent = location.pathname; }
+  document.getElementById('spa_inbox').addEventListener('click', function () {
+    history.pushState({}, '', '/conversations'); render();
+  });
+  document.getElementById('spa_replace').addEventListener('click', function () {
+    history.replaceState({}, '', '/calendar'); render();
+  });
+  window.addEventListener('popstate', render);
+  render();
+</script>
+"""
+
+ACCESS_FORM2 = """
+<h1>Quiz 2 access</h1>
+<form class="access_code_form" id="access_code_form" action="/courses/1/quizzes/2/take" method="post">
+  <input type="password" name="access_code" id="quiz_access_code" autocomplete="off">
+  <button type="submit" class="btn btn-primary" id="submit_access" disabled>Submit</button>
+</form>
+<script>
+  var i = document.getElementById('quiz_access_code'), b = document.getElementById('submit_access');
+  i.addEventListener('input', function () { b.disabled = i.value.length === 0; });
+</script>
+"""
+
+IDP_BODY = """
+<h1>Campus single sign-on</h1>
+<form id="idp" action="/idp/login" method="post">
+  <input name="user" id="idp_user" value="student">
+  <input name="pass" id="idp_pass" type="password" value="x">
+  <button type="submit" id="idp_signin">Sign in</button>
+</form>
+"""
+
+SAML_POST = """
+<h1>Signing you in</h1>
+<form id="saml" action="https://canvas.fake.test/login/saml" method="post">
+  <input type="hidden" name="SAMLResponse" value="ok">
+  <noscript><button type="submit">Continue</button></noscript>
+</form>
+<script>document.getElementById('saml').submit();</script>
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -166,6 +263,10 @@ class Handler(BaseHTTPRequestHandler):
             state["page_hits"].append(f"{method} {host}{path}")
         if host == SSO_HOST:
             return self._sso(method, path)
+        if host == GO_HOST:
+            return self._go(method, path)
+        if host == SAML_HOST:
+            return self._saml(method, path)
         if host == OTHER_HOST:
             return self._send(200, page("blocked", "<h1>Not allowed</h1><input id=quiz_access_code>"))
         if host != CANVAS_HOST:
@@ -174,9 +275,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._api(method, path)
         sid, sess, new = self._session()
         ck = sid if new else None
+        routed = self._site(method, path, sess, ck)
+        if routed:
+            return
         if method == "GET" and path == QUIZ:
             body = ("<h1>Fake Quiz</h1><p>Attempts allowed: 1</p>"
-                    f'<a class="btn" id="take_quiz" href="{QUIZ}/take">Take the Quiz</a>')
+                    f'<a class="btn" id="take_quiz" href="{QUIZ}/take">Take the Quiz</a>' + SIDE_LINKS)
             return self._send(200, page("Fake Quiz", body), cookie=ck)
         if path == QUIZ + "/take":
             return self._take(method, sess, ck)
@@ -202,6 +306,109 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, page("Assignment", "<h1>An assignment</h1><input id=quiz_access_code>"), cookie=ck)
         return self._send(404, page("Not found", "<h1>Not found</h1>"), cookie=ck)
 
+    def _site(self, method, path, sess, ck):
+        """Dashboard, courses, sign-in, second quiz and the pages a student could wander to.
+        Returns True when it answered."""
+        logged = sess.get("user") is not None
+        with lock:
+            need = state["require_login"]
+        if path == "/login" or path.startswith("/login/"):
+            if method == "POST" and path == "/login/saml":
+                self._body()
+                with lock:
+                    state["logins"] += 1
+                sess["user"] = "student"
+                self._redirect("/?login_success=1", cookie=ck)
+                return True
+            if method == "GET" and path == "/login":
+                self._redirect("/login/saml", cookie=ck)
+                return True
+            if method == "GET" and path == "/login/saml":
+                if "assertion=warm" in (self.path.split("?", 1)[1] if "?" in self.path else ""):
+                    with lock:
+                        state["logins"] += 1
+                    sess["user"] = "student"
+                    self._redirect("/?login_success=1", cookie=ck)
+                    return True
+                if logged:
+                    self._redirect("/", cookie=ck)
+                else:
+                    self._redirect(f"https://{GO_HOST}/sso/start?RelayState=%2F", cookie=ck)
+                return True
+            self._send(200, page("Log in", "<h1>Log in</h1>"), cookie=ck)
+            return True
+        if need and not logged and method == "GET":
+            self._redirect("/login", cookie=ck)
+            return True
+        if method == "GET" and path == "/":
+            self._send(200, page("Dashboard", DASHBOARD_BODY), cookie=ck)
+            return True
+        simple = {
+            "/conversations": "Inbox", "/calendar": "Calendar", "/profile": "Account",
+            "/courses/2": "Course 2", "/courses/1/grades": "Grades",
+            "/courses/1/modules": "Modules", "/courses/1/files": "Files", "/courses/1/files/77": "File 77",
+            "/files/77": "File 77", "/courses/1/assignments": "Assignments", "/courses/1/assignments/9": "Assignment 9",
+            "/courses/1/assignments/10": "Assignment 10", "/courses/1/assignments/9/submissions/1": "Submission 1",
+            "/courses/1/assignments/9/submission-confirmation": "Submitted", "/courses/1/pages/p1": "Page p1", "/courses/1/wiki/w1": "Wiki w1",
+        }
+        if method == "GET" and path in simple:
+            self._send(200, page(simple[path], f"<h1>{simple[path]}</h1>" + SIDE_LINKS), cookie=ck)
+            return True
+        if method == "GET" and path == "/courses/1":
+            self._send(200, page("Course 1", "<h1>Course 1</h1>" + SIDE_LINKS), cookie=ck)
+            return True
+        if method == "GET" and path == "/courses/1/quizzes":
+            self._send(200, page("Quizzes", "<h1>Quizzes</h1>" + SIDE_LINKS), cookie=ck)
+            return True
+        if method == "GET" and path == "/courses/1/files/88":
+            with lock:
+                state["attachments"] += 1
+            self._send(200, b"<html><body>file as attachment</body></html>", "text/html; charset=utf-8",
+                       headers={"Content-Disposition": "attachment; filename=88.html"}, cookie=ck)
+            return True
+        if method == "GET" and path == "/courses/1/files/77/download":
+            with lock:
+                state["downloads"] += 1
+            self._send(200, b"file bytes", "application/octet-stream",
+                       headers={"Content-Disposition": "attachment; filename=77.bin"}, cookie=ck)
+            return True
+        if path == QUIZ2:
+            self._send(200, page("Quiz 2", f'<h1>Quiz 2</h1><a id="take_quiz2" href="{QUIZ2}/take">Take</a>'
+                                 + SIDE_LINKS), cookie=ck)
+            return True
+        if path == QUIZ2 + "/take":
+            if method == "POST":
+                form = parse_qs(self._body().decode("utf-8", "replace"), keep_blank_values=True)
+                given = (form.get("access_code") or [""])[0]
+                with lock:
+                    state["quiz2_posts"] += 1
+                    if state["code"] and given == state["code"]:
+                        state["quiz2_real_code"] += 1
+                    if given == QUIZ2_CODE:
+                        state["quiz2_ok"] += 1
+                self._send(200, page("Quiz 2", "<h1>Quiz 2 answer page</h1>"), cookie=ck)
+            else:
+                self._send(200, page("Quiz 2 access", ACCESS_FORM2 + SIDE_LINKS), cookie=ck)
+            return True
+        return False
+
+    def _go(self, method, path):
+        if path.startswith("/sso/start"):
+            return self._redirect(f"https://{SAML_HOST}/idp/sso?SAMLRequest=abc")
+        return self._send(404, page("404", "no"))
+
+    def _saml(self, method, path):
+        with lock:
+            warm = state["warm_sso"]
+        if method == "GET" and path == "/idp/sso":
+            if warm:
+                return self._redirect(f"https://{CANVAS_HOST}/login/saml?assertion=warm")
+            return self._send(200, page("Campus sign-in", IDP_BODY))
+        if method == "POST" and path == "/idp/login":
+            self._body()
+            return self._send(200, page("Signing in", SAML_POST))
+        return self._send(404, page("404", "no"))
+
     def _can_take(self, sess):
         with lock:
             return (not state["code"]) or sess["accepted"]
@@ -221,10 +428,11 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 return self._redirect(QUIZ + "/take", cookie=ck)
             err = '<p class="error" id="bad_code">Invalid access code.</p>'
-            return self._send(200, page("Access code", ACCESS_FORM % {"error": err}), cookie=ck)
+            return self._send(200, page("Access code", ACCESS_FORM % {"error": err, "links": SIDE_LINKS}),
+                              cookie=ck)
         if self._can_take(sess):
-            return self._send(200, page("Taking Fake Quiz", QUIZ_BODY), cookie=ck)
-        return self._send(200, page("Access code", ACCESS_FORM % {"error": ""}), cookie=ck)
+            return self._send(200, page("Taking Fake Quiz", QUIZ_BODY + SIDE_LINKS), cookie=ck)
+        return self._send(200, page("Access code", ACCESS_FORM % {"error": "", "links": SIDE_LINKS}), cookie=ck)
 
     def _sso(self, method, path):
         if path == "/popup":
@@ -292,6 +500,11 @@ class Admin(BaseHTTPRequestHandler):
                 state["code"] = data.get("code", "")
                 for s in state["sessions"].values():
                     s["accepted"] = False
+        elif self.path == "/mode":
+            with lock:
+                for k in ("require_login", "warm_sso"):
+                    if k in data:
+                        state[k] = bool(data[k])
         elif self.path == "/forget-sessions":
             with lock:
                 state["sessions"].clear()
@@ -299,10 +512,11 @@ class Admin(BaseHTTPRequestHandler):
 
 
 def make_cert(directory: str) -> tuple[str, str]:
-    crt, key = os.path.join(directory, "fake.crt"), os.path.join(directory, "fake.key")
+    crt, key = os.path.join(directory, "fake2.crt"), os.path.join(directory, "fake2.key")
     if not (os.path.exists(crt) and os.path.exists(key)):
         os.makedirs(directory, exist_ok=True)
-        san = f"subjectAltName=DNS:{CANVAS_HOST},DNS:{SSO_HOST},DNS:{OTHER_HOST}"
+        san = ",".join(f"DNS:{h}" for h in (CANVAS_HOST, SSO_HOST, OTHER_HOST, GO_HOST, SAML_HOST))
+        san = "subjectAltName=" + san
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
                         "-out", crt, "-days", "3", "-subj", f"/CN={CANVAS_HOST}", "-addext", san],
                        check=True, capture_output=True)

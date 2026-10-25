@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import unquote, urlsplit
 
+import canvas_nav as N
 import config as C
 
 SWIFT = os.path.join(C.REPO, "mac", "Sources", "Proctora", "CanvasMode.swift")
@@ -34,9 +35,9 @@ def _dedent_swift(block: str, closing_indent: str) -> str:
     return "\n".join(out)
 
 
-def _multiline(src: str, header: str) -> str:
+def _multiline(src: str, header: str, anchor: str = '"""\n') -> str:
     i = src.index(header)
-    start = src.index('"""\n', i) + 4
+    start = src.index(anchor, i) + len(anchor)
     end = src.index('"""', start)
     body = src[start:end]
     closing_indent = body.rsplit("\n", 1)[1] if "\n" in body else ""
@@ -49,18 +50,21 @@ class Scripts:
         self.field = re.search(r'static let field = "([^"]+)"', src).group(1)
         probe = re.search(r'static let probe = "(.*)"\n', src).group(1)
         self.probe = probe.replace(r"\(field)", self.field)
-        self._fill = _multiline(src, "static func fill(code: String, origin: String)")
+        self._fill = _multiline(src, "static func fill(code: String, origin: String", 'return """\n')
+        self._path_check = _multiline(src, "var pathCheck = \"\"")
         self.popup_guard = _multiline(src, "static let popupGuard")
-        assert r"\(" in self._fill and r"\(field)" in self._fill
-        assert "'" not in self.field or True
+        assert r"\(" in self._fill and r"\(field)" in self._fill and r"\(pathCheck)" in self._fill
 
     @staticmethod
     def js_string(s: str) -> str:
         text = json.dumps(s, ensure_ascii=False).replace("/", "\\/")
         return text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
 
-    def fill(self, code: str, origin: str) -> str:
-        out = (self._fill.replace(r"\(field)", self.field)
+    def fill(self, code: str, origin: str, path_prefix: str | None = None) -> str:
+        check = "" if path_prefix is None else self._path_check.replace(
+            r"\(jsString(pathPrefix))", self.js_string(path_prefix))
+        out = (self._fill.replace(r"\(pathCheck)", check)
+               .replace(r"\(field)", self.field)
                .replace(r"\(jsString(origin))", self.js_string(origin))
                .replace(r"\(jsString(code))", self.js_string(code)))
         assert r"\(" not in out, "unreplaced Swift interpolation"
@@ -336,6 +340,7 @@ class NativeStandIn:
         if not any((not r.wildcard) and r.host == start_host and not r.path_prefix for r in self.rules):
             self.rules.append(SiteRule(start_host))
         self.finish_regex = open_msg.get("finish_url_regex")
+        self.scope = N.scope_from_json(open_msg.get("canvas_scope"))
         self.device, self.key = device or open_msg.get("device") or C.DEVICE, key
         self.budget = FillBudget()
         self.help_shown = False
@@ -378,7 +383,7 @@ class NativeStandIn:
     def on_loaded(self, page, sleep=time.sleep) -> str:
         """canvasPageLoaded + canvasProbed + requestCanvasCode for one finished main-frame load."""
         url = page.url
-        if fill_origin(url, self.start_url) is None:
+        if self.origin(url) is None:
             return "gate"
         if page.eval(SCRIPTS.probe) is not True:
             return "nofield"
@@ -393,20 +398,24 @@ class NativeStandIn:
             if status == 429 and retries < 3:
                 sleep(retry_delay(retry_after))
                 retries += 1
-                if fill_origin(page.url, self.start_url) is None:
+                if self.origin(page.url) is None:
                     return "gate"
                 continue
             self.failed("code unavailable")
             return "help"
-        origin = fill_origin(page.url, self.start_url)
+        origin = self.origin(page.url)
         if origin is None or not self.budget.take():
             return "gate"
         self.log.append(f"fill {self.budget.used}")
-        outcome = page.eval(SCRIPTS.fill(code, origin))
+        prefix = None if self.scope is None else f"/courses/{self.scope.course_id}/{self.scope.item_kind}/{self.scope.item_id}"
+        outcome = page.eval(SCRIPTS.fill(code, origin, prefix))
         if outcome != "clicked":
             self.failed(f"fill {outcome}")
             return "help"
         return "clicked"
+
+    def origin(self, url: str):
+        return N.fill_origin(url, self.start_url, self.scope)
 
     def finish_hit(self, url: str) -> bool:
         return finish_matches(url, self.finish_regex)

@@ -25,7 +25,8 @@ MANAGED_CODE_LEN = 24
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
 CODE_VALID_FOR_S = 60
 PROOF_FRESH_MS = 5 * 60 * 1000
-PROOF_REPLAY_TTL_S = 6 * 60
+PROOF_FUTURE_MS = 30 * 1000
+PROOF_REPLAY_TTL_S = 2 * PROOF_FRESH_MS // 1000 + 5
 CODE_REQUESTS_PER_ATTEMPT = 6
 CODE_ATTEMPT_WINDOW_S = 10 * 60
 CODE_REQUESTS_PER_EXAM_PER_MIN = 300
@@ -34,7 +35,7 @@ CANVAS_CALL_TIMEOUT_S = 20
 OPEN_CLAIM_S = 90
 MAX_REGEX_LEN = 300
 MAX_REPEAT = 100
-MAX_UNBOUNDED = 8
+MAX_UNBOUNDED = 2
 MAX_QUANTIFIERS = 16
 
 ENV_SSO_HOSTS = "FAIRPLAY_CANVAS_SSO_HOSTS"
@@ -81,8 +82,8 @@ def is_https(url: str | None) -> bool:
         return False
 
 
-_QUIZ_PATH = re.compile(r"^/courses/(\d+)/quizzes/(\d+)(?:/|$)")
-_ASSIGNMENT_PATH = re.compile(r"^/courses/(\d+)/assignments/(\d+)(?:/|$)")
+_QUIZ_PATH = re.compile(r"^/courses/([0-9]+)/quizzes/([0-9]+)(?:/|\Z)")
+_ASSIGNMENT_PATH = re.compile(r"^/courses/([0-9]+)/assignments/([0-9]+)(?:/|\Z)")
 
 
 def infer_quiz_type(url: str) -> str | None:
@@ -99,11 +100,81 @@ def quiz_ids(url: str | None) -> tuple[str, str] | None:
     return (m[1], m[2]) if m else None
 
 
+_SCOPE_PATH = re.compile(r"/courses/([0-9]{1,20})/(quizzes|assignments)/([0-9]{1,20})(?:/.*)?")
+
+NO_SCOPE_MESSAGE = ("The link must open one quiz or assignment, like "
+                    "https://<canvas>/courses/123/quizzes/456")
+
+
+UNCLEAN_URL_MESSAGE = ("The Canvas link may not contain spaces, backslashes, %, ;, @ before the "
+                       "address, .. in the path, or a dot at the end of the website name")
+
+
+def clean_url(url: str | None) -> bool:
+    """False for a link the app and the server could read differently: a backslash, white
+    space or control character, % escapes, ;, .. segments, a user name before the host, or a
+    host that ends with a dot."""
+    s = url or ""
+    if any(ch in "\\%;" or ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in s):
+        return False
+    try:
+        parts = urlsplit(s)
+        host = parts.hostname or ""
+    except ValueError:
+        return False
+    if "@" in parts.netloc or host.endswith(".") or parts.netloc.endswith("."):
+        return False
+    return ".." not in parts.path.split("/")
+
+
+def scope_of(url: str | None) -> dict | None:
+    """The course and item a Canvas exam link points at, or None when it is not a plain
+    quiz or assignment link. Derived from the link on every read, never sent by a client."""
+    if not clean_url(url):
+        return None
+    try:
+        path = urlsplit(url or "").path
+    except ValueError:
+        return None
+    m = _SCOPE_PATH.fullmatch(path)
+    if m is None:
+        return None
+    return {"course_id": m[1], "item_kind": m[2], "item_id": m[3]}
+
+
 def effective_source(quiz_type: str, requested: str) -> str:
     return "managed" if requested == "managed" and quiz_type == "classic" else "manual"
 
 
 # ---------------------------------------------------------------- finish_url_regex
+_CLASS_PATTERNS = {"d": "[0-9]", "w": "[A-Za-z0-9_]", "s": r"[ \t\n\r\f\v]"}
+
+
+def _simple_atom(kind: str, ch: str = "") -> tuple:
+    if kind == "esc":
+        if ch in "dws":
+            return ("cls", ch)
+        if ch in "DWSbB":
+            return ("any",)
+        return ("lit", ch)
+    return (kind, ch)
+
+
+def _atoms_overlap(a: tuple, b: tuple) -> bool:
+    """Whether two neighbouring repeated items can match the same character. Anything that is
+    not a single literal character or \\d, \\w, \\s counts as overlapping."""
+    if a[0] not in ("lit", "cls") or b[0] not in ("lit", "cls"):
+        return True
+    if a[0] == "lit" and b[0] == "lit":
+        return a[1].lower() == b[1].lower()
+    if a[0] == "cls" and b[0] == "cls":
+        return a[1] == b[1] or "s" not in (a[1], b[1])
+    lit, cls = (a, b) if a[0] == "lit" else (b, a)
+    if not lit[1].isascii():
+        return True
+    return re.fullmatch(_CLASS_PATTERNS[cls[1]], lit[1]) is not None
+
+
 def validate_regex(pattern: str) -> str:
     if len(pattern) > MAX_REGEX_LEN:
         raise ValueError(f"finish_url_regex is longer than {MAX_REGEX_LEN} characters")
@@ -114,6 +185,9 @@ def validate_regex(pattern: str) -> str:
     prev = "none"
     unbounded = 0
     total = 0
+    pending: tuple | None = None
+    cur: tuple = ("any",)
+    cur_prev: tuple | None = None
 
     def bad_escape(ch: str, in_class: bool) -> None:
         if ch == "":
@@ -129,6 +203,7 @@ def validate_regex(pattern: str) -> str:
         c = pattern[i]
         if c == "\\":
             bad_escape(pattern[i + 1:i + 2], False)
+            cur_prev, cur, pending = pending, _simple_atom("esc", pattern[i + 1]), None
             i += 2
             prev, closed = "atom", None
             continue
@@ -154,6 +229,7 @@ def validate_regex(pattern: str) -> str:
             if j >= n:
                 raise ValueError("finish_url_regex has an unclosed character class")
             i = j + 1
+            cur_prev, cur, pending = pending, ("class",), None
             prev, closed = "atom", None
             continue
         if c == "(":
@@ -163,6 +239,7 @@ def validate_regex(pattern: str) -> str:
                 m = re.match(r"\(\?[ims]+\)", pattern[i:]) if i == 0 else None
                 if m:
                     i += m.end()
+                    pending = None
                     prev, closed = "none", None
                     continue
                 if pattern.startswith(("(?P<", "(?<"), i) and not pattern.startswith(("(?<=", "(?<!"), i):
@@ -173,13 +250,15 @@ def validate_regex(pattern: str) -> str:
                 i += 1
             if stack:
                 stack[-1]["nested"] = True
-            stack.append({"alt": False, "quant": False, "nested": False})
+            stack.append({"alt": False, "quant": False, "nested": False, "before": pending})
+            pending = None
             prev, closed = "none", None
             continue
         if c == "|":
             if stack:
                 stack[-1]["alt"] = True
             i += 1
+            pending = None
             prev, closed = "none", None
             continue
         if c == ")":
@@ -190,6 +269,8 @@ def validate_regex(pattern: str) -> str:
                 stack[-1]["alt"] = stack[-1]["alt"] or g["alt"]
                 stack[-1]["quant"] = stack[-1]["quant"] or g["quant"]
             i += 1
+            cur_prev, cur = g["before"], ("group",)
+            pending = ("group",) if pending is not None else None
             prev, closed = "group", g
             continue
         if c == "}":
@@ -210,6 +291,8 @@ def validate_regex(pattern: str) -> str:
             if lo > MAX_REPEAT or (hi is not None and hi > MAX_REPEAT):
                 raise ValueError(f"finish_url_regex repeat count is above {MAX_REPEAT}")
         if lo is None and c not in "*+?{":
+            cur_prev, cur, pending = pending, (("dot", "") if c == "." else
+                                               ("any",) if c in "^$" else ("lit", c)), None
             i += 1
             prev, closed = "atom", None
             continue
@@ -226,6 +309,10 @@ def validate_regex(pattern: str) -> str:
         total += 1
         if hi is None:
             unbounded += 1
+            if cur_prev is not None and _atoms_overlap(cur_prev, cur):
+                raise ValueError("finish_url_regex has two repeats in a row that can match the "
+                                 "same characters (like .*.* or \\w+\\w+)")
+            pending = cur
         # The Mac app refuses any group followed by * + or {..} that holds a choice, a repeat or
         # another group (CanvasFinish.isSafe), so the server refuses the same shapes.
         if prev == "group" and closed is not None and (hi is None or hi > 1 or c == "{") \
@@ -331,6 +418,7 @@ def clear_fields(e) -> None:
     e.canvas_code_enc = None
     e.canvas_code_failed = False
     e.canvas_removed_hosts = []
+    e.canvas_open_book = False
 
 
 def resolve_settings(e, body) -> tuple[str, str, str | None]:
@@ -405,6 +493,10 @@ def apply_settings(e, body, prev_domains: list[str] | None = None) -> None:
     if host in removed:
         raise HTTPException(422, "The Canvas website itself cannot be removed from the allowed websites")
     e.canvas_removed_hosts = removed
+    if body.canvas is not None and "open_book" in body.canvas.model_fields_set:
+        e.canvas_open_book = bool(body.canvas.open_book)
+    elif not was_canvas:
+        e.canvas_open_book = False
     e.external_kind = KIND
     e.canvas_quiz_type = quiz_type
     e.canvas_code_source = source
@@ -417,8 +509,11 @@ def apply_settings(e, body, prev_domains: list[str] | None = None) -> None:
 def canvas_view(e) -> dict | None:
     if not canvas_exam(e):
         return None
+    scope = scope_of(e.external_url)
     return {"quiz_type": e.canvas_quiz_type or "classic",
-            "access_code_source": e.canvas_code_source or "manual"}
+            "access_code_source": e.canvas_code_source or "manual",
+            "scope": None if scope is None else {**scope},
+            "open_book": bool(e.canvas_open_book)}
 
 
 def code_status(e) -> str:
@@ -432,7 +527,8 @@ def teacher_canvas_view(e) -> dict | None:
     if v is None:
         return None
     return {**v, "code_status": code_status(e), "removed_hosts": list(e.canvas_removed_hosts or []),
-            "remove_code_in_canvas": bool(e.canvas_release_failed)}
+            "remove_code_in_canvas": bool(e.canvas_release_failed),
+            "sign_in_hosts": sso_hosts()}
 
 
 def teacher_notice(e) -> str | None:
@@ -504,6 +600,19 @@ async def abort_open(session, e, failed: bool = True) -> None:
     await session.refresh(e)
 
 
+async def undo_open(session, e) -> None:
+    """Best effort after an open that did not finish (commit failed, request cancelled): drops
+    the claim and clears a managed code Canvas may already hold. Never raises."""
+    try:
+        await session.rollback()
+        await session.refresh(e)
+        if (e.canvas_code_source or "manual") == "managed":
+            await clear_in_canvas(session, e)
+        await abort_open(session, e, True)
+    except BaseException:
+        log.warning("canvas open could not be undone for exam %s", getattr(e, "id", "?"))
+
+
 async def prepare_open(session, e, manual_code: str | None = None) -> None:
     """After claim_open: a managed code is set in Canvas, a manual one must exist. On
     failure the claim is dropped and the exam stays as it was (409 canvas_code_failed)."""
@@ -518,6 +627,9 @@ async def prepare_open(session, e, manual_code: str | None = None) -> None:
         log.warning("canvas open failed for exam %s", eid)
         raise _failed("Canvas could not be reached. Try again, or switch to a manual access "
                       "code.") from None
+    except BaseException:
+        await asyncio.shield(undo_open(session, e))
+        raise
     e.canvas_code_failed = False
     e.canvas_release_failed = False
 

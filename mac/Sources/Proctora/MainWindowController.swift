@@ -671,8 +671,17 @@ final class MainWindowController: NSWindowController, LockSurface,
         }
         if webView !== self.webView {
             let isSubFrame = !(navigationAction.targetFrame?.isMainFrame ?? true)
-            if external.childAllows(url) || (isSubFrame && url.scheme?.lowercased() == "about") {
+            if external.isCanvas, !isSubFrame, navigationAction.shouldPerformDownload {
+                EventLog.shared.record(.blockedNavigation("download from \(url.host ?? "?")"))
+                external.showNotice()
+                decisionHandler(.cancel)
+                return
+            }
+            if external.childAllows(url, mainFrame: !isSubFrame) || (isSubFrame && url.scheme?.lowercased() == "about") {
                 decisionHandler(.allow)
+            } else if !isSubFrame, external.allows(url), external.blocksMainFrame(url) {
+                external.reportBlocked(url)
+                decisionHandler(.cancel)
             } else {
                 EventLog.shared.record(.blockedNavigation(url.host ?? url.absoluteString))
                 decisionHandler(.cancel)
@@ -727,6 +736,20 @@ final class MainWindowController: NSWindowController, LockSurface,
             }
             return
         }
+        if external.isCanvas, (navigationAction.targetFrame?.isMainFrame ?? true), navigationAction.shouldPerformDownload {
+            EventLog.shared.record(.blockedNavigation("download from \(url.host ?? "?")"))
+            DebugLog.log("web", "download BLOCKED (canvas main frame): \(url.host ?? "")")
+            external.showNotice()
+            decisionHandler(.cancel)
+            return
+        }
+        if (navigationAction.targetFrame?.isMainFrame ?? true), !isServerURL(url), external.allows(url),
+           external.blocksMainFrame(url) {
+            DebugLog.log("web", "navigation BLOCKED (canvas scope): \(url.host ?? "")\(url.path)")
+            external.reportBlocked(url)
+            decisionHandler(.cancel)
+            return
+        }
         if ownLocalPage || isServerURL(url) || external.allows(url) {
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 // Canvas exams finish from the committed URL (observeURL), not from an action
@@ -751,9 +774,24 @@ final class MainWindowController: NSWindowController, LockSurface,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url,
            !isServerURL(u), !external.childAllows(u) {
-            EventLog.shared.record(.blockedNavigation(u.host ?? u.absoluteString))
+            if external.allows(u) {
+                external.reportBlocked(u)
+            } else {
+                EventLog.shared.record(.blockedNavigation(u.host ?? u.absoluteString))
+            }
             decisionHandler(.cancel)
             return
+        }
+        if external.isCanvas, navigationResponse.isForMainFrame {
+            let disposition = (navigationResponse.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition")
+            if AllowedSites.isAttachment(contentDisposition: disposition) {
+                let host = navigationResponse.response.url?.host ?? "?"
+                EventLog.shared.record(.blockedNavigation("download from \(host)"))
+                external.showNotice()
+                decisionHandler(.cancel)
+                return
+            }
         }
         if !navigationResponse.isForMainFrame, LockdownController.shared.isLocked {
             let disposition = (navigationResponse.response as? HTTPURLResponse)?
@@ -838,10 +876,13 @@ final class MainWindowController: NSWindowController, LockSurface,
         switch external.popupPlan(url: url, openerHost: openerHost) {
         case .block:
             EventLog.shared.record(.blockedNavigation("popup \(url?.host ?? url?.absoluteString ?? "?")"))
+            external.showNotice()
             return nil
         case .sameView:
             if let url {
-                EventLog.shared.record(.canvasSsoPopup(url.host ?? "?"))
+                if CanvasPopup.isCrossHost(url, openerHost: openerHost) {
+                    EventLog.shared.record(.canvasSsoPopup(url.host ?? "?"))
+                }
                 opener.load(URLRequest(url: url))
             }
             return nil
@@ -874,6 +915,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if webView !== self.webView { return }
         committedURL = webView.url
+        external.canvasCommitted(webView.url)
         // A new document replaced the old one (main frame only: WebKit reports commits for
         // the main frame). Events wait until the new page asks for them ("flushEvents").
         eventsReady = false

@@ -1,7 +1,7 @@
 // Canvas mode: what the teacher sees about a Canvas exam (type, code source and status).
 // The access code itself is never available here.
 import type { Exam } from "../../api/types";
-import { CANVAS_QUIZ_TYPE_LABEL, CODE_STATUS_LABEL } from "./externalValidation";
+import { CANVAS_QUIZ_TYPE_LABEL, CODE_STATUS_LABEL, canvasAccessLine } from "./externalValidation";
 
 export function isCanvasExam(exam: Pick<Exam, "mode" | "external_kind"> | null | undefined): boolean {
   return exam?.mode === "external" && exam.external_kind === "canvas";
@@ -35,6 +35,11 @@ export function CanvasExamInfo({ exam }: { exam: Exam }) {
         {status && <span className={`t-pill${tone ? ` ${tone}` : ""}`}>Code {CODE_STATUS_LABEL[status].toLowerCase()}</span>}{" "}
         <span className="t-small t-muted">{codeLine(exam)}</span>
       </div>
+      {c?.scope && (
+        <p className="t-small t-muted" data-testid="canvas-access-line" style={{ margin: 0 }}>
+          {canvasAccessLine(c.open_book, c.scope.item_kind, c.quiz_type)}
+        </p>
+      )}
       {exam.canvas_notice && (
         <p className="t-small" role="note" data-testid="canvas-notice" style={{ margin: 0 }}>
           {exam.canvas_notice}

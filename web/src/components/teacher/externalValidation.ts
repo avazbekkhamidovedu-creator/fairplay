@@ -35,6 +35,10 @@ export interface ExternalSettingsValue {
   finish_url_regex?: string | null;
   /** Sign-in sites the teacher removed from the automatic list. */
   canvas_removed_hosts?: string[];
+  /** Sign-in sites the server adds to Canvas exams (from the exam view); the built-in list when missing. */
+  canvas_sign_in_hosts?: string[];
+  /** Students may also open the course's pages, modules and files. */
+  canvas_open_book?: boolean;
   /** Only in the request built by externalExamInput. */
   canvas?: CanvasInput | null;
 }
@@ -196,6 +200,7 @@ export function validateExternalSettings(v: ExternalSettingsValue): ExternalSett
     errors.finish_url_contains = `Keep this under ${MAX_FINISH_CONTAINS} characters.`;
   if (v.external_kind === "canvas") {
     if (!errors.external_url && !isHttpsUrl(v.external_url)) errors.external_url = "A Canvas link must start with https://";
+    else if (!errors.external_url && canvasLinkKind(v.external_url) === null) errors.external_url = CANVAS_NO_SCOPE_HINT;
     const codeErr = validateCanvasCode(v);
     if (codeErr) errors.canvas_access_code = codeErr;
     const reErr = validateFinishRegex(v.finish_url_regex);
@@ -228,7 +233,8 @@ export function externalExamInput(v: ExternalSettingsValue): ExternalSettingsVal
     quiz_type: type,
     access_code_source: source,
     ...(source === "manual" && code.trim() ? { access_code: code } : {}),
-    ...(removed.length > 0 ? { removed_hosts: [...removed] } : {}),
+    removed_hosts: [...removed],
+    open_book: v.canvas_open_book === true,
   };
   return {
     ...base,
@@ -250,7 +256,8 @@ export function externalSettingsFrom(
     finish_url_contains: e?.finish_url_contains ?? null,
   };
   if (e?.mode !== "external" || e.external_kind !== "canvas") return base;
-  base.allowed_domains = base.allowed_domains.filter((d) => !isAutoCanvasHost(d, e.external_url));
+  const signIn = e.canvas?.sign_in_hosts;
+  base.allowed_domains = base.allowed_domains.filter((d) => !isAutoCanvasHost(d, e.external_url, signIn));
   const type = e.canvas?.quiz_type ?? detectCanvasQuizType(e.external_url) ?? "classic";
   const regex = e.finish_url_regex ?? null;
   return {
@@ -259,6 +266,9 @@ export function externalSettingsFrom(
     canvas_quiz_type: type,
     canvas_code_source: e.canvas?.access_code_source ?? "managed",
     canvas_access_code: "",
+    canvas_removed_hosts: [...(e.canvas?.removed_hosts ?? [])],
+    ...(signIn ? { canvas_sign_in_hosts: [...signIn] } : {}),
+    canvas_open_book: e.canvas?.open_book === true,
     canvas_code_stored: e.canvas?.code_status === "set" && e.canvas.access_code_source === "manual",
     finish_url_regex: regex && regex !== defaultFinishRegex(type) ? regex : null,
   };
@@ -287,10 +297,40 @@ export const CANVAS_SIGN_IN_HOSTS = [
 const QUIZ_LTI_HOST = /^\*\.quiz-lti-[a-z0-9-]+-prod\.instructure\.com$/;
 
 /** True for a site the server adds by itself: the Canvas host, New Quizzes hosts, sign-in hosts. */
-export function isAutoCanvasHost(entry: string, canvasUrl: string | null | undefined): boolean {
+export function isAutoCanvasHost(entry: string, canvasUrl: string | null | undefined, signIn?: string[]): boolean {
   const d = normalizeDomainInput(entry);
-  return d === urlHost(canvasUrl) || QUIZ_LTI_HOST.test(d) || CANVAS_SIGN_IN_HOSTS.includes(d);
+  return d === urlHost(canvasUrl) || QUIZ_LTI_HOST.test(d) || (signIn ?? CANVAS_SIGN_IN_HOSTS).includes(d);
 }
+export const CANVAS_NO_SCOPE_HINT =
+  "The link must open one quiz or assignment, like https://canvas.dku.edu/courses/123/quizzes/456";
+
+const SCOPE_PATH = /^\/courses\/[0-9]{1,20}\/(quizzes|assignments)\/[0-9]{1,20}(?:\/.*)?$/;
+
+/** "quizzes" or "assignments" when the link opens one quiz or assignment, otherwise null (same rule as the server). */
+export function canvasLinkKind(url: string | null | undefined): "quizzes" | "assignments" | null {
+  let path: string;
+  try {
+    path = new URL((url ?? "").trim()).pathname.split(";")[0] ?? "";
+  } catch {
+    return null;
+  }
+  const m = SCOPE_PATH.exec(path);
+  return m ? (m[1] as "quizzes" | "assignments") : null;
+}
+
+/** Plain-language list of what students can open in Canvas during the exam. */
+export function canvasAccessLine(
+  openBook: boolean | null | undefined,
+  itemKind?: "quizzes" | "assignments" | null,
+  quizType?: CanvasQuizType | null,
+): string {
+  const noun = itemKind ? (itemKind === "assignments" ? "assignment" : "quiz") : quizType === "assignment" ? "assignment" : "quiz";
+  const base = `Students can sign in to Canvas and open the dashboard, the course home and the quiz and assignment lists, then this ${noun}. Once it starts they can only open that ${noun}`;
+  return openBook
+    ? `${base}, plus this course's pages, modules and files (view only; downloads stay blocked).`
+    : `${base}.`;
+}
+
 export const CANVAS_CODE_MIN = 4;
 export const CANVAS_CODE_MAX = 64;
 
@@ -328,9 +368,9 @@ export function effectiveQuizType(v: Pick<ExternalSettingsValue, "external_url" 
   return v.canvas_quiz_type ?? detectCanvasQuizType(v.external_url) ?? "classic";
 }
 
-/** New Quizzes have no way to set the code automatically: the code is typed by the teacher. */
+/** Only Classic Quizzes can have the code set automatically; New Quizzes and assignments need a typed code. */
 export function effectiveCodeSource(v: Pick<ExternalSettingsValue, "external_url" | "canvas_quiz_type" | "canvas_code_source">): CanvasCodeSource {
-  if (effectiveQuizType(v) === "new") return "manual";
+  if (effectiveQuizType(v) !== "classic") return "manual";
   return v.canvas_code_source ?? "managed";
 }
 
@@ -341,6 +381,7 @@ export function validateCanvasCode(v: ExternalSettingsValue): string | null {
   if (!code.trim()) return v.canvas_code_stored && !code ? null : "Type the access code you set in Canvas.";
   if (code.length < CANVAS_CODE_MIN || code.length > CANVAS_CODE_MAX)
     return `The code must be ${CANVAS_CODE_MIN} to ${CANVAS_CODE_MAX} characters.`;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(code)) return "The code can only use letters, numbers, symbols and spaces.";
   return null;
 }
 
@@ -356,12 +397,34 @@ export const FINISH_REGEX_RULE =
   "Leave empty for the pattern above, or write a plain pattern of up to 300 characters with no look-ahead, look-behind, back-references or named groups, and no repeated group that contains a choice (|), another repeat or another group.";
 
 export const MAX_REPEAT_COUNT = 100;
-export const MAX_UNBOUNDED_QUANTIFIERS = 8;
+export const MAX_UNBOUNDED_QUANTIFIERS = 2;
+
+type RegexAtom = { kind: "lit"; ch: string } | { kind: "cls"; ch: "d" | "w" | "s" } | { kind: "any" };
+
+function escapeAtom(ch: string): RegexAtom {
+  if (ch === "d" || ch === "w" || ch === "s") return { kind: "cls", ch };
+  if ("DWSbB".includes(ch)) return { kind: "any" };
+  return { kind: "lit", ch };
+}
+
+const CLASS_TESTS: Record<"d" | "w" | "s", RegExp> = { d: /^[0-9]$/, w: /^[A-Za-z0-9_]$/, s: /^[ \t\n\r\f\v]$/ };
+
+/** Same rule as the server: only single literals and \d, \w, \s can be told apart. */
+function atomsOverlap(a: RegexAtom, b: RegexAtom): boolean {
+  if (a.kind === "any" || b.kind === "any") return true;
+  if (a.kind === "lit" && b.kind === "lit") return a.ch.toLowerCase() === b.ch.toLowerCase();
+  if (a.kind === "cls" && b.kind === "cls") return a.ch === b.ch || (a.ch !== "s" && b.ch !== "s");
+  const lit = (a.kind === "lit" ? a : b) as { kind: "lit"; ch: string };
+  const cls = (a.kind === "cls" ? a : b) as { kind: "cls"; ch: "d" | "w" | "s" };
+  if (!/^[\x00-\x7f]$/.test(lit.ch)) return true;
+  return CLASS_TESTS[cls.ch].test(lit.ch);
+}
 
 interface GroupFrame {
   alt: boolean;
   quant: boolean;
   nested: boolean;
+  before: RegexAtom | null;
 }
 
 /**
@@ -377,6 +440,14 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
   let unbounded = 0;
   let prevQuant = false;
   let lastClosed: GroupFrame | null = null;
+  let pending: RegexAtom | null = null;
+  let cur: RegexAtom = { kind: "any" };
+  let curPrev: RegexAtom | null = null;
+  const takeAtom = (a: RegexAtom) => {
+    curPrev = pending;
+    cur = a;
+    pending = null;
+  };
   let i = 0;
   while (i < n) {
     const c = p[i]!;
@@ -384,6 +455,7 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       const nx = p[i + 1];
       if (nx === undefined) return "The pattern ends with a lone backslash.";
       if (/[1-9kg]/.test(nx)) return "Back-references are not supported.";
+      takeAtom(escapeAtom(nx));
       i += 2;
       prevQuant = false;
       lastClosed = null;
@@ -396,6 +468,7 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       while (j < n && p[j] !== "]") j += p[j] === "\\" ? 2 : 1;
       if (j >= n) return "A [ in the pattern is not closed.";
       i = j + 1;
+      takeAtom({ kind: "any" });
       prevQuant = false;
       lastClosed = null;
       continue;
@@ -404,6 +477,7 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       const flags = i === 0 ? /^\(\?[ims]+\)/.exec(p) : null;
       if (flags) {
         i += flags[0].length;
+        pending = null;
         prevQuant = false;
         lastClosed = null;
         continue;
@@ -421,7 +495,8 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       }
       const parentFrame = stack[stack.length - 1];
       if (parentFrame) parentFrame.nested = true;
-      stack.push({ alt: false, quant: false, nested: false });
+      stack.push({ alt: false, quant: false, nested: false, before: pending });
+      pending = null;
       prevQuant = false;
       lastClosed = null;
       continue;
@@ -435,6 +510,9 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
         parent.quant = parent.quant || frame.quant;
       }
       lastClosed = frame;
+      curPrev = frame.before;
+      cur = { kind: "any" };
+      pending = pending ? { kind: "any" } : null;
       prevQuant = false;
       i += 1;
       continue;
@@ -442,6 +520,7 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
     if (c === "|") {
       const top = stack[stack.length - 1];
       if (top) top.alt = true;
+      pending = null;
       i += 1;
       prevQuant = false;
       lastClosed = null;
@@ -480,8 +559,13 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       }
       if ((repeats || c === "{") && lastClosed && (lastClosed.alt || lastClosed.quant || lastClosed.nested))
         return "A group that is repeated cannot contain a choice (|), another repeat or another group.";
-      if (open && ++unbounded > MAX_UNBOUNDED_QUANTIFIERS)
-        return `Use at most ${MAX_UNBOUNDED_QUANTIFIERS} open-ended repeats (*, + or {n,}).`;
+      if (open) {
+        if (++unbounded > MAX_UNBOUNDED_QUANTIFIERS)
+          return `Use at most ${MAX_UNBOUNDED_QUANTIFIERS} open-ended repeats (*, + or {n,}).`;
+        if (curPrev && atomsOverlap(curPrev, cur))
+          return "Two repeats in a row that can match the same characters (like .*.* or \\w+\\w+) are not supported.";
+        pending = cur;
+      }
       const top = stack[stack.length - 1];
       if (top && repeats) top.quant = true;
       i = end;
@@ -489,6 +573,7 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
       lastClosed = null;
       continue;
     }
+    takeAtom(c === "." ? { kind: "any" } : c === "^" || c === "$" ? { kind: "any" } : { kind: "lit", ch: c });
     i += 1;
     prevQuant = false;
     lastClosed = null;

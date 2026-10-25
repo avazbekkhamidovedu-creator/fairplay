@@ -72,6 +72,8 @@ class Exam(Base):
                                                         server_default=false())
     canvas_removed_hosts: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
                                                        server_default=text("'[]'"))
+    canvas_open_book: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                   server_default=false())
     canvas_open_claim: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 2026-10-14: apps the teacher allows during the exam (keys of allowed_apps.CATALOG);
     # every other windowed app is closed when the computer locks.

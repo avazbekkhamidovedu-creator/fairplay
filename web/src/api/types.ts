@@ -12,10 +12,29 @@ export type CanvasQuizType = "classic" | "new" | "assignment";
 export type CanvasCodeSource = "managed" | "manual";
 export type CanvasCodeStatus = "set" | "not_set" | "failed";
 
+/** The course and item a Canvas exam link points at (derived by the server from the link). */
+export interface CanvasScope {
+  course_id: string;
+  item_kind: "quizzes" | "assignments";
+  item_id: string;
+}
+
+/** CanvasScope plus the teacher's open-book choice, as the app receives it. */
+export interface CanvasScopeView extends CanvasScope {
+  open_book: boolean;
+}
+
 /** Canvas settings as the server returns them. The access code is never returned. */
 export interface CanvasInfo {
   quiz_type: CanvasQuizType;
   access_code_source: CanvasCodeSource;
+  /** null when the link is not a plain quiz or assignment link. */
+  scope?: CanvasScope | null;
+  /** Students may also open the course's pages, modules and files. */
+  open_book?: boolean;
+  /** Teacher view: sign-in sites the teacher removed, and the sites the server adds by default. */
+  removed_hosts?: string[];
+  sign_in_hosts?: string[];
   code_status?: CanvasCodeStatus;
   /** Teacher view after the exam closed: the server could not clear the code in Canvas. */
   remove_code_in_canvas?: boolean;
@@ -28,6 +47,7 @@ export interface CanvasInput {
   access_code?: string;
   /** Automatic sign-in sites the teacher removed. */
   removed_hosts?: string[];
+  open_book?: boolean;
 }
 
 /** Slice 3 exam fields (external-website exams). null/[] when mode is "questions". */
@@ -569,6 +589,8 @@ export interface AttemptView {
   finish_url_contains?: string | null;
   external_kind?: ExternalKind | null;
   canvas?: CanvasInfo | null;
+  /** Canvas exams: where the app may go in Canvas; null when the link has no course and item. */
+  canvas_scope?: CanvasScopeView | null;
   finish_url_regex?: string | null;
   /** Only in the POST start response: the app session (X-FairPlay-Session). */
   session?: string;

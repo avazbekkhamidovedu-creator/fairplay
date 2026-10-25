@@ -72,7 +72,7 @@ Phase LOBBY (before the quiz page `/courses/C/K/I/take` or, for assignments, bef
 - everything else blocked.
 
 Phase QUIZ (after the first main-frame load of `/courses/C/K/I/take` (classic) or of any `/courses/C/assignments/I...` page (new quizzes/assignments)):
-- allowed: `/courses/C/K/I`, `/courses/C/K/I/**`, plus sign-in hosts for session renewal and the quiz-lti hosts.
+- allowed: `/courses/C/K/I`, `/courses/C/K/I/**`, `/login` and `/login/**` on the exam host (session renewal), plus sign-in hosts and the quiz-lti hosts.
 - if `open_book`: also `/courses/C/pages/**`, `/courses/C/modules/**`, `/courses/C/files/**`, `/courses/C/wiki/**`, `/files/**` (downloads stay blocked).
 - everything else blocked.
 

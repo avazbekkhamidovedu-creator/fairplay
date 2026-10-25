@@ -5,6 +5,8 @@ Each function checks the exam's state, commits, and drops the caches it changed;
 permission checks stay with the caller."""
 from __future__ import annotations
 
+import asyncio
+
 from datetime import timedelta
 
 from fastapi import HTTPException
@@ -83,9 +85,9 @@ async def open_exam(session: AsyncSession, e: Exam, open_to="all",
     e.updated_at = now
     try:
         await session.commit()
-    except Exception:
+    except BaseException:
         if canvas:
-            await canvas_mode.abort_open(session, e, failed=True)
+            await asyncio.shield(canvas_mode.undo_open(session, e))
         raise
     await invalidate_exam(get_store(), e.id)
 

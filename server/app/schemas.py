@@ -505,6 +505,7 @@ class CanvasIn(BaseModel):
     access_code_source: Literal["managed", "manual"] = "managed"
     access_code: str | None = Field(default=None, max_length=64)
     removed_hosts: list[str] = Field(default_factory=list, max_length=MAX_ALLOWED_DOMAINS)
+    open_book: bool = False
 
     @field_validator("removed_hosts")
     @classmethod
@@ -685,6 +686,10 @@ class ExamIn(BaseModel):
             return
         if not cm.is_https(url):
             raise ValueError("a Canvas exam link must start with https://")
+        if not cm.clean_url(url):
+            raise ValueError(cm.UNCLEAN_URL_MESSAGE)
+        if cm.scope_of(url) is None:
+            raise ValueError(cm.NO_SCOPE_MESSAGE)
         if self.canvas is None:
             return
         c = self.canvas

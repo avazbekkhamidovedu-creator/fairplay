@@ -7,7 +7,7 @@ import time
 
 import config as C
 
-HOSTS = [C.CANVAS_HOST, C.SSO_HOST, C.OTHER_HOST]
+HOSTS = [C.CANVAS_HOST, C.SSO_HOST, C.OTHER_HOST, C.GO_HOST, C.SAML_HOST]
 RESOLVER_RULES = ", ".join(f"MAP {h} 127.0.0.1" for h in HOSTS)
 
 

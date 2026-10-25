@@ -18,14 +18,35 @@ import browsers  # noqa: E402
 import engine_suite  # noqa: E402
 import phase_abuse  # noqa: E402
 import phase_manual  # noqa: E402
+import phase_restricted  # noqa: E402
 import phase_student  # noqa: E402
 import phase_ui  # noqa: E402
+import policy_tables  # noqa: E402
 import standin as S  # noqa: E402
 from lib import RESULTS, Services, check, fake, fake_state, note, section, write_results  # noqa: E402
 
 SHOTS = os.path.join(C.SCRATCH, "shots")
 ENGINES = os.environ.get("CANVAS_E2E_ENGINES", "chromium,webkit").split(",")
 ALL_CODES: set[str] = set()
+ONLY = os.environ.get("CANVAS_E2E_ONLY", "")
+
+
+def hand_in_chromium(page, aid):
+    page.goto(f"{C.SERVER}/student/external-done/{aid}?reason=finish_url")
+    try:
+        page.wait_for_url(re.compile(r".*/student/done/.+"), timeout=15000)
+        ok = True
+    except Exception:
+        ok = False
+    page.wait_for_timeout(1000)
+    check("[restricted] hand-in through external-done reached the receipt page and the app unlocked",
+          ok and page.evaluate("window.__fp.unlockedAfterSubmit === true"))
+
+
+def hand_in_webkit(msg):
+    s_, r_ = S.jhttp("POST", f"/api/student/attempts/{msg['attempt_id']}/submit", {"answers": {}, "client_seq": 0},
+                     msg["token"], {"X-FairPlay-Session": msg["session"]})
+    check("[restricted] hand-in of the finished attempt through the submit endpoint", s_ == 200, f"{s_} {r_}")
 
 
 def db_code_state(exam_id):
@@ -48,6 +69,7 @@ def open_msg_from_view(token, session, aid, device):
 
 def main():
     os.makedirs(SHOTS, exist_ok=True)
+    policy_tables.run()
     sv = Services()
     from playwright.sync_api import sync_playwright
     try:
@@ -72,9 +94,19 @@ def main():
             dbrow = db_code_state(exam_id)
             check("the stored code at rest is encrypted (not the plain code)", dbrow[0] and ex["code"] not in str(dbrow[0]) and dbrow[2] in ("live", "open"), str(dbrow[1:]))
 
+            if ONLY == "restricted":
+                S.jhttp("POST", f"/api/exams/{exam_id}/close", None, ttok)
+                phase_restricted.run(pw, ui, ex["page"], ttok, SHOTS, ENGINES, hand_in_chromium, hand_in_webkit)
+                ALL_CODES.update(phase_restricted.ALL_CODES)
+                log = sv.server_log()
+                section("8j. Leak scan")
+                check("no access code of the restricted-browser exams in the server log",
+                      all(c not in log for c in phase_restricted.ALL_CODES if c))
+                raise SystemExit(finish_run(sv))
+
             # class membership for the burst users
             s, cls = S.jhttp("POST", f"/api/classes/{ex['class_id']}/members",
-                             {"usernames": [f"lt{i:04d}" for i in range(1, C.LOADTEST_USERS + 1)]}, ttok)
+                             {"usernames": [f"lt{i:04d}" for i in range(1, C.BURST_USERS + 1)]}, ttok)
             check("152 load-test students added to the class", s in (200, 201), f"{s}")
 
             # ---------------- 4. student app stand-in, Chromium
@@ -194,6 +226,9 @@ def main():
 
             ALL_CODES.add(phase_manual.run(ex["page"], pw, ex["class_id"], ttok, db_code_state))
 
+            phase_restricted.run(pw, ui, ex["page"], ttok, SHOTS, ENGINES, hand_in_chromium, hand_in_webkit)
+            ALL_CODES.update(phase_restricted.ALL_CODES)
+
             # ---------------- leak scan
             section("5d. The code is nowhere it should not be")
             log = sv.server_log()
@@ -202,6 +237,7 @@ def main():
             s, res = S.jhttp("GET", f"/api/exams/{exam_id}/results", token=ttok)
             blob = json.dumps(res)
             check("no access code in the results/events the teacher can read", all(c not in blob for c in ALL_CODES if c))
+            check("the leak scan also covers the restricted-browser exams' codes", len(phase_restricted.ALL_CODES) >= 2)
             for c in ALL_CODES:
                 if c:
                     pass
@@ -242,12 +278,21 @@ def main():
     finally:
         write_results(os.path.join(C.SCRATCH, "results.json"))
         sv.stop()
+    sys.exit(report())
+
+
+def finish_run(sv):
+    write_results(os.path.join(C.SCRATCH, "results.json"))
+    return report()
+
+
+def report():
     fails = [r for r in RESULTS if r["ok"] is False]
     passed = [r for r in RESULTS if r["ok"] is True]
     print(f"\n{len(passed)} passed, {len(fails)} failed")
     for r in fails:
         print("FAILED:", r["section"], "|", r["name"], "|", r["detail"])
-    sys.exit(1 if fails else 0)
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":
