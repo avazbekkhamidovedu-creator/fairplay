@@ -39,7 +39,7 @@ MAX_QUANTIFIERS = 16
 
 ENV_SSO_HOSTS = "FAIRPLAY_CANVAS_SSO_HOSTS"
 DEFAULT_SSO_HOSTS = ("*.duosecurity.com", "login.microsoftonline.com", "login.microsoft.com",
-                     "sso.dukekunshan.edu.cn")
+                     "shib.oit.duke.edu", "go.canvas.duke.edu", "sso.canvaslms.com")
 QUIZ_LTI_REGIONS = ("iad", "pdx", "dub", "fra", "sin", "syd", "yul")
 
 DEFAULT_FINISH = {

@@ -279,7 +279,7 @@ describe("Canvas form details", () => {
       external_url: CLASSIC,
       external_kind: "canvas",
       canvas: { quiz_type: "classic", access_code_source: "managed" },
-      allowed_domains: ["canvas.dku.edu", "*.duosecurity.com", "sso.dukekunshan.edu.cn", "extra.example.org"],
+      allowed_domains: ["canvas.dku.edu", "*.duosecurity.com", "shib.oit.duke.edu", "extra.example.org"],
     });
     expect(v.allowed_domains).toEqual(["extra.example.org"]);
     expect(isAutoCanvasHost("*.quiz-lti-iad-prod.instructure.com", CLASSIC)).toBe(true);

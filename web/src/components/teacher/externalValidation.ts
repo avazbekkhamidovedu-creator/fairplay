@@ -279,7 +279,9 @@ export const CANVAS_SIGN_IN_HOSTS = [
   "*.duosecurity.com",
   "login.microsoftonline.com",
   "login.microsoft.com",
-  "sso.dukekunshan.edu.cn",
+  "shib.oit.duke.edu",
+  "go.canvas.duke.edu",
+  "sso.canvaslms.com",
 ];
 
 const QUIZ_LTI_HOST = /^\*\.quiz-lti-[a-z0-9-]+-prod\.instructure\.com$/;
