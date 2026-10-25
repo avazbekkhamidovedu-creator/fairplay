@@ -103,12 +103,16 @@ import JavaScriptCore
 
     @Test func fillBudgetStopsAtThree() {
         var b = CanvasFillBudget()
-        #expect(b.take())
-        #expect(b.take())
+        let first = b.take()
+        let second = b.take()
+        #expect(first)
+        #expect(second)
         #expect(!b.exhausted)
-        #expect(b.take())
+        let third = b.take()
+        #expect(third)
         #expect(b.exhausted)
-        #expect(!b.take())
+        let fourth = b.take()
+        #expect(!fourth)
         #expect(b.used == 3)
     }
 
