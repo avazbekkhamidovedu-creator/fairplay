@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { CanvasExamInfo } from "../../components/teacher/CanvasExamInfo";
 import { describeEntry, effectiveAllowedSites } from "../../components/teacher/externalValidation";
 import type { Exam } from "../../api/types";
 import { KIND_LABEL, kindOf } from "./examDraft";
@@ -18,7 +19,8 @@ export function QuestionsView({ exam }: { exam: Exam }) {
     const sites = exam.allowed_domains ?? [];
     return (
       <section className="t-card" aria-labelledby="qv-h" style={{ gap: 14 }}>
-        <h2 id="qv-h">Exam website</h2>
+        <h2 id="qv-h">{exam.external_kind === "canvas" ? "Canvas quiz" : "Exam website"}</h2>
+        <CanvasExamInfo exam={exam} />
         <p style={{ margin: 0 }}>
           Students answer on{" "}
           <a href={exam.external_url ?? undefined} target="_blank" rel="noreferrer">
@@ -35,7 +37,9 @@ export function QuestionsView({ exam }: { exam: Exam }) {
           </ul>
         </div>
         <p className="t-small t-muted" style={{ margin: 0 }}>
-          {exam.finish_url_contains
+          {!exam.finish_url_contains && exam.external_kind === "canvas" && exam.finish_url_regex
+            ? "The exam finishes by itself when Canvas shows its submitted page. Students can also press Finish exam."
+            : exam.finish_url_contains
             ? `The exam finishes by itself when the page address contains "${exam.finish_url_contains}". Students can also press Finish exam.`
             : "Students press Finish exam in the app when they are done."}
         </p>

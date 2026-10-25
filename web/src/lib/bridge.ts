@@ -85,6 +85,9 @@ export interface OpenExternalParams {
   url: string;
   allowed_domains: string[];
   finish_url_contains: string | null;
+  /** Canvas mode: "canvas" makes the app fill the access code itself. */
+  kind?: "canvas";
+  finish_url_regex?: string | null;
   deadline_at: string;
   server_time: string;
   title: string;
@@ -363,6 +366,7 @@ export function openExternal(params: OpenExternalParams): boolean {
     url: params.url,
     allowed_domains: [...params.allowed_domains],
     finish_url_contains: params.finish_url_contains ?? null,
+    ...(params.kind === "canvas" ? { kind: "canvas" as const, finish_url_regex: params.finish_url_regex ?? null } : {}),
     deadline_at: params.deadline_at,
     server_time: params.server_time,
     title: params.title,

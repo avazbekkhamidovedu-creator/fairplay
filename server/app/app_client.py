@@ -69,6 +69,8 @@ CLIENT_EVENT_TYPES = frozenset({
     "jailbreak_detected", "debugger_attached", "assessment_interrupted", "assessment_resumed",
     "assessment_unavailable", "keyboard_connected", "screen_locked", "single_app_on",
     "single_app_off", "vpn_on", "proxy_on",
+    # Canvas mode (2026-10-25)
+    "canvas_code_failed", "canvas_upload_unsupported", "canvas_sso_popup",
 })
 SERVER_EVENT_TYPES = frozenset({
     "second_device", "foreign_session", "re_entry", "app_gap", "no_app_signal",
@@ -79,6 +81,7 @@ SERVER_EVENT_TYPES = frozenset({
     # S1-S6 (2026-10-20)
     "sealed_submit", "resume_requested", "resume_approved", "swap_requested", "swap_approved",
     "weak_lock",
+    "canvas_code_issued", "canvas_code_refused",
     "external_delivery_failed",   # integrations: the answers could not be sent to the external system
 })
 
@@ -93,7 +96,8 @@ def sign(key: str, message: str) -> str:
 
 
 def verify(settings: Settings, message: str, signature: str) -> bool:
-    return any(hmac.compare_digest(sign(k, message), signature) for k in settings.app_keys)
+    given = (signature or "").encode("utf-8", "replace")
+    return any(hmac.compare_digest(sign(k, message).encode(), given) for k in settings.app_keys)
 
 
 def start_message(nonce: str, device_id: str) -> str:
@@ -211,6 +215,10 @@ def ipad_lock_held(checks: dict[str, str], dev: bool) -> bool:
     if checks.get("aac") == "1" or checks.get("sam") == "1":
         return True
     return dev and checks.get("soft") == "1"
+
+
+def canvas_code_message(aid: str, session: str, device_id: str, ts: int) -> str:
+    return f"canvascode|{aid}|{session}|{device_id}|{ts}"
 
 
 def beat_message(aid: str, session: str, device_id: str, ts: int, locked: bool, checks: str) -> str:

@@ -62,6 +62,8 @@ final class ExternalExamController {
         let title: String
         let token: String
         let appSession: String
+        let canvas: Bool
+        let finishRegex: NSRegularExpression?
     }
 
     private(set) var session: Session?
@@ -81,6 +83,12 @@ final class ExternalExamController {
     private var pendingEvents: [[String: Any]] = []
     private var sendingEvents = false
     private var finishing = false
+    private var canvasFills = CanvasFillBudget()
+    private var canvasBusy = false
+    private var canvasHelpShown = false
+    private var finishWork: DispatchWorkItem?
+    private var popupView: WKWebView?
+    private var popupClose: NSButton?
 
     static let stripHeight: CGFloat = 52
 
@@ -128,9 +136,16 @@ final class ExternalExamController {
             return "bad_request"
         }
         var rules = ((body["allowed_domains"] as? [Any]) ?? []).compactMap { ($0 as? String).flatMap(SiteRule.init) }
-        // The server always sends an entry for the exam address; if a (stale) page did not,
-        // allow exactly the start page's host + folder, never the whole domain tree.
-        if !rules.contains(where: { $0.matches(host: startHost, path: url.path) }) {
+        let isCanvas = (body["kind"] as? String) == "canvas"
+        if isCanvas {
+            // Login redirects on the exam host leave the quiz folder: allow the plain host, exact.
+            if !rules.contains(where: { !$0.wildcard && $0.host == startHost && $0.pathPrefix.isEmpty }),
+               let r = SiteRule(startHost) {
+                rules.append(r)
+            }
+        } else if !rules.contains(where: { $0.matches(host: startHost, path: url.path) }) {
+            // The server always sends an entry for the exam address; if a (stale) page did not,
+            // allow exactly the start page's host + folder, never the whole domain tree.
             let folder = url.path.contains("/") ? String(url.path[...url.path.lastIndex(of: "/")!]) : ""
             if let r = SiteRule(startHost + folder) { rules.append(r) }
         }
@@ -141,13 +156,20 @@ final class ExternalExamController {
             ?? Date().addingTimeInterval(3600)
         let title = (body["title"] as? String) ?? "Exam"
         let appSession = (body["session"] as? String) ?? ""
+        if isCanvas && url.scheme?.lowercased() != "https" { return "bad_request" }
+        let regex = isCanvas ? CanvasFinish.compile(body["finish_url_regex"] as? String) : nil
 
         stopTimers()
+        finishWork?.cancel(); finishWork = nil
+        closePopup()
         finishing = false
+        canvasFills = CanvasFillBudget()
+        canvasBusy = false
+        canvasHelpShown = false
         session = Session(attemptId: aid, startURL: url, rules: rules, finishContains: finish,
                           deadline: deadline, clockOffset: offset, title: title, token: token,
-                          appSession: appSession)
-        DebugLog.log("external", "website exam start: \(url.host ?? "?") rules=\(rules.count) finish=\(finish ?? "-")")
+                          appSession: appSession, canvas: isCanvas, finishRegex: regex)
+        DebugLog.log("external", "website exam start: \(url.host ?? "?") rules=\(rules.count) finish=\(finish ?? "-") canvas=\(isCanvas) regex=\(regex != nil)")
         showStrip(title: title)
         startTimers()
         observeURL()
@@ -161,18 +183,42 @@ final class ExternalExamController {
         guard let session, let host = url.host?.lowercased(), ExternalExamController.schemeOK(url) else {
             return false
         }
+        if session.canvas { return CanvasPolicy.allows(url, rules: session.rules) }
         return session.rules.contains { $0.matches(host: host, path: url.path) }
     }
 
     /// Call for every allowed main-frame navigation and URL change.
     func checkFinishURL(_ url: URL?) {
-        guard let session, !finishing, let needle = session.finishContains, let url else { return }
-        if url.absoluteString.contains(needle) {
+        guard let session, !finishing, let url else { return }
+        guard finishHit(url, session: session) else { return }
+        if !session.canvas {
             // Give the site a moment to show its own "submitted" confirmation.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 self?.finish(reason: "finish_url")
             }
+            return
         }
+        guard finishWork == nil else { return }
+        let aid = session.attemptId
+        // Give the site a moment to show its own "submitted" confirmation, then check again
+        // that the same exam is still on a finish page.
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.finishWork = nil
+            guard let current = self.session, current.attemptId == aid, !self.finishing,
+                  let live = self.webView?.url, self.finishHit(live, session: current) else { return }
+            self.finish(reason: "finish_url")
+        }
+        finishWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    private func finishHit(_ url: URL, session: Session) -> Bool {
+        if session.canvas {
+            return CanvasFinish.matches(url, contains: session.finishContains, regex: session.finishRegex)
+        }
+        if let needle = session.finishContains { return url.absoluteString.contains(needle) }
+        return false
     }
 
     // MARK: - Events (the JS page is gone while external)
@@ -286,23 +332,31 @@ final class ExternalExamController {
         post(path: "api/student/attempts/\(session.attemptId)/events", session: session,
              body: ["events": batch]) { _, _ in }
         let aid = session.attemptId
+        let wasCanvas = session.canvas
+        let canvasRules = session.rules
         teardown()
         var comps = URLComponents(url: server.appendingPathComponent("student/external-done/\(aid)"),
                                   resolvingAgainstBaseURL: false)
         comps?.queryItems = [URLQueryItem(name: "reason", value: reason)]
         if let url = comps?.url { webView?.load(URLRequest(url: url)) }
+        if wasCanvas { clearCanvasData(rules: canvasRules) }
     }
 
     /// Leave external mode without submitting (emergency exit / safety unlock).
     func abort() {
         guard isActive else { return }
         DebugLog.log("external", "aborted (emergency exit / safety unlock)")
+        let wasCanvas = session?.canvas == true
+        let canvasRules = session?.rules ?? []
         teardown()
+        if wasCanvas { clearCanvasData(rules: canvasRules) }
         webView?.load(URLRequest(url: server.appendingPathComponent("student")))
     }
 
     private func teardown() {
         stopTimers()
+        finishWork?.cancel(); finishWork = nil
+        closePopup()
         urlObservation?.invalidate(); urlObservation = nil
         hideStrip()
         session = nil
@@ -314,6 +368,181 @@ final class ExternalExamController {
         urlObservation = webView?.observe(\.url, options: [.new]) { [weak self] wv, _ in
             let url = wv.url
             DispatchQueue.main.async { self?.checkFinishURL(url) }
+        }
+    }
+
+    // MARK: - Canvas mode
+
+    var isCanvas: Bool { session?.canvas == true }
+
+    func childAllows(_ url: URL) -> Bool {
+        isCanvas && (CanvasPolicy.isBlank(url) || allows(url))
+    }
+
+    func popupPlan(url: URL?, openerHost: String?) -> CanvasPopup.Plan {
+        guard let session, session.canvas else { return .block }
+        var survives = false
+        if #unavailable(macOS 14.4) { survives = true }
+        return CanvasPopup.plan(url: url, openerHost: openerHost, rules: session.rules,
+                                openerSurvivesCrossOrigin: survives)
+    }
+
+    func makePopup(configuration: WKWebViewConfiguration) -> WKWebView? {
+        guard isCanvas, let container, let webView else { return nil }
+        if popupView != nil {
+            EventLog.shared.record(.blockedNavigation("second popup"))
+            return nil
+        }
+        let ucc = WKUserContentController()
+        ucc.addUserScript(WKUserScript(source: CanvasScripts.popupGuard, injectionTime: .atDocumentStart,
+                                       forMainFrameOnly: false))
+        configuration.userContentController = ucc
+        let child = ExamWebView(frame: webView.frame, configuration: configuration)
+        child.autoresizingMask = [.width, .height]
+        child.navigationDelegate = webView.navigationDelegate
+        child.uiDelegate = webView.uiDelegate
+        child.allowsBackForwardNavigationGestures = false
+        child.allowsMagnification = false
+        child.allowsLinkPreview = false
+        container.addSubview(child, positioned: .above, relativeTo: webView)
+        let button = NSButton(title: "Close sign-in window", target: self, action: #selector(closePopupPressed))
+        button.bezelStyle = .rounded
+        button.sizeToFit()
+        button.frame.origin = NSPoint(x: child.frame.maxX - button.frame.width - 12,
+                                      y: child.frame.maxY - button.frame.height - 12)
+        button.autoresizingMask = [.minXMargin, .minYMargin]
+        container.addSubview(button, positioned: .above, relativeTo: child)
+        popupView = child
+        popupClose = button
+        return child
+    }
+
+    @objc private func closePopupPressed() { closePopup() }
+
+    func closePopup(ifView view: WKWebView? = nil) {
+        if let view, view !== popupView { return }
+        popupView?.stopLoading()
+        popupView?.navigationDelegate = nil
+        popupView?.uiDelegate = nil
+        popupView?.removeFromSuperview()
+        popupClose?.removeFromSuperview()
+        popupView = nil
+        popupClose = nil
+    }
+
+    func isPopup(_ view: WKWebView) -> Bool { popupView != nil && view === popupView }
+
+    private func canvasOrigin(_ view: WKWebView?, session: Session) -> String? {
+        guard let url = view?.url else { return nil }
+        return CanvasPolicy.fillOrigin(page: url, start: session.startURL)
+    }
+
+    func canvasPageLoaded(_ view: WKWebView) {
+        guard let session, session.canvas, !finishing, !canvasBusy,
+              canvasOrigin(view, session: session) != nil else { return }
+        canvasBusy = true
+        view.evaluateJavaScript(CanvasScripts.probe, in: nil, in: .defaultClient) { [weak self, weak view] (result: Result<Any, Error>) in
+            guard let self else { return }
+            var found = false
+            if case .success(let value) = result { found = (value as? Bool) == true }
+            self.canvasProbed(found: found, view: view)
+        }
+    }
+
+    private func canvasProbed(found: Bool, view: WKWebView?) {
+        guard found, let session, !finishing, let view, canvasOrigin(view, session: session) != nil else {
+            canvasBusy = false
+            return
+        }
+        guard !canvasFills.exhausted else {
+            canvasBusy = false
+            canvasFailed("fill limit reached")
+            return
+        }
+        requestCanvasCode(attemptId: session.attemptId, view: view, retries: 0)
+    }
+
+    /// A 429 can be left over from an earlier run of this attempt (resume): up to three more tries,
+    /// each after the server's Retry-After, before the student is told to ask for help.
+    private func requestCanvasCode(attemptId: String, view: WKWebView, retries: Int) {
+        guard let session, session.attemptId == attemptId, !finishing else { canvasBusy = false; return }
+        fetchCanvasCode(session: session) { [weak self, weak view] code, status, retryAfter in
+            guard let self else { return }
+            guard let current = self.session, current.attemptId == attemptId, current.canvas, !self.finishing else {
+                self.canvasBusy = false
+                return
+            }
+            guard let code else {
+                if status == 429, retries < CanvasRetry.maxRetries {
+                    let wait = CanvasRetry.delay(retryAfter: retryAfter)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak view] in
+                        guard let self else { return }
+                        guard let view, self.canvasOrigin(view, session: current) != nil else {
+                            self.canvasBusy = false
+                            return
+                        }
+                        self.requestCanvasCode(attemptId: attemptId, view: view, retries: retries + 1)
+                    }
+                    return
+                }
+                self.canvasBusy = false
+                self.canvasFailed("code unavailable")
+                return
+            }
+            guard let view, let origin = self.canvasOrigin(view, session: current),
+                  self.canvasFills.take() else {
+                self.canvasBusy = false
+                return
+            }
+            DebugLog.log("external", "canvas access code fill \(self.canvasFills.used)")
+            let script = CanvasScripts.fill(code: code, origin: origin)
+            view.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] (result: Result<Any, Error>) in
+                guard let self else { return }
+                self.canvasBusy = false
+                var outcome = "none"
+                if case .success(let value) = result, let text = value as? String { outcome = text }
+                if outcome != "clicked" { self.canvasFailed("fill \(outcome)") }
+            }
+        }
+    }
+
+    private func fetchCanvasCode(session: Session, completion: @escaping (String?, Int?, String?) -> Void) {
+        let ts = Int64(Date().timeIntervalSince1970 * 1000)
+        let body = CanvasProof.body(attemptId: session.attemptId, session: session.appSession,
+                                    deviceId: AppSession.shared.deviceId, ts: ts, sign: AppSession.sign)
+        Net.requestWithRetryAfter("POST", path: "api/student/attempts/\(session.attemptId)/canvas-code",
+                                  token: session.token,
+                                  appSession: session.appSession.isEmpty ? nil : session.appSession,
+                                  body: body) { status, json, retryAfter in
+            completion(CanvasProof.parseCode(status: status, json: json), status, retryAfter)
+        }
+    }
+
+    private func canvasFailed(_ reason: String) {
+        EventLog.shared.record(.canvasCodeFailed(reason))
+        guard !canvasHelpShown else { return }
+        canvasHelpShown = true
+        guard let window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Ask your teacher for help"
+        alert.informativeText = "FairPlay could not enter the access code for this quiz."
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window, completionHandler: nil)
+    }
+
+    private func clearCanvasData(rules: [SiteRule]) {
+        let store = WKWebsiteDataStore.default()
+        let serverHost = (server.host ?? "").lowercased()
+        let ruleHosts = rules.map { $0.host }
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        store.fetchDataRecords(ofTypes: types) { records in
+            let others = records.filter {
+                CanvasData.shouldRemove(domain: $0.displayName, serverHost: serverHost, ruleHosts: ruleHosts)
+            }
+            guard !others.isEmpty else { return }
+            store.removeData(ofTypes: types, for: others) {
+                DebugLog.log("external", "canvas web data cleared: \(others.count) site(s)")
+            }
         }
     }
 
@@ -377,11 +606,15 @@ final class ExternalExamController {
         var f = b
         f.size.height = max(0, b.height - h)
         webView.frame = f
+        popupView?.frame = f
     }
 
     private func hideStrip() {
         strip?.removeFromSuperview()
         strip = nil; titleLabel = nil; timeLabel = nil
-        if let container, let webView { webView.frame = container.bounds }
+        if let container, let webView {
+            webView.frame = container.bounds
+            popupView?.frame = container.bounds
+        }
     }
 }

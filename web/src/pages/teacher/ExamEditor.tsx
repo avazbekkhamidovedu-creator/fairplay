@@ -73,6 +73,19 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
     if (!exam && fromClass && /^\d+$/.test(fromClass)) d.classId = fromClass;
     return d;
   });
+  const [canvasLinked, setCanvasLinked] = useState<boolean | null>(null);
+  const canvasChosen = draft.external.mode === "external" && draft.external.external_kind === "canvas";
+  useEffect(() => {
+    if (!canvasChosen) return;
+    let alive = true;
+    lmsApi
+      .connections()
+      .then((list) => alive && setCanvasLinked(list.some((c) => c.provider === "canvas")))
+      .catch(() => alive && setCanvasLinked(null));
+    return () => {
+      alive = false;
+    };
+  }, [canvasChosen]);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState<null | "save" | "open">(null);
@@ -445,6 +458,7 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
               delivery={draft.delivery}
               onDeliveryChange={(delivery) => set({ delivery })}
               allowPaper={features.has("scan")}
+              canvasLinked={canvasLinked}
             />
             {draft.external.mode === "external" && (
               <div className="t-field" style={{ maxWidth: 260 }}>

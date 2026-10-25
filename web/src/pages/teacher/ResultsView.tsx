@@ -10,6 +10,7 @@ import { SendGradesButton } from "../../components/teacher/lms/SendGradesButton"
 import { errorText, eventLabel, formatWhen, num, pct, plural } from "../../components/teacher/util";
 import { formatClock } from "../../lib/timer";
 import { KIND_LABEL, kindOf } from "./examDraft";
+import { CanvasExamInfo } from "../../components/teacher/CanvasExamInfo";
 import { ExternalResults } from "../../components/teacher/ExternalSource";
 import { isCodeAnswer } from "../../lib/answerTypes";
 
@@ -132,6 +133,11 @@ export function ResultsView({ exam, onExamChange }: { exam: Exam; onExamChange: 
 
   return (
     <>
+      {exam.external_kind === "canvas" && (
+        <section className="t-card" aria-label="Canvas exam">
+          <CanvasExamInfo exam={exam} />
+        </section>
+      )}
       <section className="t-results-bar" aria-label="Grades">
         <div className="t-head-text">
           <strong>Results{results.course ? ` · ${results.course}` : ""}</strong>

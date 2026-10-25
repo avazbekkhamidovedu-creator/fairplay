@@ -2,13 +2,24 @@
 // website (Canvas quiz, Google Form, Moodle…) that the Mac app opens inside the lockdown.
 // Self-contained: the parent keeps the value and sends externalExamInput(value) on save.
 import { useEffect, useId, useState } from "react";
-import type { Delivery, ExamMode } from "../../api/types";
+import type { CanvasQuizType, Delivery, ExamMode } from "../../api/types";
 import {
   splitDomainText,
   describeEntry,
   effectiveAllowedSites,
   broadDomainWarnings,
   externalUrlWarning,
+  CANVAS_QUIZ_TYPE_LABEL,
+  defaultFinishRegex,
+  detectCanvasQuizType,
+  effectiveCodeSource,
+  canvasCodeWarning,
+  CANVAS_SIGN_IN_HOSTS,
+  FINISH_REGEX_RULE,
+  normalizeDomains,
+  isAutoCanvasHost,
+  effectiveQuizType,
+  urlHost,
   type ExternalSettingsErrors,
   type ExternalSettingsValue,
 } from "./externalValidation";
@@ -29,6 +40,11 @@ export interface ExternalExamSettingsProps {
   /** 2026-10-13: paper needs Scan & Grade, which is off unless the server switches it on. */
   allowPaper?: boolean;
   onDeliveryChange?: (next: Delivery) => void;
+  /**
+   * Canvas mode: whether the teacher has a Canvas account linked. null = not known yet.
+   * Needed for the automatic access code.
+   */
+  canvasLinked?: boolean | null;
 }
 
 const DELIVERY_CHOICES: { delivery: Delivery; title: string; hint: string }[] = [
@@ -70,6 +86,7 @@ export function ExternalExamSettings({
   delivery,
   onDeliveryChange,
   allowPaper = true,
+  canvasLinked = null,
 }: ExternalExamSettingsProps) {
   const uid = useId();
   const name = `exam-mode-${uid}`;
@@ -85,12 +102,26 @@ export function ExternalExamSettings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.allowed_domains]);
 
+  const [showCode, setShowCode] = useState(false);
   const set = (patch: Partial<ExternalSettingsValue>) => onChange({ ...value, ...patch });
   const external = value.mode === "external";
   // Audit W-09: the same list the app enforces (the exam address may open only its folder).
   const preview = effectiveAllowedSites(value.external_url, value.allowed_domains);
   const warnings = external ? broadDomainWarnings(value.allowed_domains) : [];
   const urlWarning = external ? externalUrlWarning(value.external_url) : null;
+  const canvas = external && value.external_kind === "canvas";
+  const quizType = effectiveQuizType(value);
+  const detected = detectCanvasQuizType(value.external_url);
+  const codeSource = effectiveCodeSource(value);
+  const canvasHost = urlHost(value.external_url);
+  const removedHosts = value.canvas_removed_hosts ?? [];
+  const signInHosts = CANVAS_SIGN_IN_HOSTS.filter((h) => !removedHosts.includes(h));
+  const codeWarning = canvasCodeWarning(value.canvas_access_code);
+  const removeTeacherHost = (host: string) => {
+    const next = normalizeDomains(value.allowed_domains).filter((d) => d !== host);
+    setDomainText(next.join("\n"));
+    set({ allowed_domains: next });
+  };
 
   return (
     <fieldset className="ext-settings" disabled={disabled}>
@@ -146,8 +177,43 @@ export function ExternalExamSettings({
 
       {external && (
         <div className="ext-fields">
+          <div className="ext-field" role="radiogroup" aria-labelledby="exam-site-kind">
+            <span id="exam-site-kind" className="ext-label">
+              Which website?
+            </span>
+            <div className="ext-choices">
+              <label className={`ext-choice${!canvas ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name={`${name}-site`}
+                  checked={!canvas}
+                  onChange={() => set({ external_kind: null })}
+                />
+                <span>
+                  <span className="ext-choice-title">Any website</span>
+                  <span className="ext-choice-hint">Google Forms, Moodle or another site you choose.</span>
+                </span>
+              </label>
+              <label className={`ext-choice${canvas ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name={`${name}-site`}
+                  checked={canvas}
+                  onChange={() => set({ external_kind: "canvas", canvas_code_source: value.canvas_code_source ?? "managed" })}
+                />
+                <span>
+                  <span className="ext-choice-title">Canvas quiz</span>
+                  <span className="ext-choice-hint">
+                    The quiz opens only inside FairPlay. FairPlay types the Canvas access code, so students cannot
+                    start it outside the lock.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+
           <div className="ext-field">
-            <label htmlFor="exam-external-url">Exam website address</label>
+            <label htmlFor="exam-external-url">{canvas ? "Canvas quiz link" : "Exam website address"}</label>
             <input
               id="exam-external-url"
               className="ext-input"
@@ -162,8 +228,9 @@ export function ExternalExamSettings({
               onChange={(e) => set({ external_url: e.target.value })}
             />
             <p id="exam-external-url-hint" className="ext-hint">
-              The page students should see first, for example the quiz or form link. Students open it from the
-              FairPlay app after entering the start code.
+              {canvas
+                ? "Copy the link of the quiz or assignment from your browser while you view it in Canvas. It must start with https://. Students open it from the FairPlay app after entering the start code."
+                : "The page students should see first, for example the quiz or form link. Students open it from the FairPlay app after entering the start code."}
             </p>
             {errors.external_url && (
               <p className="ext-error" role="alert">
@@ -172,6 +239,123 @@ export function ExternalExamSettings({
             )}
             {!errors.external_url && urlWarning && <p className="ext-hint ext-warn">{urlWarning}</p>}
           </div>
+
+          {canvas && (
+            <div className="ext-field" data-testid="canvas-settings">
+              <label htmlFor="exam-canvas-type">Quiz type</label>
+              <select
+                id="exam-canvas-type"
+                className="ext-input"
+                value={quizType}
+                aria-describedby="exam-canvas-type-hint"
+                onChange={(e) => set({ canvas_quiz_type: e.target.value as CanvasQuizType })}
+              >
+                {(Object.keys(CANVAS_QUIZ_TYPE_LABEL) as CanvasQuizType[]).map((t) => (
+                  <option key={t} value={t}>
+                    {CANVAS_QUIZ_TYPE_LABEL[t]}
+                  </option>
+                ))}
+              </select>
+              <p id="exam-canvas-type-hint" className="ext-hint" data-testid="canvas-type-hint">
+                {detected
+                  ? `Detected from the link: ${CANVAS_QUIZ_TYPE_LABEL[detected]}. Change it only if this is wrong.`
+                  : "FairPlay could not tell the type from the link, so it assumes a Classic Quiz. Choose the right one."}
+              </p>
+              {quizType === "new" && (
+                <p className="ext-hint ext-warn" role="note" data-testid="canvas-new-warning">
+                  New Quizzes cannot be set up automatically. FairPlay cannot set or change their access code, so
+                  you type the code yourself and it stays as you set it in Canvas.
+                </p>
+              )}
+
+              <fieldset className="ext-subset">
+              <legend className="ext-label">How the access code is set</legend>
+              <div className="ext-choices">
+                <label className={`ext-choice${codeSource === "managed" ? " selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name={`${name}-code`}
+                    checked={codeSource === "managed"}
+                    disabled={quizType === "new"}
+                    onChange={() => set({ canvas_code_source: "managed" })}
+                  />
+                  <span>
+                    <span className="ext-choice-title">FairPlay sets and changes it for me</span>
+                    <span className="ext-choice-hint">
+                      FairPlay puts a random code on the quiz in Canvas when you open the exam and removes it when
+                      the exam closes. You never see it.
+                    </span>
+                  </span>
+                </label>
+                <label className={`ext-choice${codeSource === "manual" ? " selected" : ""}`}>
+                  <input
+                    type="radio"
+                    name={`${name}-code`}
+                    checked={codeSource === "manual"}
+                    onChange={() => set({ canvas_code_source: "manual" })}
+                  />
+                  <span>
+                    <span className="ext-choice-title">I will type the code I set in Canvas</span>
+                    <span className="ext-choice-hint">Set an access code on the quiz in Canvas, then type the same code here.</span>
+                  </span>
+                </label>
+              </div>
+              </fieldset>
+
+              {codeSource === "managed" && canvasLinked !== true && (
+                <p className="ext-hint ext-warn" role="note" data-testid="canvas-link-warning">
+                  {canvasLinked === false
+                    ? "No Canvas account is linked yet. Link your Canvas account first (under Canvas in the menu), or the exam cannot open."
+                    : "Link your Canvas account first. FairPlay needs it to set the code."}
+                </p>
+              )}
+
+              {codeSource === "manual" && (
+                <>
+                  <label htmlFor="exam-canvas-code-input">Canvas access code</label>
+                  <div className="ext-code-row">
+                  <input
+                    id="exam-canvas-code-input"
+                    className="ext-input"
+                    type={showCode ? "text" : "password"}
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    value={value.canvas_access_code ?? ""}
+                    placeholder={value.canvas_code_stored ? "A code is saved. Type a new one to replace it." : ""}
+                    aria-invalid={errors.canvas_access_code ? true : undefined}
+                    aria-describedby="exam-canvas-code-hint"
+                    onChange={(e) => set({ canvas_access_code: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="ext-code-toggle"
+                    aria-pressed={showCode}
+                    aria-label={showCode ? "Hide access code" : "Show access code"}
+                    onClick={() => setShowCode((x) => !x)}
+                  >
+                    {showCode ? "Hide" : "Show"}
+                  </button>
+                  </div>
+                  {codeWarning && (
+                    <p className="ext-hint ext-warn" role="note" data-testid="canvas-code-space-warning">
+                      {codeWarning}
+                    </p>
+                  )}
+                  {errors.canvas_access_code && (
+                    <p className="ext-error" role="alert">
+                      {errors.canvas_access_code}
+                    </p>
+                  )}
+                </>
+              )}
+              <p id="exam-canvas-code-hint" className="ext-hint">
+                The code is never shown again after you save, to you or to students. If you lose a typed code, set
+                a new one in Canvas and enter it here.
+              </p>
+            </div>
+          )}
 
           <div className="ext-field">
             <label htmlFor="exam-allowed-domains">
@@ -210,7 +394,61 @@ export function ExternalExamSettings({
                 ))}
               </ul>
             )}
-            {preview.length > 0 && (
+            {canvas && (
+              <>
+                <p className="ext-hint" id="exam-allowed-preview" data-testid="canvas-auto-sites">
+                  Students can open these sites. FairPlay adds the Canvas site{quizType === "new" ? ", the New Quizzes sites" : ""} and
+                  the sign-in sites when you save. Remove a sign-in site you do not use.
+                </p>
+                <ul className="ext-chips" aria-labelledby="exam-allowed-preview" data-testid="canvas-chips">
+                  {canvasHost && (
+                    <li title="The Canvas site is always allowed" data-locked="true">
+                      {canvasHost} <span className="ext-chip-lock">always allowed</span>
+                    </li>
+                  )}
+                  {signInHosts.map((h) => (
+                    <li key={h} title={describeEntry(h)}>
+                      {h}
+                      <button
+                        type="button"
+                        className="ext-chip-x"
+                        aria-label={`Remove ${h}`}
+                        onClick={() => set({ canvas_removed_hosts: [...removedHosts, h] })}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                  {normalizeDomains(value.allowed_domains)
+                    .filter((d) => !isAutoCanvasHost(d, value.external_url))
+                    .map((d) => (
+                      <li key={d} title={describeEntry(d)}>
+                        {d}
+                        <button type="button" className="ext-chip-x" aria-label={`Remove ${d}`} onClick={() => removeTeacherHost(d)}>
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+                {removedHosts.length > 0 && (
+                  <p className="ext-hint">
+                    Removed:{" "}
+                    {removedHosts.map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        className="ext-link-btn"
+                        aria-label={`Add ${h} back`}
+                        onClick={() => set({ canvas_removed_hosts: removedHosts.filter((x) => x !== h) })}
+                      >
+                        {h} (add back)
+                      </button>
+                    ))}
+                  </p>
+                )}
+              </>
+            )}
+            {!canvas && preview.length > 0 && (
               <>
                 <p className="ext-hint" id="exam-allowed-preview">
                   Students can open:
@@ -226,6 +464,42 @@ export function ExternalExamSettings({
             )}
           </div>
 
+          {canvas && (
+            <div className="ext-field" data-testid="canvas-finish">
+              <span className="ext-label">When does the exam finish?</span>
+              <p className="ext-hint">
+                FairPlay hands the exam in by itself when Canvas shows its “submitted” page. This quiz type uses the
+                pattern <code>{defaultFinishRegex(quizType)}</code>. Only this finish pattern is used; the page address
+                is not checked in any other way. Students can also press Finish exam.
+              </p>
+              <details>
+                <summary>Advanced: use another finish pattern</summary>
+                <label htmlFor="exam-finish-regex">Finish pattern (regular expression)</label>
+                <input
+                  id="exam-finish-regex"
+                  className="ext-input"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={defaultFinishRegex(quizType)}
+                  value={value.finish_url_regex ?? ""}
+                  aria-invalid={errors.finish_url_regex ? true : undefined}
+                  aria-describedby="exam-finish-regex-rule"
+                  onChange={(e) => set({ finish_url_regex: e.target.value })}
+                />
+                <p className="ext-hint" id="exam-finish-regex-rule">
+                  {FINISH_REGEX_RULE}
+                </p>
+                {errors.finish_url_regex && (
+                  <p className="ext-error" role="alert">
+                    {errors.finish_url_regex}
+                  </p>
+                )}
+              </details>
+            </div>
+          )}
+
+          {!canvas && (
           <div className="ext-field">
             <label htmlFor="exam-finish-contains">
               Finish automatically when the page address contains <span className="ext-optional">(optional)</span>
@@ -252,6 +526,7 @@ export function ExternalExamSettings({
               </p>
             )}
           </div>
+          )}
         </div>
       )}
     </fieldset>

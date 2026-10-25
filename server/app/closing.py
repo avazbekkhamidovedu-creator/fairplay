@@ -66,6 +66,13 @@ async def close_exam_now(session: AsyncSession, e: Exam, now: datetime | None = 
     rows += await sweep_in_progress(session, e, now, automatic)
     if rows:
         await store.delete(*[attempt_key(r[0]) for r in rows])
+    if e.external_kind == "canvas":
+        from . import canvas_mode
+        try:
+            await canvas_mode.release_on_close(session, e)
+        except Exception:  # noqa: BLE001 -- a close never fails over Canvas
+            await session.rollback()
+            log.exception("canvas code release for %s", e.id)
     return True
 
 

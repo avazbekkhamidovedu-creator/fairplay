@@ -6,6 +6,7 @@ Endpoints used (https://canvas.instructure.com/doc/api/):
   GET  /api/v1/courses/:id/users?enrollment_type[]=student&include[]=email&per_page=100
   GET  /api/v1/courses/:id/assignments/:aid                           (does it still exist?)
   POST /api/v1/courses/:id/assignments                                 (create, JSON body)
+  PUT  /api/v1/courses/:id/quizzes/:qid     quiz[access_code]=...     (Classic Quizzes access code)
   POST /api/v1/courses/:id/assignments/:aid/submissions/update_grades (form-encoded)
   GET  /api/v1/progress/:id                                            (async job status)
 
@@ -56,20 +57,7 @@ class CanvasProvider(LmsProvider):
             raise LmsError(f"Canvas could not find that while {what} (404). "
                            "Check the Canvas web address.", 404)
         if resp.status_code >= 400:
-            detail = ""
-            try:
-                body = resp.json()
-                errs = body.get("errors") if isinstance(body, dict) else None
-                if isinstance(errs, list) and errs:
-                    detail = errs[0].get("message", "") if isinstance(errs[0], dict) else str(errs[0])
-                elif isinstance(errs, dict):
-                    detail = "; ".join(f"{k}: {v}" for k, v in errs.items())
-                elif isinstance(body, dict):
-                    detail = body.get("message", "")
-            except ValueError:
-                pass
-            raise LmsError(f"Canvas error while {what} (HTTP {resp.status_code})"
-                           + (f": {short(detail, 200)}" if detail else ""), resp.status_code)
+            raise LmsError(f"Canvas error while {what} (HTTP {resp.status_code})", resp.status_code)
 
     async def _get_all(self, path: str, params: dict | list, what: str) -> list:
         out: list = []
@@ -144,6 +132,11 @@ class CanvasProvider(LmsProvider):
         if not isinstance(a, dict) or "id" not in a:
             raise LmsError("Canvas did not return the new assignment")
         return str(a["id"])
+
+    async def set_quiz_access_code(self, course_id: str, quiz_id: str, code: str) -> None:
+        resp = await self.request("PUT", f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+                                  data=[("quiz[access_code]", code)])
+        self._check(resp, "setting the quiz access code")
 
     async def post_grades(self, course_id: str, assignment_id: str,
                           rows: list[GradeRow]) -> list[GradeError]:

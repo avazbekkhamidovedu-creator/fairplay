@@ -983,3 +983,50 @@ Generic for every exam (FairPlay and external). Code: `server/app/access.py` (op
   the loop: exams closed in the last 2 days (and over 30 s ago) with attempts still writing get
   them handed in (outbox rows for external exams). DKU OJ moving its end time later while the
   exam is live moves the capped deadlines of running attempts with it (never shorter).
+
+
+# Canvas mode (Mode B), server, 2026-10-25
+
+Full design: `docs/contract-canvas-mode-b-2026-10-25.md`. This section is what the server does.
+
+## Exam fields (teacher POST/PUT, mode "external" only; 422 otherwise)
+
+```
+"external_kind": null | "canvas"
+"canvas": {"quiz_type": "classic"|"new"|"assignment", "access_code_source": "managed"|"manual",
+           "access_code": "...",           // write-only, 4-64 printable chars, never returned
+           "removed_hosts": ["..."]}       // auto-added sign-in hosts the teacher removed
+"finish_url_regex": null | "..."          // any external exam; filled for canvas exams
+```
+- `external_url` must be https for canvas. `quiz_type` defaults from the link (`/courses/:c/quizzes/:q` classic, `/courses/:c/assignments/:a` new); 422 when it cannot be inferred. `access_code_source` defaults to `managed`.
+- A PUT with `external_kind: "canvas"` and no `canvas` block keeps the stored quiz type, source and manual code; a `canvas` block without `access_code_source` keeps the stored source.
+- Only Classic Quizzes can be `managed`. `new` and `assignment` with `managed` are stored as `manual` and the teacher view says so in `canvas_notice`.
+- `access_code`: kept encrypted (`lms/secretbox`). On PUT, omitting it or sending it blank keeps the stored code while the source stays `manual`; only a non-empty value replaces it. Sent with an effective `managed` source: 422.
+- `allowed_domains` is rebuilt on every save: the Canvas host, for `new` the `*.quiz-lti-<region>-prod.instructure.com` hosts (regions iad, pdx, dub, fra, sin, syd, yul), the sign-in hosts from `FAIRPLAY_CANVAS_SSO_HOSTS` (comma list; default `*.duosecurity.com, login.microsoftonline.com, login.microsoft.com, sso.dukekunshan.edu.cn`) except those in `canvas.removed_hosts`, then the teacher's additions. `removed_hosts` (lowercased) is stored, returned in the teacher view and kept by later PUTs until a `canvas` block sends a new list; it may not contain the Canvas host (422), and the Canvas host and (for `new`) the quiz-lti hosts are always present. A PUT without `allowed_domains` keeps the stored teacher additions. Every host passes `site_policy`; a denied teacher addition or Canvas host is 422. An auto-added sign-in or quiz-lti host that `site_policy` drops is not silent: the teacher view's `canvas_notice` names it.
+- `finish_url_contains` is ignored for canvas exams (stored `null`): only the regex decides.
+- `finish_url_regex`: default per quiz type (`classic` `/quizzes/\d+/(submissions/\d+|history)`, `new` `submission-confirmation|submission-screen`, `assignment` `/assignments/\d+/submissions/\d+`). A value equal to any default is treated as "not overridden". Max 300 chars. The accepted dialect is the plain subset Python `re` and ICU read the same: groups `(...)` and `(?:...)`, a leading `(?i)`, classes without nesting or set operators, escapes `\d \D \w \W \s \S \b \B` and escaped punctuation, `* + ? {n} {n,} {n,m}` with an optional lazy `?`. Refused (422): backreferences, lookaround, conditionals, named groups, atomic or possessive forms, `{,n}`, unescaped `{` `}` that are not a repeat, other escapes (`\Z`, `\p{..}`), repeats of repeats, a repeat (more than once) of a group that contains `|` or any repeat, more than 8 open-ended repeats (`*`, `+`, `{n,}`), more than 16 repeats in all, counts above 100, patterns that do not compile.
+- Exams that are not canvas keep `external_kind`, `canvas` and (unless a regex is set) `finish_url_regex` as `null`.
+
+## Views
+
+Teacher exam and student exam/attempt views add `external_kind`, `canvas: {quiz_type, access_code_source}` and `finish_url_regex`. Teacher views also add `canvas.code_status` (`"set"` a code is stored, `"not_set"` none yet, `"failed"` the last open could not set the managed code; cleared by the next save or successful open), `canvas.removed_hosts`, `canvas.remove_code_in_canvas` (true after a close when a managed code could not be cleared in Canvas, or after a save that dropped a live managed code and could not clear it; cleared by the next save or successful open) and `canvas_notice` (plain-language string or null: blocked sign-in hosts, New Quiz note, missing code, and "Remove the access code in Canvas" when `remove_code_in_canvas` is true). Students never get `code_status`. The code is in no response, log or event.
+
+## Opening and closing
+
+- Open (`POST /api/exams/{id}/open`, body may add `"canvas_access_code"`, 4-64 chars, for a manual exam whose code was cleared by a close): the exam is first claimed with a conditional UPDATE (`canvas_open_claim`, 90 s), so two opens cannot both rotate; the second gets 409 "already being opened". `managed` sets a random 24-character code (no look-alike characters) with `PUT /api/v1/courses/:c/quizzes/:q` `quiz[access_code]` through the teacher's linked Canvas connection whose host equals the quiz host (20 s limit); `manual` needs a stored or supplied code. `open_to` and the status change are committed only after the code is ready. Failure: 409 `{"detail": {"code": "canvas_code_failed", "message": "..."}}`, the exam stays as it was, nothing half-committed. `message` is fixed plain language plus the HTTP status (Canvas's own error text is never copied) and tells the teacher to connect Canvas or switch to a manual code.
+- Close (button or automatic): after the in-progress attempts are handed in, the stored code is forgotten, managed and manual. A managed code is cleared in Canvas (empty `quiz[access_code]`, 20 s limit). If that fails the close still succeeds and `canvas.remove_code_in_canvas` is true. Reopening makes a new managed code; a manual exam needs the code again (`canvas_access_code` on open).
+- A save of a draft that still holds a live managed code, switching it to manual, to another quiz or to a plain website exam, and deleting such an exam, clear the code in Canvas first; a failure sets `remove_code_in_canvas`.
+- Canvas exams can only be started on the Mac app for now: `POST /api/student/exams/{id}/start` without `X-FairPlay-Platform: mac` is 409 "Canvas exams are not available on this device yet".
+
+## `POST /api/student/attempts/{aid}/canvas-code`
+
+Body `{"proof": "<hex hmac>", "ts": <ms>}`; header `X-FairPlay-Session`.
+`proof = HMAC(app_key, "canvascode|<aid>|<session>|<device_id>|<ts>")` with `session` and `device_id` as bound to the attempt. `ts` is in milliseconds and must be within 5 minutes of the server clock.
+- `proof` is 64 lowercase hex characters (422 otherwise; a missing one is 403). Limits count only requests whose proof verified: 6 issued per attempt per 10 minutes, and per exam per minute max(300, 3 x rostered students). A 429 carries `Retry-After` (seconds). Refused requests do not use up anyone's budget.
+- 404 not the student's attempt; 429 over a limit; 409 not a canvas exam, attempt not open, exam not live, session header missing or different (`SESSION_DETAIL`), resume approval still pending, or the same `(attempt, ts)` proof used twice within 6 minutes (send a new `ts` for every request); 403 `APP_PROOF_DETAIL` for a missing, wrong or stale proof (wrong device included).
+- 200 `{"code": "...", "valid_for_s": 60}` with `Cache-Control: no-store`.
+- Events: `canvas_code_issued` (not a flag) and `canvas_code_refused` (a flag, at most one per reason per 30 s). Client-reportable: `canvas_code_failed`, `canvas_upload_unsupported`, `canvas_sso_popup`.
+
+## Storage
+
+Exam columns added (added to older databases by `db._add_missing_columns`): `external_kind`, `canvas_quiz_type`, `canvas_code_source`, `canvas_code_enc`, `canvas_code_failed`, `canvas_release_failed`, `canvas_removed_hosts`, `canvas_open_claim`, `finish_url_regex`.

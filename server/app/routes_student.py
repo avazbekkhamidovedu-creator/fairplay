@@ -19,17 +19,17 @@ from .integrations.registry import integration_for
 from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
 from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_member, require_open_for
-from .app_version import check_app_version
+from .app_version import check_app_version, client_platform
 from .question_types import AnswerError, check_answer, is_extended
 from .review import (ALL, ANSWERS, BREAKDOWN, REVIEW_CLOSED, opens_detail, review_level, shows_answers,
                      shows_breakdown, shows_score)
 from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
-                      HeartbeatIn, OfflineKeyIn, StartIn, SwapRequestIn)
+                      HeartbeatIn, OfflineKeyIn, CanvasCodeIn, StartIn, SwapRequestIn)
 from .security import Principal, require_student
 from .services import (LIVE_TTL, attempt_key, attempt_meta_from, attempt_view, cache_attempt,
                        find_attempt, get_attempt_meta, get_exam_cached, get_exam_hot, new_id,
                        new_receipt, new_session_id, student_tools, code_language,
-                       exam_default_language)
+                       exam_default_language, approval_of)
 from .store import get_store
 from .timeutil import arrived_at, iso, utcnow
 
@@ -272,6 +272,8 @@ async def start(exam_id: str, body: StartIn, request: Request,
         raise HTTPException(404, "Exam not found")
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
+    if exam.get("external_kind") == "canvas" and client_platform(request) != "mac":
+        raise HTTPException(409, "Canvas exams are not available on this device yet")
     await require_member(session, exam, p.user_id)   # audit S-03: class / LMS course only
     integ = integration_for(exam)
     if integ is not None:
@@ -911,6 +913,64 @@ async def offline_key(aid: str, body: OfflineKeyIn, request: Request,
         out["proof"] = ac.sign(settings.app_keys[0], msg)
         out["proofs"] = [ac.sign(k, msg) for k in settings.app_keys]
     return out
+
+
+# ---------------------------------------------------------------- Canvas mode (Mode B)
+@router.post("/attempts/{aid}/canvas-code")
+async def canvas_code(aid: str, body: CanvasCodeIn, request: Request,
+                      p: Principal = Depends(require_student),
+                      session: AsyncSession = Depends(get_session)):
+    """The Canvas access code, for the native app only: it types it into the Canvas page.
+    Needs the app's proof for this attempt, session and device; never logged, never cached."""
+    from . import canvas_mode as cm
+    settings = ac.settings_of(request)
+    store = get_store()
+    a = await _own_attempt(session, aid, p)
+    exam = await session.get(Exam, a.exam_id)
+
+    async def refuse(status: int, detail, why: str, flag: bool = True, retry_after: int | None = None):
+        if flag and await ac.once_per(store, f"cc-ref:{aid}:{why}", 30):
+            await ac.add_event(session, store, aid, a.exam_id, "canvas_code_refused", why)
+        headers = {"Retry-After": str(max(1, retry_after))} if retry_after else None
+        raise HTTPException(status, detail, headers=headers)
+
+    if exam is None or not cm.canvas_exam(exam):
+        await refuse(409, "This is not a Canvas exam", "not a Canvas exam")
+    if a.status != "in_progress":
+        await refuse(409, "Attempt already submitted", "attempt is not open")
+    if exam.status != "live":
+        await refuse(409, "The exam is not open", "exam is not live")
+    given = ac.session_header(request)
+    if not a.session_id or given != a.session_id or not a.device_id:
+        await refuse(409, ac.SESSION_DETAIL, "wrong session")
+    if approval_of(a) == "pending":
+        await refuse(409, "Wait for your teacher to let you continue, then try again.",
+                     "waiting for the teacher's approval")
+    msg = ac.canvas_code_message(aid, a.session_id, a.device_id, body.ts)
+    if not ac.verify(settings, msg, body.proof):
+        await refuse(403, ac.APP_PROOF_DETAIL, "app proof did not match")
+    if abs(int(time.time() * 1000) - body.ts) > cm.PROOF_FRESH_MS:
+        await refuse(403, ac.APP_PROOF_DETAIL, "app proof is out of date")
+    if not await store.setnx(f"ccr:{aid}:{body.ts}", "1", cm.PROOF_REPLAY_TTL_S):
+        await refuse(409, "This request was already used. Try again.", "proof used twice")
+    code = cm.open_code(exam.canvas_code_enc)
+    if code is None:
+        await refuse(409, "The access code is not available. Ask your teacher for help.",
+                     "no access code stored")
+    per_attempt = f"cc:{aid}"
+    if int(await store.get(per_attempt) or 0) >= cm.CODE_REQUESTS_PER_ATTEMPT:
+        await refuse(429, "Too many requests for the access code. Ask your teacher for help.",
+                     "too many requests for this attempt",
+                     retry_after=await store.ttl(per_attempt))
+    exam_key = f"ccx:{a.exam_id}"
+    if await store.incr(exam_key, 60) > await cm.exam_budget(session, store, exam):
+        await refuse(429, "Too many requests, wait a moment and try again",
+                     "too many requests for this exam", flag=False,
+                     retry_after=await store.ttl(exam_key))
+    await store.incr(per_attempt, cm.CODE_ATTEMPT_WINDOW_S)
+    await ac.add_event(session, store, aid, a.exam_id, "canvas_code_issued", "")
+    return JSONResponse({"code": code, "valid_for_s": cm.CODE_VALID_FOR_S},
+                        headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- S4: device swap

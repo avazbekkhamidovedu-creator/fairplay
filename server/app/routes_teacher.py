@@ -22,6 +22,7 @@ from .security import Principal, require_teacher
 from .services import (external_block, attempt_key, code_fields, code_language, exam_closes_at, exam_default_language, exam_delivery, exam_out, exam_out_full, invalidate_exam,
                        new_id, new_receipt, new_session_id, pending_by_exam)
 from . import app_client as ac
+from . import canvas_mode
 from . import exam_control as control
 from .routes_classes import check_class_for_exam
 from .store import get_store
@@ -33,7 +34,7 @@ router = APIRouter(prefix="/api/exams", tags=["teacher"])
 ONLINE_WINDOW_S = 15
 # Integrity events that are bookkeeping, not "flags" a teacher should look at.
 NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound",
-                  "offline_exit_code_issued",
+                  "offline_exit_code_issued", "canvas_code_issued",
                   "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
                   AUTO_CLOSE_EVENT)                       # 2026-10-23: the automatic close
 MAX_RESUME_EXTENSION = control.MAX_RESUME_EXTENSION
@@ -155,6 +156,7 @@ async def create_exam(body: ExamIn, request: Request, p: Principal = Depends(req
     now = utcnow()
     e = Exam(id=new_id("e"), teacher_id=p.user_id, status="draft", created_at=now)
     _apply(e, body, creating=True)
+    canvas_mode.apply_settings(e, body)
     session.add(e)
     await session.commit()
     return exam_out(e)
@@ -185,7 +187,10 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
         raise HTTPException(409, "Exam is not a draft")
     if "class_id" in body.model_fields_set:
         await check_class_for_exam(session, body.class_id, p)
+    await canvas_mode.release_before_change(session, e, body)
+    prev_domains = list(e.allowed_domains or [])
     _apply(e, body)
+    canvas_mode.apply_settings(e, body, prev_domains)
     await session.commit()
     await invalidate_exam(get_store(), exam_id)
     return exam_out(e)
@@ -200,6 +205,8 @@ async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
         raise HTTPException(409, integ.delete_refused_message(e))
     if e.status not in ("draft", "closed"):
         raise HTTPException(409, "Exam is live; close it first")
+    if canvas_mode.canvas_exam(e) and e.canvas_code_source == "managed" and e.canvas_code_enc:
+        await canvas_mode.clear_in_canvas(session, e)
     aids = (await session.execute(select(Attempt.id).where(Attempt.exam_id == exam_id))).scalars().all()
     await session.execute(delete(IntegrityEvent).where(IntegrityEvent.exam_id == exam_id))
     await session.execute(delete(ExamMaterial).where(ExamMaterial.exam_id == exam_id))   # 2026-10-23
@@ -218,7 +225,8 @@ async def open_exam(exam_id: str, body: OpenIn | None = None, p: Principal = Dep
                     session: AsyncSession = Depends(get_session)):
     """Body (optional): {"open_to": "all" | [student ids]} -- who may start (default all)."""
     e = await _own_exam(session, exam_id, p)
-    await control.open_exam(session, e, (body or OpenIn()).open_to)
+    given = body or OpenIn()
+    await control.open_exam(session, e, given.open_to, given.canvas_access_code)
     return await exam_out_full(session, e)
 
 

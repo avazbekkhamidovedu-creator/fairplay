@@ -253,6 +253,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         guard FilePicker.allowed(locked: locked, fromServer: fromServer), openPanel == nil,
               let win = window, win.attachedSheet == nil else {
             DebugLog.log("web", "file picker REFUSED (locked=\(locked) server=\(fromServer))")
+            if locked && external.isCanvas { EventLog.shared.record(.canvasUploadUnsupported) }
             if locked && fromServer { send(FilePicker.refusedMessage) }
             completionHandler(nil)
             return
@@ -668,6 +669,16 @@ final class MainWindowController: NSWindowController, LockSurface,
             decisionHandler(.cancel)
             return
         }
+        if webView !== self.webView {
+            let isSubFrame = !(navigationAction.targetFrame?.isMainFrame ?? true)
+            if external.childAllows(url) || (isSubFrame && url.scheme?.lowercased() == "about") {
+                decisionHandler(.allow)
+            } else {
+                EventLog.shared.record(.blockedNavigation(url.host ?? url.absoluteString))
+                decisionHandler(.cancel)
+            }
+            return
+        }
         // Audit M-15: the student app never opens teacher pages or the API docs on the
         // exam server (a teacher login there shows start codes, exit codes, answer keys).
         if isServerURL(url) && MainWindowController.isTeacherPath(url.path) {
@@ -718,7 +729,9 @@ final class MainWindowController: NSWindowController, LockSurface,
         }
         if ownLocalPage || isServerURL(url) || external.allows(url) {
             if navigationAction.targetFrame?.isMainFrame ?? true {
-                external.checkFinishURL(url)
+                // Canvas exams finish from the committed URL (observeURL), not from an action
+                // the response check can still cancel.
+                if !external.isCanvas { external.checkFinishURL(url) }
                 // Review 2026-10-24: eventsReady is reset in didCommit, not here. A navigation
                 // that never commits (a cancelled download, a 204, a fragment link) left the
                 // page that is still on screen without events until it was reloaded.
@@ -736,6 +749,12 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// else as WebKit's own default (show what it can show, cancel the rest).
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url,
+           !isServerURL(u), !external.childAllows(u) {
+            EventLog.shared.record(.blockedNavigation(u.host ?? u.absoluteString))
+            decisionHandler(.cancel)
+            return
+        }
         if !navigationResponse.isForMainFrame, LockdownController.shared.isLocked {
             let disposition = (navigationResponse.response as? HTTPURLResponse)?
                 .value(forHTTPHeaderField: "Content-Disposition")
@@ -798,6 +817,9 @@ final class MainWindowController: NSWindowController, LockSurface,
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if external.isCanvas {
+            return canvasPopup(from: webView, configuration: configuration, url: navigationAction.request.url)
+        }
         if let url = navigationAction.request.url, isServerURL(url) || external.allows(url) {
             webView.load(URLRequest(url: url))   // same-server links open in place
         } else if let url = navigationAction.request.url, LockdownController.shared.isLocked,
@@ -811,19 +833,46 @@ final class MainWindowController: NSWindowController, LockSurface,
         return nil
     }
 
+    private func canvasPopup(from opener: WKWebView, configuration: WKWebViewConfiguration, url: URL?) -> WKWebView? {
+        let openerHost = opener.url?.host
+        switch external.popupPlan(url: url, openerHost: openerHost) {
+        case .block:
+            EventLog.shared.record(.blockedNavigation("popup \(url?.host ?? url?.absoluteString ?? "?")"))
+            return nil
+        case .sameView:
+            if let url {
+                EventLog.shared.record(.canvasSsoPopup(url.host ?? "?"))
+                opener.load(URLRequest(url: url))
+            }
+            return nil
+        case .child:
+            if CanvasPopup.isCrossHost(url, openerHost: openerHost), let host = url?.host {
+                EventLog.shared.record(.canvasSsoPopup(host))
+            }
+            return external.makePopup(configuration: configuration)
+        }
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        external.closePopup(ifView: webView)
+    }
+
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if webView !== self.webView { return }
         let ns = error as NSError
         DebugLog.log("web", "page load failed: \(ns.domain) \(ns.code) \(ns.localizedDescription)")
         showOffline(error)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if webView !== self.webView { return }
         let ns = error as NSError
         DebugLog.log("web", "page failed: \(ns.domain) \(ns.code) \(ns.localizedDescription)")
         showOffline(error)
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if webView !== self.webView { return }
         committedURL = webView.url
         // A new document replaced the old one (main frame only: WebKit reports commits for
         // the main frame). Events wait until the new page asks for them ("flushEvents").
@@ -831,12 +880,15 @@ final class MainWindowController: NSWindowController, LockSurface,
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView !== self.webView { return }
         if let u = webView.url { DebugLog.log("web", "page shown: \(u.host ?? u.scheme ?? "")\(u.path)") }
         pushBattery()
         applyFileAccess()
+        external.canvasPageLoaded(webView)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if external.isPopup(webView) { external.closePopup(ifView: webView); return }
         DebugLog.log("crash", "exam page process crashed; reloading")
         eventsReady = false                  // review 2026-10-24: no page listens until the reload asks
         reload()

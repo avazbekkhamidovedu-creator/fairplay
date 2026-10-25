@@ -1,7 +1,7 @@
 // 2026-10-23 review (second pass) on the exam page: a manual hand-in still retrying when
 // the time runs out turns into the time-up hand-in; the side panel's width follows the
 // window; the question list keeps its header while it scrolls.
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttemptView, ExamTools } from "../api/types";

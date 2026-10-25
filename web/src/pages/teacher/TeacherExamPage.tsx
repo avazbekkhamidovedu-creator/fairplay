@@ -106,7 +106,7 @@ export default function TeacherExamPage() {
   const pending = exam.pending_grading ?? 0;
   const meta = [
     ...(exam.mode === "external"
-      ? [`On ${urlHost(exam.external_url) ?? "another website"}`]
+      ? [exam.external_kind === "canvas" ? "Canvas quiz" : `On ${urlHost(exam.external_url) ?? "another website"}`]
       : [plural(exam.question_count, "question"), `${exam.total_points} points`]),
     `${exam.duration_min} min`,
     exam.room && `Room ${exam.room}`,

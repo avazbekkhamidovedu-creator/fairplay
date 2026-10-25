@@ -221,8 +221,22 @@
   gap: 6px;
 }
 
-.ext-field label {
+.ext-field label,
+.ext-label {
   font-size: 14px;
+  font-weight: 600;
+}
+
+.ext-field details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ext-field summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--primary);
   font-weight: 600;
 }
 
@@ -292,4 +306,67 @@ textarea.ext-input {
 ul.ext-warn {
   margin: 4px 0 0;
   padding-left: 18px;
+}
+
+.ext-subset {
+  border: 0;
+  margin: 8px 0 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.ext-subset > legend {
+  padding: 0;
+}
+
+.ext-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.ext-code-row .ext-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ext-code-toggle,
+.ext-link-btn {
+  font: inherit;
+  cursor: pointer;
+}
+
+.ext-code-toggle {
+  padding: 0 12px;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.ext-chip-x {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ext-chip-lock {
+  margin-left: 4px;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.ext-link-btn {
+  margin-right: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  text-decoration: underline;
 }

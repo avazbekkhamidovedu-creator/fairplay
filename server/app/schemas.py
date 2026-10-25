@@ -17,6 +17,7 @@ PATH_RE = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
 MAX_ALLOWED_DOMAINS = 30
 MAX_EXTERNAL_URL = 2000
 MAX_FINISH_CONTAINS = 200
+MAX_FINISH_REGEX = 300
 
 
 def normalize_domain(v: str) -> str:
@@ -498,6 +499,28 @@ class QuestionIn(BaseModel):
         return d
 
 
+class CanvasIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    quiz_type: Literal["classic", "new", "assignment"] | None = None
+    access_code_source: Literal["managed", "manual"] = "managed"
+    access_code: str | None = Field(default=None, max_length=64)
+    removed_hosts: list[str] = Field(default_factory=list, max_length=MAX_ALLOWED_DOMAINS)
+
+    @field_validator("removed_hosts")
+    @classmethod
+    def _removed(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(x.strip().lower() for x in v if x and x.strip()))
+
+    @field_validator("access_code")
+    @classmethod
+    def _code(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        if len(v) < 4 or not v.isprintable():
+            raise ValueError("access_code must be 4 to 64 printable characters")
+        return v
+
+
 class ExamIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -518,6 +541,9 @@ class ExamIn(BaseModel):
     external_url: str | None = Field(default=None, max_length=MAX_EXTERNAL_URL)
     allowed_domains: list[str] = Field(default_factory=list, max_length=MAX_ALLOWED_DOMAINS)
     finish_url_contains: str | None = Field(default=None, max_length=MAX_FINISH_CONTAINS)
+    finish_url_regex: str | None = Field(default=None, max_length=MAX_FINISH_REGEX)
+    external_kind: Literal["canvas"] | None = None
+    canvas: CanvasIn | None = None
     # slice 4: points for an external exam (the teacher enters each student's score)
     external_points: float = Field(default=100, gt=0, le=10000)
     # slice 6: how the exam is delivered. Omitted -> derived from mode. "website" <=> mode
@@ -632,6 +658,7 @@ class ExamIn(BaseModel):
             self.external_url = url
             fin = (self.finish_url_contains or "").strip()
             self.finish_url_contains = fin or None
+            self._canvas_checks(url)
             # 2026-10-23: the exam tools live in FairPlay's own exam page, not on the website
             self.calculator, self.open_book, self.websites = "off", False, []
             self.website_links, self.upload_opens_days = [], 0
@@ -640,10 +667,30 @@ class ExamIn(BaseModel):
                 raise ValueError("add at least one question")
             if self.delivery == "paper" and any(q.type == "code" for q in self.questions):
                 raise ValueError("coding questions need an exam on computers, not on paper")
+            if self.external_kind is not None or self.canvas is not None:
+                raise ValueError("external_kind and canvas are only for an exam on another website")
             self.external_url = None
             self.allowed_domains = []
             self.finish_url_contains = None
+            self.finish_url_regex = None
         return self
+
+    def _canvas_checks(self, url: str) -> None:
+        from . import canvas_mode as cm
+        rx = (self.finish_url_regex or "").strip()
+        self.finish_url_regex = cm.validate_regex(rx) if rx else None
+        if self.external_kind != cm.KIND:
+            if self.canvas is not None:
+                raise ValueError("canvas settings need external_kind \"canvas\"")
+            return
+        if not cm.is_https(url):
+            raise ValueError("a Canvas exam link must start with https://")
+        if self.canvas is None:
+            return
+        c = self.canvas
+        c.quiz_type = c.quiz_type or cm.infer_quiz_type(url)
+        if c.quiz_type is None:
+            raise ValueError("canvas.quiz_type is needed: the link is not a Canvas quiz or assignment link")
 
 
 AnswerMap = dict[str, Any]
@@ -762,6 +809,12 @@ class AppBeatIn(BaseModel):
     signature: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]+$")
 
 
+class CanvasCodeIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    proof: str = Field(default="", pattern=r"^[0-9a-f]{64}$")
+    ts: int = Field(default=0, ge=0, le=2 ** 62)
+
+
 class ExitCodeIn(BaseModel):
     code: str = Field(min_length=1, max_length=16)
     # Audit 2026-10-13: the app's nonce; the reply then carries proofs over
@@ -804,6 +857,16 @@ class OpenIn(BaseModel):
     start; everyone else sees the exam as not open for them yet."""
     model_config = ConfigDict(extra="ignore")
     open_to: Literal["all"] | list[int] = Field(default="all")
+    canvas_access_code: str | None = Field(default=None, max_length=64)
+
+    @field_validator("canvas_access_code")
+    @classmethod
+    def _canvas_code(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        if len(v) < 4 or not v.isprintable():
+            raise ValueError("canvas_access_code must be 4 to 64 printable characters")
+        return v
 
     @field_validator("open_to")
     @classmethod

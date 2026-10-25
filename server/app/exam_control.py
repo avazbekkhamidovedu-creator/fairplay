@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import app_client as ac
+from . import canvas_mode
 from .access import eligible_students
 from .closing import close_exam_now, max_extra
 from .integrations.registry import integration_for
@@ -38,7 +39,8 @@ async def checked_open_to(session: AsyncSession, e: Exam, value) -> list[int] | 
     return wanted
 
 
-async def open_exam(session: AsyncSession, e: Exam, open_to="all") -> None:
+async def open_exam(session: AsyncSession, e: Exam, open_to="all",
+                    canvas_access_code: str | None = None) -> None:
     """Make the exam live with a new start code and invigilator code (409 when it can't)."""
     if e.status == "live":
         raise HTTPException(409, "Exam is already live")
@@ -52,6 +54,7 @@ async def open_exam(session: AsyncSession, e: Exam, open_to="all") -> None:
         raise HTTPException(409, "Choose the class that takes this exam before opening it")
     now = utcnow()
     closes = exam_closes_at(e)
+    clear_closes = False
     if closes is not None and now >= closes + await max_extra(session, e):
         if integ is not None:        # the source owns the end time
             raise HTTPException(409, f"The end time set in {integ.name} has passed. "
@@ -59,15 +62,31 @@ async def open_exam(session: AsyncSession, e: Exam, open_to="all") -> None:
         if e.status == "draft":      # never opened: the setting is a mistake, not a past run
             raise HTTPException(409, "The automatic close time has passed. Change or clear "
                                      "\"Close automatically at\" in the exam settings.")
-        e.closes_at = None           # re-opened after its close time: the teacher closes it
-    e.open_to = await checked_open_to(session, e, open_to)
+        clear_closes = True          # re-opened after its close time: the teacher closes it
+    open_to_value = await checked_open_to(session, e, open_to)
+    canvas = e.external_kind == "canvas"
+    if canvas:
+        if not await canvas_mode.claim_open(session, e):
+            if e.status == "live":
+                raise HTTPException(409, "Exam is already live")
+            raise HTTPException(409, "This exam is already being opened. Try again in a moment.")
+        await canvas_mode.prepare_open(session, e, canvas_access_code)
+        e.canvas_open_claim = None
+    if clear_closes:
+        e.closes_at = None
+    e.open_to = open_to_value
     e.status = "live"
     e.start_code = new_start_code()
     e.invigilator_code = new_invigilator_code()
     e.closed_at = None
     e.auto_closed = False
     e.updated_at = now
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        if canvas:
+            await canvas_mode.abort_open(session, e, failed=True)
+        raise
     await invalidate_exam(get_store(), e.id)
 
 

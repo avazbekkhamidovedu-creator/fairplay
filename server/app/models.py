@@ -61,6 +61,18 @@ class Exam(Base):
     allowed_domains: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
                                                   server_default=text("'[]'"))
     finish_url_contains: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    finish_url_regex: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    external_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    canvas_quiz_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    canvas_code_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    canvas_code_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canvas_code_failed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                     server_default=false())
+    canvas_release_failed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                        server_default=false())
+    canvas_removed_hosts: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
+                                                       server_default=text("'[]'"))
+    canvas_open_claim: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 2026-10-14: apps the teacher allows during the exam (keys of allowed_apps.CATALOG);
     # every other windowed app is closed when the computer locks.
     allowed_apps: Mapped[list] = mapped_column(JSON, nullable=False, default=list,

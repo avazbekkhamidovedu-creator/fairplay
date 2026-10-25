@@ -4,10 +4,10 @@
 // string code answers.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnswerValue, Exam, Results, StudentQuestion } from "../api/types";
-import { ApiError, getToken, contentApi, setToken, teacherApi } from "../api/client";
+import { contentApi, setToken, teacherApi } from "../api/client";
 import { AnswerInput } from "../components/student/AnswerInput";
 import { CodeQuestion } from "../components/student/CodeQuestion";
 import { FileUploadInput } from "../components/student/QuestionInputs";

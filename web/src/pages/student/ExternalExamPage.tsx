@@ -24,6 +24,7 @@ export default function ExternalExamPage() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [attempt, setAttempt] = useState<AttemptView | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [sentRefused, setSentRefused] = useState(false);
   const [lockReason, setLockReason] = useState("");
   const [preflightProblems, setPreflightProblems] = useState<string[]>([]);
   const [appsToClose, setAppsToClose] = useState<string[]>([]);
@@ -101,6 +102,7 @@ export default function ExternalExamPage() {
         url: a.external_url,
         allowed_domains: a.allowed_domains ?? [],
         finish_url_contains: a.finish_url_contains ?? null,
+        ...(a.external_kind === "canvas" ? { kind: "canvas" as const, finish_url_regex: a.finish_url_regex ?? null } : {}),
         deadline_at: a.deadline_at,
         // Re-stamp with the server clock now (the attempt may have loaded a while ago).
         server_time: new Date(Date.now() + offsetRef.current).toISOString(),
@@ -109,7 +111,10 @@ export default function ExternalExamPage() {
         session,
         allowed_apps: bridge.allowedAppIds(a.allowed_apps),
       });
-      if (!sent) setPhase("openFailed");
+      if (!sent) {
+        setSentRefused(true);
+        setPhase("openFailed");
+      }
     },
     [navigate],
   );
@@ -159,7 +164,10 @@ export default function ExternalExamPage() {
       if (msg.reason === "bad_session") {
         setLoadError("This exam was opened somewhere else. Type the start code again.");
         setPhase("reenter");
-      } else setPhase("openFailed");
+      } else {
+        if (/unsupported|canvas/i.test(String(msg.reason ?? ""))) setSentRefused(true);
+        setPhase("openFailed");
+      }
     });
   }, [phase]);
 
@@ -190,6 +198,12 @@ export default function ExternalExamPage() {
           {phase === "opening" && (
             <p className="ext-small">
               The exam website opens in this window. Use “Finish exam” at the top when you are done.
+            </p>
+          )}
+          {phase === "opening" && attempt?.external_kind === "canvas" && (
+            <p className="ext-small" data-testid="canvas-note">
+              Your Canvas quiz opens inside FairPlay. You may need to sign in to Canvas. FairPlay enters the quiz
+              access code for you, so you do not need one.
             </p>
           )}
         </main>
@@ -303,7 +317,11 @@ export default function ExternalExamPage() {
       <main className="ext-card">
         {title && <p className="ext-eyebrow">{title}</p>}
         <h1>The exam website could not be opened</h1>
-        <p>Sign in again in the FairPlay app, then open this exam once more.</p>
+        <p data-testid="open-failed-text">
+          {attempt?.external_kind === "canvas" && sentRefused
+            ? "Canvas exams are not available on this device yet. Ask your teacher which computer to use."
+            : "Sign in again in the FairPlay app, then open this exam once more."}
+        </p>
         <div className="ext-row">
           <button type="button" className="ext-btn primary" onClick={() => attempt && void lock()}>
             Try again

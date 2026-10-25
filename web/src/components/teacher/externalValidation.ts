@@ -1,6 +1,14 @@
 // Slice 3: client-side checks for external-website exams. Mirrors the server rules in
 // server/app/schemas.py (ExamIn / normalize_domain) so teachers see problems before saving.
-import type { ExamMode } from "../../api/types";
+import type {
+  CanvasCodeSource,
+  CanvasCodeStatus,
+  CanvasInfo,
+  CanvasInput,
+  CanvasQuizType,
+  ExamMode,
+  ExternalKind,
+} from "../../api/types";
 
 export const MAX_EXTERNAL_URL = 2000;
 export const MAX_ALLOWED_DOMAINS = 30;
@@ -14,9 +22,26 @@ export interface ExternalSettingsValue {
   external_url: string | null;
   allowed_domains: string[];
   finish_url_contains: string | null;
+  /** Canvas mode. Missing or null = any other website. */
+  external_kind?: ExternalKind | null;
+  /** null = detected from the link. */
+  canvas_quiz_type?: CanvasQuizType | null;
+  canvas_code_source?: CanvasCodeSource;
+  /** Typed code (manual only). Never filled from the server. */
+  canvas_access_code?: string;
+  /** The server already holds a typed code for this exam. */
+  canvas_code_stored?: boolean;
+  /** null = the pattern FairPlay picks for the quiz type. */
+  finish_url_regex?: string | null;
+  /** Sign-in sites the teacher removed from the automatic list. */
+  canvas_removed_hosts?: string[];
+  /** Only in the request built by externalExamInput. */
+  canvas?: CanvasInput | null;
 }
 
-export type ExternalSettingsErrors = Partial<Record<"external_url" | "allowed_domains" | "finish_url_contains", string>>;
+export type ExternalSettingsErrors = Partial<
+  Record<"external_url" | "allowed_domains" | "finish_url_contains" | "canvas_access_code" | "finish_url_regex", string>
+>;
 
 export const EMPTY_EXTERNAL_SETTINGS: ExternalSettingsValue = {
   mode: "questions",
@@ -167,8 +192,15 @@ export function validateExternalSettings(v: ExternalSettingsValue): ExternalSett
   if (urlErr) errors.external_url = urlErr;
   const domErr = validateDomains(v.allowed_domains);
   if (domErr) errors.allowed_domains = domErr;
-  if ((v.finish_url_contains ?? "").length > MAX_FINISH_CONTAINS)
+  if (v.external_kind !== "canvas" && (v.finish_url_contains ?? "").length > MAX_FINISH_CONTAINS)
     errors.finish_url_contains = `Keep this under ${MAX_FINISH_CONTAINS} characters.`;
+  if (v.external_kind === "canvas") {
+    if (!errors.external_url && !isHttpsUrl(v.external_url)) errors.external_url = "A Canvas link must start with https://";
+    const codeErr = validateCanvasCode(v);
+    if (codeErr) errors.canvas_access_code = codeErr;
+    const reErr = validateFinishRegex(v.finish_url_regex);
+    if (reErr) errors.finish_url_regex = reErr;
+  }
   return errors;
 }
 
@@ -180,23 +212,284 @@ export function validateExternalSettings(v: ExternalSettingsValue): ExternalSett
 export function externalExamInput(v: ExternalSettingsValue): ExternalSettingsValue {
   if (v.mode !== "external") return { ...EMPTY_EXTERNAL_SETTINGS };
   const finish = (v.finish_url_contains ?? "").trim();
-  return {
+  const base: ExternalSettingsValue = {
     mode: "external",
     external_url: (v.external_url ?? "").trim() || null,
     allowed_domains: normalizeDomains(v.allowed_domains),
     finish_url_contains: finish || null,
   };
+  if (v.external_kind !== "canvas") return v.external_kind === null ? { ...base, external_kind: null } : base;
+  const source = effectiveCodeSource(v);
+  const type = effectiveQuizType(v);
+  const code = v.canvas_access_code ?? "";
+  const regex = (v.finish_url_regex ?? "").trim();
+  const removed = v.canvas_removed_hosts ?? [];
+  const canvas: CanvasInput = {
+    quiz_type: type,
+    access_code_source: source,
+    ...(source === "manual" && code.trim() ? { access_code: code } : {}),
+    ...(removed.length > 0 ? { removed_hosts: [...removed] } : {}),
+  };
+  return {
+    ...base,
+    finish_url_contains: null,
+    external_kind: "canvas",
+    canvas,
+    ...(regex && regex !== defaultFinishRegex(type) ? { finish_url_regex: regex } : {}),
+  };
 }
 
 /** Settings from an Exam (or anything with the optional slice-3 fields). */
-export function externalSettingsFrom(e: Partial<ExternalSettingsValue> | null | undefined): ExternalSettingsValue {
-  return {
+export function externalSettingsFrom(
+  e: (Partial<Omit<ExternalSettingsValue, "external_kind">> & { external_kind?: ExternalKind | null; canvas?: CanvasInfo | null }) | null | undefined,
+): ExternalSettingsValue {
+  const base: ExternalSettingsValue = {
     mode: e?.mode === "external" ? "external" : "questions",
     external_url: e?.external_url ?? null,
     allowed_domains: [...(e?.allowed_domains ?? [])],
     finish_url_contains: e?.finish_url_contains ?? null,
   };
+  if (e?.mode !== "external" || e.external_kind !== "canvas") return base;
+  base.allowed_domains = base.allowed_domains.filter((d) => !isAutoCanvasHost(d, e.external_url));
+  const type = e.canvas?.quiz_type ?? detectCanvasQuizType(e.external_url) ?? "classic";
+  const regex = e.finish_url_regex ?? null;
+  return {
+    ...base,
+    external_kind: "canvas",
+    canvas_quiz_type: type,
+    canvas_code_source: e.canvas?.access_code_source ?? "managed",
+    canvas_access_code: "",
+    canvas_code_stored: e.canvas?.code_status === "set" && e.canvas.access_code_source === "manual",
+    finish_url_regex: regex && regex !== defaultFinishRegex(type) ? regex : null,
+  };
 }
+
+// ---------- Canvas mode ----------
+
+export const CANVAS_QUIZ_TYPE_LABEL: Record<CanvasQuizType, string> = {
+  classic: "Classic Quiz",
+  new: "New Quiz",
+  assignment: "Assignment",
+};
+
+export const MAX_FINISH_REGEX = 300;
+
+/** Sign-in sites the server adds to every Canvas exam (its default FAIRPLAY_CANVAS_SSO_HOSTS). */
+export const CANVAS_SIGN_IN_HOSTS = [
+  "*.duosecurity.com",
+  "login.microsoftonline.com",
+  "login.microsoft.com",
+  "sso.dukekunshan.edu.cn",
+];
+
+const QUIZ_LTI_HOST = /^\*\.quiz-lti-[a-z0-9-]+-prod\.instructure\.com$/;
+
+/** True for a site the server adds by itself: the Canvas host, New Quizzes hosts, sign-in hosts. */
+export function isAutoCanvasHost(entry: string, canvasUrl: string | null | undefined): boolean {
+  const d = normalizeDomainInput(entry);
+  return d === urlHost(canvasUrl) || QUIZ_LTI_HOST.test(d) || CANVAS_SIGN_IN_HOSTS.includes(d);
+}
+export const CANVAS_CODE_MIN = 4;
+export const CANVAS_CODE_MAX = 64;
+
+const FINISH_REGEX_DEFAULT: Record<CanvasQuizType, string> = {
+  classic: "/quizzes/\\d+/(submissions/\\d+|history)",
+  new: "submission-confirmation|submission-screen",
+  assignment: "/assignments/\\d+/submissions/\\d+",
+};
+
+/** The finish pattern FairPlay uses for a quiz type (the server fills the same one). */
+export function defaultFinishRegex(type: CanvasQuizType): string {
+  return FINISH_REGEX_DEFAULT[type];
+}
+
+function isHttpsUrl(url: string | null | undefined): boolean {
+  return /^https:\/\//i.test((url ?? "").trim());
+}
+
+/** Quiz type read from a Canvas link, or null when the link is not a quiz or assignment link. */
+export function detectCanvasQuizType(url: string | null | undefined): CanvasQuizType | null {
+  const s = (url ?? "").trim();
+  let path: string;
+  try {
+    path = new URL(s).pathname;
+  } catch {
+    return null;
+  }
+  if (/\/courses\/\d+\/quizzes\/\d+/.test(path)) return "classic";
+  if (/\/courses\/\d+\/assignments\/\d+/.test(path)) return "new";
+  return null;
+}
+
+/** Override first, then the detected type, then Classic. */
+export function effectiveQuizType(v: Pick<ExternalSettingsValue, "external_url" | "canvas_quiz_type">): CanvasQuizType {
+  return v.canvas_quiz_type ?? detectCanvasQuizType(v.external_url) ?? "classic";
+}
+
+/** New Quizzes have no way to set the code automatically: the code is typed by the teacher. */
+export function effectiveCodeSource(v: Pick<ExternalSettingsValue, "external_url" | "canvas_quiz_type" | "canvas_code_source">): CanvasCodeSource {
+  if (effectiveQuizType(v) === "new") return "manual";
+  return v.canvas_code_source ?? "managed";
+}
+
+/** Error text for the typed access code, or null. Only checked when the teacher types the code. */
+export function validateCanvasCode(v: ExternalSettingsValue): string | null {
+  if (effectiveCodeSource(v) !== "manual") return null;
+  const code = v.canvas_access_code ?? "";
+  if (!code.trim()) return v.canvas_code_stored && !code ? null : "Type the access code you set in Canvas.";
+  if (code.length < CANVAS_CODE_MIN || code.length > CANVAS_CODE_MAX)
+    return `The code must be ${CANVAS_CODE_MIN} to ${CANVAS_CODE_MAX} characters.`;
+  return null;
+}
+
+/** Warning when the typed code starts or ends with a space; the code is sent exactly as typed. */
+export function canvasCodeWarning(code: string | null | undefined): string | null {
+  const c = code ?? "";
+  if (c && c !== c.trim())
+    return "The code starts or ends with a space. FairPlay types it exactly as you entered it, spaces included.";
+  return null;
+}
+
+export const FINISH_REGEX_RULE =
+  "Leave empty for the pattern above, or write a plain pattern of up to 300 characters with no look-ahead, look-behind, back-references or named groups, and no repeated group that contains a choice (|) or another repeat.";
+
+export const MAX_REPEAT_COUNT = 100;
+export const MAX_UNBOUNDED_QUANTIFIERS = 8;
+
+interface GroupFrame {
+  alt: boolean;
+  quant: boolean;
+}
+
+/**
+ * Error text for a finish pattern the server would refuse, or null. A hand-written scan
+ * of the same plain subset the server accepts; the JS RegExp engine is not used to decide.
+ */
+export function validateFinishRegex(pattern: string | null | undefined): string | null {
+  const p = (pattern ?? "").trim();
+  if (!p) return null;
+  if (p.length > MAX_FINISH_REGEX) return `Keep this under ${MAX_FINISH_REGEX} characters.`;
+  const n = p.length;
+  const stack: GroupFrame[] = [];
+  let unbounded = 0;
+  let prevQuant = false;
+  let lastClosed: GroupFrame | null = null;
+  let i = 0;
+  while (i < n) {
+    const c = p[i]!;
+    if (c === "\\") {
+      const nx = p[i + 1];
+      if (nx === undefined) return "The pattern ends with a lone backslash.";
+      if (/[1-9kg]/.test(nx)) return "Back-references are not supported.";
+      i += 2;
+      prevQuant = false;
+      lastClosed = null;
+      continue;
+    }
+    if (c === "[") {
+      let j = i + 1;
+      if (p[j] === "^") j++;
+      if (p[j] === "]") j++;
+      while (j < n && p[j] !== "]") j += p[j] === "\\" ? 2 : 1;
+      if (j >= n) return "A [ in the pattern is not closed.";
+      i = j + 1;
+      prevQuant = false;
+      lastClosed = null;
+      continue;
+    }
+    if (c === "(") {
+      if (p[i + 1] === "?") {
+        const rest = p.slice(i + 2, i + 4);
+        if (rest.startsWith("P<")) return "Named groups are not supported.";
+        if (rest.startsWith("<=") || rest.startsWith("<!")) return "Look-behind patterns are not supported.";
+        if (rest.startsWith("<")) return "Named groups are not supported.";
+        if (rest.startsWith("=") || rest.startsWith("!")) return "Look-ahead patterns are not supported.";
+        if (!rest.startsWith(":")) return "Only plain (...) and (?:...) groups are supported.";
+        i += 3;
+      } else {
+        i += 1;
+      }
+      stack.push({ alt: false, quant: false });
+      prevQuant = false;
+      lastClosed = null;
+      continue;
+    }
+    if (c === ")") {
+      const frame = stack.pop();
+      if (!frame) return "A ) in the pattern has no matching (.";
+      const parent = stack[stack.length - 1];
+      if (parent) {
+        parent.alt = parent.alt || frame.alt;
+        parent.quant = parent.quant || frame.quant;
+      }
+      lastClosed = frame;
+      prevQuant = false;
+      i += 1;
+      continue;
+    }
+    if (c === "|") {
+      const top = stack[stack.length - 1];
+      if (top) top.alt = true;
+      i += 1;
+      prevQuant = false;
+      lastClosed = null;
+      continue;
+    }
+    let end = 0;
+    let repeats = false;
+    let open = false;
+    if (c === "*" || c === "+") {
+      end = i + 1;
+      repeats = true;
+      open = true;
+    } else if (c === "?") {
+      end = i + 1;
+    } else if (c === "{") {
+      if (/^\{,\d*\}/.test(p.slice(i))) return "Write repeat counts as {n}, {n,} or {n,m}, not {,n}.";
+      const m = /^\{(\d+)(?:(,)(\d*))?\}/.exec(p.slice(i));
+      if (m) {
+        const lo = Number(m[1]);
+        const hi = m[2] ? (m[3] === "" ? null : Number(m[3])) : lo;
+        if (lo > MAX_REPEAT_COUNT || (hi !== null && hi > MAX_REPEAT_COUNT))
+          return `Repeat counts can be at most ${MAX_REPEAT_COUNT}.`;
+        end = i + m[0].length;
+        repeats = hi === null || hi > 1;
+        open = hi === null;
+      }
+    }
+    if (end > 0) {
+      if (prevQuant) {
+        if (c === "?") {
+          i = end;
+          prevQuant = false;
+          continue;
+        }
+        return c === "+" ? "Possessive repeats are not supported." : "A repeat cannot follow another repeat.";
+      }
+      if (repeats && lastClosed && (lastClosed.alt || lastClosed.quant))
+        return "A group that is repeated cannot contain a choice (|) or another repeat.";
+      if (open && ++unbounded > MAX_UNBOUNDED_QUANTIFIERS)
+        return `Use at most ${MAX_UNBOUNDED_QUANTIFIERS} open-ended repeats (*, + or {n,}).`;
+      const top = stack[stack.length - 1];
+      if (top && repeats) top.quant = true;
+      i = end;
+      prevQuant = true;
+      lastClosed = null;
+      continue;
+    }
+    i += 1;
+    prevQuant = false;
+    lastClosed = null;
+  }
+  if (stack.length > 0) return "A ( in the pattern is not closed.";
+  return null;
+}
+
+export const CODE_STATUS_LABEL: Record<CanvasCodeStatus, string> = {
+  set: "Set",
+  not_set: "Not set",
+  failed: "Failed",
+};
 
 
 // ---------- audit W-09: describe allowed sites exactly as the server and app apply them ----------

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .grading import num
 from .models import Attempt, Exam
+from .canvas_mode import canvas_view, teacher_canvas_view, teacher_notice
 from .schemas import CODE_LANGUAGES, DEFAULT_TIME_LIMIT_MS, external_host
 from .integrations.registry import integration_for
 from .question_types import extended_fields
@@ -138,6 +139,8 @@ def exam_out(e: Exam, pending_grading: int = 0) -> dict:
         "grades_released": bool(e.grades_released), "released_at": iso(e.released_at),
         "closed_at": iso(e.closed_at), "pending_grading": int(pending_grading),
         **external_fields(e),
+        "canvas": teacher_canvas_view(e) if e.mode == "external" else None,
+        "canvas_notice": teacher_notice(e),
         # slice 5: LMS link (ids only; never any credential)
         "course_link_id": e.course_link_id, "lms_assignment_id": e.lms_assignment_id,
         "delivery": exam_delivery(e),  # slice 6
@@ -244,6 +247,9 @@ def external_fields(e: Exam) -> dict:
         "external_url": e.external_url if external else None,
         "allowed_domains": list(e.allowed_domains or []) if external else [],
         "finish_url_contains": e.finish_url_contains if external else None,
+        "finish_url_regex": e.finish_url_regex if external else None,
+        "external_kind": e.external_kind if external else None,
+        "canvas": canvas_view(e) if external else None,
     }
 
 
@@ -450,6 +456,8 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         # 2026-10-23: {calculator, open_book, websites}; the page passes websites to the
         # app as allowed_sites (the only hosts its sub-frames may load)
         "tools": student_tools(exam),
+        **({"finish_url_regex": exam.get("finish_url_regex"), "external_kind": exam.get("external_kind"),
+            "canvas": exam.get("canvas")} if external else {}),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
         "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)
         # integrations: "fairplay" or the external system's id (+ its display name)

@@ -215,6 +215,9 @@ final class EventLog {
         case serverReplyUnsigned(String)
         /// Review 2026-10-14: the watchdog stopped while locked (started again).
         case watchdogStopped
+        case canvasCodeFailed(String)
+        case canvasUploadUnsupported
+        case canvasSsoPopup(String)
 
         /// (type, detail) as sent to the server.
         var pair: (String, String) {
@@ -247,6 +250,9 @@ final class EventLog {
             case .appInBackground(let s): return ("app_in_background", s)
             case .serverReplyUnsigned(let s): return ("server_reply_unsigned", s)
             case .watchdogStopped: return ("watchdog_stopped", "the FairPlay watchdog stopped while locked; started again")
+            case .canvasCodeFailed(let s): return ("canvas_code_failed", s)
+            case .canvasUploadUnsupported: return ("canvas_upload_unsupported", "file questions need a file panel")
+            case .canvasSsoPopup(let s): return ("canvas_sso_popup", s)
             }
         }
     }

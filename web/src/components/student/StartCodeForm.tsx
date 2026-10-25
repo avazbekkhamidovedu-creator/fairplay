@@ -34,6 +34,7 @@ export function startErrorMessage(err: unknown): string {
     // audit S-03: not in the exam's class
     if (err.status === 403 && /is for .* students|not for your class/i.test(err.detail)) return err.detail;
     if (err.status === 409 && /another computer|somewhere else/i.test(err.detail)) return err.detail;
+    if (/canvas/i.test(err.detail) && err.status !== 403 && err.status !== 429) return err.detail;
     if (err.status === 403) return "That code isn't right. Check it with your teacher and try again.";
     if (err.status === 429) return "Too many wrong codes. Wait a moment, then try again.";
     if (err.status === 409 && /submitted/i.test(err.detail)) return "You have already submitted this exam.";

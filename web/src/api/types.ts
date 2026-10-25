@@ -6,6 +6,29 @@ export type ExamStatus = "draft" | "live" | "closed";
 export type AttemptStatus = "in_progress" | "submitted";
 /** Slice 3: where students answer — in FairPlay or on another website (SEB-style). */
 export type ExamMode = "questions" | "external";
+/** Canvas mode: an external exam whose quiz is a Canvas quiz or assignment. */
+export type ExternalKind = "canvas";
+export type CanvasQuizType = "classic" | "new" | "assignment";
+export type CanvasCodeSource = "managed" | "manual";
+export type CanvasCodeStatus = "set" | "not_set" | "failed";
+
+/** Canvas settings as the server returns them. The access code is never returned. */
+export interface CanvasInfo {
+  quiz_type: CanvasQuizType;
+  access_code_source: CanvasCodeSource;
+  code_status?: CanvasCodeStatus;
+  /** Teacher view after the exam closed: the server could not clear the code in Canvas. */
+  remove_code_in_canvas?: boolean;
+}
+
+/** Canvas settings as the teacher sends them. access_code is write-only (manual only). */
+export interface CanvasInput {
+  quiz_type: CanvasQuizType;
+  access_code_source: CanvasCodeSource;
+  access_code?: string;
+  /** Automatic sign-in sites the teacher removed. */
+  removed_hosts?: string[];
+}
 
 /** Slice 3 exam fields (external-website exams). null/[] when mode is "questions". */
 export interface ExternalExamFields {
@@ -118,6 +141,11 @@ export interface Exam {
   external_url?: string | null;
   allowed_domains?: string[];
   finish_url_contains?: string | null;
+  external_kind?: ExternalKind | null;
+  canvas?: CanvasInfo | null;
+  /** Teacher view: plain-language note about the Canvas setup, or null. */
+  canvas_notice?: string | null;
+  finish_url_regex?: string | null;
   /** 2026-10-14: apps allowed during the exam (catalog keys); everything else is closed. */
   allowed_apps?: string[];
   /** S3: a student coming back after FairPlay closed waits for the teacher (default true). */
@@ -202,6 +230,9 @@ export interface ExamInput {
   external_url?: string | null;
   allowed_domains?: string[];
   finish_url_contains?: string | null;
+  external_kind?: ExternalKind | null;
+  canvas?: CanvasInput | null;
+  finish_url_regex?: string | null;
   /** slice 4: total points of an exam held on another website (default 100). */
   external_points?: number;
   allowed_apps?: string[];
@@ -536,6 +567,9 @@ export interface AttemptView {
   external_url?: string | null;
   allowed_domains?: string[];
   finish_url_contains?: string | null;
+  external_kind?: ExternalKind | null;
+  canvas?: CanvasInfo | null;
+  finish_url_regex?: string | null;
   /** Only in the POST start response: the app session (X-FairPlay-Session). */
   session?: string;
   /** 2026-10-14: apps the locked computer keeps open (everything else is closed). */
