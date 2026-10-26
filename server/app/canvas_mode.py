@@ -1,38 +1,19 @@
-"""Canvas mode (Mode B): a website exam whose Canvas access code is held by the server and
-typed by the native app. Contract: docs/contract-canvas-mode-b-2026-10-25.md."""
+"""Canvas mode (Mode B): a website exam on a Canvas quiz or assignment. The student signs in to
+Canvas inside the app and can reach only the exam's course and item; there is no access code.
+Contract: docs/contract-canvas-mode-b-2026-10-25.md."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
-import secrets
-from datetime import timedelta
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select, update
-
-from .timeutil import utcnow
 
 log = logging.getLogger("proctora.canvas")
 
 KIND = "canvas"
 QUIZ_TYPES = ("classic", "new", "assignment")
-SOURCES = ("managed", "manual")
-CODE_MIN, CODE_MAX = 4, 64
-MANAGED_CODE_LEN = 24
-CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
-CODE_VALID_FOR_S = 60
-PROOF_FRESH_MS = 5 * 60 * 1000
-PROOF_FUTURE_MS = 30 * 1000
-PROOF_REPLAY_TTL_S = 2 * PROOF_FRESH_MS // 1000 + 5
-CODE_REQUESTS_PER_ATTEMPT = 6
-CODE_ATTEMPT_WINDOW_S = 10 * 60
-CODE_REQUESTS_PER_EXAM_PER_MIN = 300
-CODE_REQUESTS_PER_STUDENT_FACTOR = 3
-CANVAS_CALL_TIMEOUT_S = 20
-OPEN_CLAIM_S = 90
 MAX_REGEX_LEN = 300
 MAX_REPEAT = 100
 MAX_UNBOUNDED = 2
@@ -48,20 +29,6 @@ DEFAULT_FINISH = {
     "new": r"submission-confirmation|submission-screen",
     "assignment": r"/assignments/\d+/submissions/\d+",
 }
-
-CODE_FAILED = "canvas_code_failed"
-NEW_QUIZ_NOTICE = ("Canvas has no way for FairPlay to set the access code on New Quizzes or "
-                   "assignments. Set the code in Canvas and enter it here.")
-NO_CODE_NOTICE = "No access code entered yet. Enter the code you set in Canvas before opening the exam."
-RELEASE_FAILED_NOTICE = ("FairPlay could not clear the access code when the exam closed. "
-                         "Remove the access code in Canvas so the quiz is not left locked.")
-
-_secret = ""
-
-
-def set_secret(secret: str) -> None:
-    global _secret
-    _secret = secret
 
 
 def canvas_exam(e) -> bool:
@@ -93,11 +60,6 @@ def infer_quiz_type(url: str) -> str | None:
     if _ASSIGNMENT_PATH.match(path):
         return "new"
     return None
-
-
-def quiz_ids(url: str | None) -> tuple[str, str] | None:
-    m = _QUIZ_PATH.match(urlsplit(url or "").path)
-    return (m[1], m[2]) if m else None
 
 
 _SCOPE_PATH = re.compile(r"/courses/([0-9]{1,20})/(quizzes|assignments)/([0-9]{1,20})(?:/.*)?")
@@ -142,11 +104,6 @@ def scope_of(url: str | None) -> dict | None:
     return {"course_id": m[1], "item_kind": m[2], "item_id": m[3]}
 
 
-def effective_source(quiz_type: str, requested: str) -> str:
-    return "managed" if requested == "managed" and quiz_type == "classic" else "manual"
-
-
-# ---------------------------------------------------------------- finish_url_regex
 _CLASS_PATTERNS = {"d": "[0-9]", "w": "[A-Za-z0-9_]", "s": r"[ \t\n\r\f\v]"}
 
 
@@ -385,6 +342,15 @@ def build_allowed_domains(canvas_host: str, quiz_type: str, extra: list[str],
     return list(dict.fromkeys(kept_auto + kept_teacher))
 
 
+def auto_host_split(allowed_domains: list[str]) -> tuple[list[str], list[str]]:
+    """The sign-in hosts and the quiz-lti hosts that are in force for an exam, read from its
+    stored allowed_domains (which already left out what the teacher removed or the policy blocked)."""
+    allowed = list(allowed_domains or [])
+    sso = set(sso_hosts())
+    lti = set(quiz_lti_hosts())
+    return [h for h in allowed if h in sso], [h for h in allowed if h in lti]
+
+
 def blocked_auto_hosts(quiz_type: str, removed: list[str] | None = None) -> list[str]:
     from .integrations.site_policy import filter_sites
     hosts = [h for h in auto_hosts(quiz_type) if h not in (removed or [])]
@@ -392,70 +358,26 @@ def blocked_auto_hosts(quiz_type: str, removed: list[str] | None = None) -> list
 
 
 # ---------------------------------------------------------------- save
-def new_managed_code() -> str:
-    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(MANAGED_CODE_LEN))
-
-
-def seal_code(code: str) -> str:
-    from .lms.secretbox import seal
-    return seal(_secret, code)
-
-
-def open_code(sealed: str | None) -> str | None:
-    if not sealed:
-        return None
-    from .lms.secretbox import open_
-    try:
-        return open_(_secret, sealed)
-    except (ValueError, UnicodeDecodeError):
-        return None
-
 
 def clear_fields(e) -> None:
     e.external_kind = None
     e.canvas_quiz_type = None
-    e.canvas_code_source = None
-    e.canvas_code_enc = None
-    e.canvas_code_failed = False
     e.canvas_removed_hosts = []
     e.canvas_open_book = False
 
 
-def resolve_settings(e, body) -> tuple[str, str, str | None]:
-    """(quiz_type, effective source, new manual code) of a canvas save. A save without a
-    canvas block, or without a source, keeps what the exam already has."""
-    was_canvas = canvas_exam(e)
-    c = body.canvas
-    if c is None:
-        if was_canvas:
-            quiz_type = e.canvas_quiz_type or "classic"
-            requested = e.canvas_code_source or "manual"
-        else:
-            quiz_type = infer_quiz_type(body.external_url or "")
-            if quiz_type is None:
-                raise HTTPException(422, "canvas.quiz_type is needed: the link is not a Canvas "
-                                         "quiz or assignment link")
-            requested = "managed"
-        return quiz_type, effective_source(quiz_type, requested), None
-    requested = c.access_code_source
-    if was_canvas and "access_code_source" not in c.model_fields_set:
-        requested = e.canvas_code_source or "manual"
-    return c.quiz_type, effective_source(c.quiz_type, requested), c.access_code
-
-
-async def release_before_change(session, e, body) -> None:
-    """A draft that still holds a live managed code gives it back in Canvas before a save
-    switches it to a manual code, another quiz or a plain website exam."""
-    e.canvas_release_failed = False
-    if not (canvas_exam(e) and e.canvas_code_source == "managed" and e.canvas_code_enc):
-        return
-    if body.mode == "external" and body.external_kind == KIND:
-        _, source, _ = resolve_settings(e, body)
-        if source == "managed" and quiz_ids(body.external_url) == quiz_ids(e.external_url):
-            return
-    ok = await clear_in_canvas(session, e)
-    e.canvas_code_enc = None
-    e.canvas_release_failed = not ok
+def resolve_quiz_type(e, body) -> str:
+    """The quiz type of a canvas save: the request's, else the one already stored, else the
+    one the link shows."""
+    if body.canvas is not None and body.canvas.quiz_type:
+        return body.canvas.quiz_type
+    if canvas_exam(e):
+        return e.canvas_quiz_type or "classic"
+    quiz_type = infer_quiz_type(body.external_url or "")
+    if quiz_type is None:
+        raise HTTPException(422, "canvas.quiz_type is needed: the link is not a Canvas "
+                                 "quiz or assignment link")
+    return quiz_type
 
 
 def apply_settings(e, body, prev_domains: list[str] | None = None) -> None:
@@ -469,21 +391,8 @@ def apply_settings(e, body, prev_domains: list[str] | None = None) -> None:
         e.finish_url_regex = body.finish_url_regex
         return
     was_canvas = canvas_exam(e)
-    quiz_type, source, access_code = resolve_settings(e, body)
+    quiz_type = resolve_quiz_type(e, body)
     host = host_of(body.external_url)
-    if source == "managed" and access_code:
-        raise HTTPException(422, "access_code is only for the manual source")
-    if source == "managed" and quiz_ids(body.external_url) is None:
-        raise HTTPException(422, "The link must be a Canvas quiz link like "
-                                 "https://school.instructure.com/courses/12/quizzes/34")
-    previous = e.canvas_code_source if was_canvas else None
-    if source == "manual":
-        if access_code:
-            e.canvas_code_enc = seal_code(access_code)
-        elif previous != "manual":
-            e.canvas_code_enc = None
-    elif previous != "managed":
-        e.canvas_code_enc = None
     extra = list(body.allowed_domains)
     if was_canvas and prev_domains is not None and "allowed_domains" not in body.model_fields_set:
         extra = list(prev_domains)
@@ -492,15 +401,13 @@ def apply_settings(e, body, prev_domains: list[str] | None = None) -> None:
         removed = list(body.canvas.removed_hosts)
     if host in removed:
         raise HTTPException(422, "The Canvas website itself cannot be removed from the allowed websites")
-    e.canvas_removed_hosts = removed
     if body.canvas is not None and "open_book" in body.canvas.model_fields_set:
         e.canvas_open_book = bool(body.canvas.open_book)
     elif not was_canvas:
         e.canvas_open_book = False
+    e.canvas_removed_hosts = removed
     e.external_kind = KIND
     e.canvas_quiz_type = quiz_type
-    e.canvas_code_source = source
-    e.canvas_code_failed = False
     e.allowed_domains = build_allowed_domains(host, quiz_type, extra, removed)
     e.finish_url_contains = None
     e.finish_url_regex = resolve_finish_regex(body.finish_url_regex, quiz_type)
@@ -511,211 +418,29 @@ def canvas_view(e) -> dict | None:
         return None
     scope = scope_of(e.external_url)
     return {"quiz_type": e.canvas_quiz_type or "classic",
-            "access_code_source": e.canvas_code_source or "manual",
             "scope": None if scope is None else {**scope},
             "open_book": bool(e.canvas_open_book)}
-
-
-def code_status(e) -> str:
-    if e.canvas_code_failed:
-        return "failed"
-    return "set" if e.canvas_code_enc else "not_set"
 
 
 def teacher_canvas_view(e) -> dict | None:
     v = canvas_view(e)
     if v is None:
         return None
-    return {**v, "code_status": code_status(e), "removed_hosts": list(e.canvas_removed_hosts or []),
-            "remove_code_in_canvas": bool(e.canvas_release_failed),
-            "sign_in_hosts": sso_hosts()}
+    return {**v, "removed_hosts": list(e.canvas_removed_hosts or []), "sign_in_hosts": sso_hosts()}
 
 
 def teacher_notice(e) -> str | None:
-    parts = []
-    if getattr(e, "canvas_release_failed", False):
-        parts.append(RELEASE_FAILED_NOTICE)
     if not canvas_exam(e):
-        return " ".join(parts) or None
+        return None
+    parts = []
+    if scope_of(e.external_url) is None:
+        parts.append("Fix the link: it must open one quiz or assignment, like "
+                     "https://<canvas>/courses/123/quizzes/456. Until then students cannot start "
+                     "this exam and you cannot open it.")
     quiz_type = e.canvas_quiz_type or "classic"
     blocked = blocked_auto_hosts(quiz_type, list(e.canvas_removed_hosts or []))
     if blocked:
         parts.append("This server's website policy blocks these sign-in websites, so FairPlay did "
                      f"not allow them: {', '.join(blocked)}. Students may not be able to sign in "
                      "to Canvas.")
-    if quiz_type != "classic":
-        parts.append(NEW_QUIZ_NOTICE)
-    if (e.canvas_code_source or "manual") == "manual" and not e.canvas_code_enc:
-        parts.append(NO_CODE_NOTICE)
     return " ".join(parts) or None
-
-
-# ---------------------------------------------------------------- Canvas side
-def _failed(message: str) -> HTTPException:
-    return HTTPException(409, {"code": CODE_FAILED, "message": message})
-
-
-async def _provider(session, e):
-    from .models import LmsConnection
-    host = host_of(e.external_url)
-    rows = (await session.execute(
-        select(LmsConnection).where(LmsConnection.teacher_id == e.teacher_id,
-                                    LmsConnection.provider == "canvas")
-        .order_by(LmsConnection.id))).scalars().all()
-    conn = next((c for c in rows if host_of(c.base_url) == host), None)
-    if conn is None:
-        return None
-    from .lms import make_provider
-    from .lms.secretbox import open_
-    from .routes_lms import _allow_private
-    try:
-        token = open_(_secret, conn.credential)
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return make_provider("canvas", conn.base_url, token, allow_private=_allow_private())
-
-
-async def claim_open(session, e) -> bool:
-    """Marks the exam as being opened so two opens cannot both rotate the Canvas code."""
-    from .models import Exam
-    now = utcnow()
-    res = await session.execute(
-        update(Exam).where(
-            Exam.id == e.id, Exam.status.in_(("draft", "closed")),
-            or_(Exam.canvas_open_claim.is_(None),
-                Exam.canvas_open_claim < now - timedelta(seconds=OPEN_CLAIM_S)))
-        .values(canvas_open_claim=now))
-    await session.commit()
-    await session.refresh(e)
-    return res.rowcount == 1
-
-
-async def abort_open(session, e, failed: bool = True) -> None:
-    from .models import Exam
-    eid = e.id
-    await session.rollback()
-    await session.execute(update(Exam).where(Exam.id == eid)
-                          .values(canvas_open_claim=None, canvas_code_failed=failed))
-    await session.commit()
-    await session.refresh(e)
-
-
-async def undo_open(session, e) -> None:
-    """Best effort after an open that did not finish (commit failed, request cancelled): drops
-    the claim and clears a managed code Canvas may already hold. Never raises."""
-    try:
-        await session.rollback()
-        await session.refresh(e)
-        if (e.canvas_code_source or "manual") == "managed":
-            await clear_in_canvas(session, e)
-        await abort_open(session, e, True)
-    except BaseException:
-        log.warning("canvas open could not be undone for exam %s", getattr(e, "id", "?"))
-
-
-async def prepare_open(session, e, manual_code: str | None = None) -> None:
-    """After claim_open: a managed code is set in Canvas, a manual one must exist. On
-    failure the claim is dropped and the exam stays as it was (409 canvas_code_failed)."""
-    eid = e.id
-    try:
-        await _prepare_open(session, e, manual_code)
-    except HTTPException:
-        await abort_open(session, e, True)
-        raise
-    except Exception:
-        await abort_open(session, e, True)
-        log.warning("canvas open failed for exam %s", eid)
-        raise _failed("Canvas could not be reached. Try again, or switch to a manual access "
-                      "code.") from None
-    except BaseException:
-        await asyncio.shield(undo_open(session, e))
-        raise
-    e.canvas_code_failed = False
-    e.canvas_release_failed = False
-
-
-async def _prepare_open(session, e, manual_code: str | None) -> None:
-    from .lms import LmsError
-    if (e.canvas_code_source or "manual") == "manual":
-        if manual_code:
-            e.canvas_code_enc = seal_code(manual_code)
-            return
-        if not e.canvas_code_enc or open_code(e.canvas_code_enc) is None:
-            raise _failed(NO_CODE_NOTICE if not e.canvas_code_enc else
-                          "The saved access code can no longer be read. Enter it again.")
-        return
-    ids = quiz_ids(e.external_url)
-    if ids is None:
-        raise _failed("The exam link is not a Canvas quiz link. Switch to a manual access code.")
-    prov = await _provider(session, e)
-    if prov is None:
-        raise _failed("Connect your Canvas account (same Canvas address as the quiz) under "
-                      "Connections, or switch to a manual access code.")
-    code = new_managed_code()
-    try:
-        async def call():
-            async with prov:
-                await prov.set_quiz_access_code(ids[0], ids[1], code)
-        await asyncio.wait_for(call(), CANVAS_CALL_TIMEOUT_S)
-    except LmsError as exc:
-        status = f" (HTTP {exc.status})" if exc.status else ""
-        raise _failed(f"Canvas did not accept the access code{status}. Check that your Canvas "
-                      "account may edit this quiz, or switch to a manual access code.") from None
-    except Exception:
-        log.warning("canvas code rotation failed for exam %s", e.id)
-        raise _failed("Canvas could not be reached. Try again, or switch to a manual access "
-                      "code.") from None
-    e.canvas_code_enc = seal_code(code)
-
-
-async def clear_in_canvas(session, e) -> bool:
-    """Sets an empty access code on the Canvas quiz. False when it could not be done;
-    never raises."""
-    ids = quiz_ids(e.external_url)
-    try:
-        prov = await _provider(session, e) if ids else None
-        if prov is None:
-            log.warning("canvas code not cleared for exam %s: no usable Canvas connection", e.id)
-            return False
-
-        async def call():
-            async with prov:
-                await prov.set_quiz_access_code(ids[0], ids[1], "")
-        await asyncio.wait_for(call(), CANVAS_CALL_TIMEOUT_S)
-        return True
-    except Exception as exc:  # noqa: BLE001
-        log.warning("canvas code not cleared for exam %s: %s", e.id, type(exc).__name__)
-        return False
-
-
-async def release_on_close(session, e) -> None:
-    """After an exam closes: the stored code is forgotten (managed and manual) and a managed
-    one is cleared in Canvas. A Canvas failure never blocks the close; the teacher sees
-    RELEASE_FAILED_NOTICE instead."""
-    if not canvas_exam(e):
-        return
-    ok = True
-    if e.canvas_code_source == "managed":
-        ok = await clear_in_canvas(session, e)
-    e.canvas_code_enc = None
-    e.canvas_release_failed = not ok
-    await session.commit()
-
-
-async def exam_budget(session, store, exam) -> int:
-    """Code issues allowed per minute for the whole exam: sized to the roster."""
-    key = f"ccb:{exam.id}"
-    cached = await store.get(key)
-    if cached:
-        return int(cached)
-    from .access import eligible_ids
-    roster = 0
-    try:
-        ids = eligible_ids(exam)
-        if ids is not None:
-            roster = (await session.execute(select(func.count()).select_from(ids.subquery()))).scalar() or 0
-    except Exception:  # noqa: BLE001
-        log.warning("canvas roster size unavailable for exam %s", exam.id)
-    budget = max(CODE_REQUESTS_PER_EXAM_PER_MIN, CODE_REQUESTS_PER_STUDENT_FACTOR * int(roster))
-    await store.set(key, str(budget), 120)
-    return budget

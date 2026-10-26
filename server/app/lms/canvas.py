@@ -6,7 +6,6 @@ Endpoints used (https://canvas.instructure.com/doc/api/):
   GET  /api/v1/courses/:id/users?enrollment_type[]=student&include[]=email&per_page=100
   GET  /api/v1/courses/:id/assignments/:aid                           (does it still exist?)
   POST /api/v1/courses/:id/assignments                                 (create, JSON body)
-  PUT  /api/v1/courses/:id/quizzes/:qid     quiz[access_code]=...     (Classic Quizzes access code)
   POST /api/v1/courses/:id/assignments/:aid/submissions/update_grades (form-encoded)
   GET  /api/v1/progress/:id                                            (async job status)
 
@@ -132,11 +131,6 @@ class CanvasProvider(LmsProvider):
         if not isinstance(a, dict) or "id" not in a:
             raise LmsError("Canvas did not return the new assignment")
         return str(a["id"])
-
-    async def set_quiz_access_code(self, course_id: str, quiz_id: str, code: str) -> None:
-        resp = await self.request("PUT", f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
-                                  data=[("quiz[access_code]", code)])
-        self._check(resp, "setting the quiz access code")
 
     async def post_grades(self, course_id: str, assignment_id: str,
                           rows: list[GradeRow]) -> list[GradeError]:

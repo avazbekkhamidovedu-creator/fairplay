@@ -9,8 +9,6 @@ export type ExamMode = "questions" | "external";
 /** Canvas mode: an external exam whose quiz is a Canvas quiz or assignment. */
 export type ExternalKind = "canvas";
 export type CanvasQuizType = "classic" | "new" | "assignment";
-export type CanvasCodeSource = "managed" | "manual";
-export type CanvasCodeStatus = "set" | "not_set" | "failed";
 
 /** The course and item a Canvas exam link points at (derived by the server from the link). */
 export interface CanvasScope {
@@ -22,12 +20,15 @@ export interface CanvasScope {
 /** CanvasScope plus the teacher's open-book choice, as the app receives it. */
 export interface CanvasScopeView extends CanvasScope {
   open_book: boolean;
+  /** Sign-in sites in force for this exam (exact hosts or *.host), the teacher's removals left out. */
+  sign_in_hosts?: string[];
+  /** New Quizzes hosts in force for this exam (empty for Classic Quizzes and assignments). */
+  quiz_lti_hosts?: string[];
 }
 
 /** Canvas settings as the server returns them. The access code is never returned. */
 export interface CanvasInfo {
   quiz_type: CanvasQuizType;
-  access_code_source: CanvasCodeSource;
   /** null when the link is not a plain quiz or assignment link. */
   scope?: CanvasScope | null;
   /** Students may also open the course's pages, modules and files. */
@@ -35,16 +36,11 @@ export interface CanvasInfo {
   /** Teacher view: sign-in sites the teacher removed, and the sites the server adds by default. */
   removed_hosts?: string[];
   sign_in_hosts?: string[];
-  code_status?: CanvasCodeStatus;
-  /** Teacher view after the exam closed: the server could not clear the code in Canvas. */
-  remove_code_in_canvas?: boolean;
 }
 
-/** Canvas settings as the teacher sends them. access_code is write-only (manual only). */
+/** Canvas settings as the teacher sends them. */
 export interface CanvasInput {
   quiz_type: CanvasQuizType;
-  access_code_source: CanvasCodeSource;
-  access_code?: string;
   /** Automatic sign-in sites the teacher removed. */
   removed_hosts?: string[];
   open_book?: boolean;

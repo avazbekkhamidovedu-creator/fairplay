@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .grading import num
 from .models import Attempt, Exam
-from .canvas_mode import canvas_view, teacher_canvas_view, teacher_notice
+from .canvas_mode import auto_host_split, canvas_view, teacher_canvas_view, teacher_notice
 from .schemas import CODE_LANGUAGES, DEFAULT_TIME_LIMIT_MS, external_host
 from .integrations.registry import integration_for
 from .question_types import extended_fields
@@ -233,11 +233,14 @@ def student_tools(exam: dict) -> dict:
             "allowed_sites": allowed_sites(websites)}
 
 
-def canvas_scope_of(canvas: dict | None) -> dict | None:
-    scope = (canvas or {}).get("scope")
+def canvas_scope_of(exam: dict) -> dict | None:
+    canvas = exam.get("canvas") or {}
+    scope = canvas.get("scope")
     if not scope:
         return None
-    return {**scope, "open_book": bool((canvas or {}).get("open_book"))}
+    sign_in, lti = auto_host_split(exam.get("allowed_domains") or [])
+    return {**scope, "open_book": bool(canvas.get("open_book")),
+            "sign_in_hosts": sign_in, "quiz_lti_hosts": lti}
 
 
 def lock_settings(e: Exam) -> dict:
@@ -465,7 +468,7 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "tools": student_tools(exam),
         **({"finish_url_regex": exam.get("finish_url_regex"), "external_kind": exam.get("external_kind"),
             "canvas": exam.get("canvas")} if external else {}),
-        **({"canvas_scope": canvas_scope_of(exam.get("canvas"))}
+        **({"canvas_scope": canvas_scope_of(exam)}
            if external and exam.get("external_kind") == "canvas" else {}),
         "approval": approval_of(a),    # S3: "pending" -> the page shows "Wait for your teacher"
         "trial": bool(exam.get("is_trial")),   # 2026-10-22: the sample exam (Stop practice)

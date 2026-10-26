@@ -65,15 +65,6 @@ enum Net {
     /// runs on the main thread with (HTTP status or nil when offline, decoded JSON object).
     static func request(_ method: String, path: String, token: String, appSession: String?,
                         body: [String: Any]?, completion: @escaping (Int?, [String: Any]?) -> Void) {
-        requestWithRetryAfter(method, path: path, token: token, appSession: appSession, body: body) { status, json, _ in
-            completion(status, json)
-        }
-    }
-
-    /// Same as `request`, and also hands over the Retry-After header text (if any).
-    static func requestWithRetryAfter(_ method: String, path: String, token: String, appSession: String?,
-                                      body: [String: Any]?,
-                                      completion: @escaping (Int?, [String: Any]?, String?) -> Void) {
         // "path?query": appendingPathComponent would escape the "?" (audit M-04 needs ?nonce=).
         let parts = path.split(separator: "?", maxSplits: 1).map(String.init)
         var url = Config.serverURL.appendingPathComponent(parts.first ?? path)
@@ -106,12 +97,11 @@ enum Net {
                 let what = status.map { "HTTP \($0)" } ?? "NO RESPONSE (\(error?.localizedDescription ?? "?"))"
                 DebugLog.log("net", "\(method) /\(path) -> \(what) in \(ms) ms")
             }
-            let retryAfter = http?.value(forHTTPHeaderField: "Retry-After")
             var json: [String: Any]?
             if let data { json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] }
             DispatchQueue.main.async {
                 if status == 426 { Net.onUpgradeRequired?((json?["min_app_version"] as? String) ?? "") }
-                completion(status, json, retryAfter)
+                completion(status, json)
             }
         }.resume()
     }

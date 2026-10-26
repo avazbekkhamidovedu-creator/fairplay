@@ -16,6 +16,19 @@ final class ExamWebView: WKWebView {
         return super.canPerformAction(action, withSender: sender)
     }
 
+    func disableDragAndDrop() {
+        let views: [UIView] = [self, scrollView] + scrollView.subviews
+        for view in views {
+            for interaction in view.interactions {
+                if let drag = interaction as? UIDragInteraction {
+                    drag.isEnabled = false
+                } else if interaction is UIDropInteraction {
+                    view.removeInteraction(interaction)
+                }
+            }
+        }
+    }
+
     override func buildMenu(with builder: UIMenuBuilder) {
         if MainActor.assumeIsolated({ LockdownController.shared.isLocked }) {
             let ids: [UIMenu.Identifier] = [.lookup, .learn, .share, .speech, .replace, .find, .format,
@@ -105,6 +118,12 @@ final class ExamViewController: UIViewController, LockSurface,
         buildWebView()
         bar.onInvigilator = { [weak self] in self?.promptEmergencyExit() }
         external.attach(webView: webView, bar: bar)
+        external.resetScripts = { [weak self] in
+            guard let self else { return }
+            let ucc = self.webView.configuration.userContentController
+            ucc.removeAllUserScripts()
+            self.addPageScripts(to: ucc)
+        }
         external.confirmFinish = { [weak self] done in self?.confirmFinish(done) }
         startBatteryUpdates()
     }
@@ -134,30 +153,7 @@ final class ExamViewController: UIViewController, LockSurface,
         webView.evaluateJavaScript(js)
     }
 
-    private func buildWebView() {
-        let content = shield.content
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()          // localStorage keeps offline answers across a crash
-        config.applicationNameForUserAgent = "FairPlay/\(Config.version) FairPlay-iPad"
-        config.preferences.javaScriptCanOpenWindowsAutomatically = false
-        config.dataDetectorTypes = []
-        config.allowsAirPlayForMediaPlayback = false
-        config.allowsPictureInPictureMediaPlayback = false
-        config.allowsInlineMediaPlayback = true
-        // No Apple Intelligence rewrite / proofread in answers (KVC like the Mac app: some
-        // SDKs don't expose it to Swift).
-        if #available(iOS 18.0, *) {
-            let sel = NSSelectorFromString("setWritingToolsBehavior:")
-            if config.responds(to: sel) { config.setValue(UIWritingToolsBehavior.none.rawValue, forKey: "writingToolsBehavior") }
-        }
-
-        // 2026-10-23: fairplay-asset://bundle/... serves the asset pack inside the app (the
-        // Python engine, pdf.js): subresources, workers and fetches only; decidePolicyFor
-        // refuses navigations to it.
-        config.setURLSchemeHandler(AssetSchemeHandler(), forURLScheme: AssetPack.scheme)   // config keeps it
-
-        let ucc = WKUserContentController()
-        ucc.add(WeakScriptHandler(self), name: "proctora")
+    private func addPageScripts(to ucc: WKUserContentController) {
         let guardJS = """
         (function () {
           document.addEventListener('contextmenu', function (e) { e.preventDefault(); }, true);
@@ -189,6 +185,33 @@ final class ExamViewController: UIViewController, LockSurface,
         } else {
             DebugLog.log("assets", "no asset pack in this build: the exam page downloads its files")
         }
+    }
+
+    private func buildWebView() {
+        let content = shield.content
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()          // localStorage keeps offline answers across a crash
+        config.applicationNameForUserAgent = "FairPlay/\(Config.version) FairPlay-iPad"
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.dataDetectorTypes = []
+        config.allowsAirPlayForMediaPlayback = false
+        config.allowsPictureInPictureMediaPlayback = false
+        config.allowsInlineMediaPlayback = true
+        // No Apple Intelligence rewrite / proofread in answers (KVC like the Mac app: some
+        // SDKs don't expose it to Swift).
+        if #available(iOS 18.0, *) {
+            let sel = NSSelectorFromString("setWritingToolsBehavior:")
+            if config.responds(to: sel) { config.setValue(UIWritingToolsBehavior.none.rawValue, forKey: "writingToolsBehavior") }
+        }
+
+        // 2026-10-23: fairplay-asset://bundle/... serves the asset pack inside the app (the
+        // Python engine, pdf.js): subresources, workers and fetches only; decidePolicyFor
+        // refuses navigations to it.
+        config.setURLSchemeHandler(AssetSchemeHandler(), forURLScheme: AssetPack.scheme)   // config keeps it
+
+        let ucc = WKUserContentController()
+        ucc.add(WeakScriptHandler(self), name: "proctora")
+        addPageScripts(to: ucc)
         config.userContentController = ucc
 
         let wv = ExamWebView(frame: .zero, configuration: config)
@@ -317,8 +340,13 @@ final class ExamViewController: UIViewController, LockSurface,
     /// file) and the page hears {type:"fileRefused"}. The page guard normally refuses earlier.
     override func present(_ viewControllerToPresent: UIViewController, animated flag: Bool,
                           completion: (() -> Void)? = nil) {
+        if external.isCanvas, viewControllerToPresent is UIActivityViewController {
+            DebugLog.log("web", "share sheet REFUSED during a canvas exam")
+            return
+        }
         if LockdownController.shared.isLocked, Self.cancelIfFilePicker(viewControllerToPresent) {
             DebugLog.log("web", "file picker REFUSED while locked: \(type(of: viewControllerToPresent))")
+            external.noteUploadRefused()
             send(FilePicker.refusedMessage)
             return
         }
@@ -344,6 +372,10 @@ final class ExamViewController: UIViewController, LockSurface,
 
     func reload() {
         guard Config.serverIsAcceptable else { return }
+        if external.isCanvas, let start = external.startURL {
+            webView.load(URLRequest(url: start))
+            return
+        }
         if webView.url == nil || webView.url?.scheme == "about" {
             // 2026-10-24: while locked the sign-in page is refused (decidePolicyFor) and the
             // page stayed blank: back to the last page the lock showed instead.
@@ -797,12 +829,32 @@ final class ExamViewController: UIViewController, LockSurface,
             }
             return
         }
+        if external.isCanvas {
+            if isServerURL(url) {
+                EventLog.shared.record("blocked_navigation", "exam server page during a canvas exam")
+                decisionHandler(.cancel)
+                return
+            }
+            if mainFrame, navigationAction.shouldPerformDownload {
+                external.reportDownloadBlocked(host: url.host)
+                decisionHandler(.cancel)
+                return
+            }
+            if mainFrame, external.allows(url), external.blocksMainFrame(url) {
+                DebugLog.log("web", "navigation BLOCKED (canvas scope): \(url.host ?? "")\(url.path)")
+                external.reportBlocked(url)
+                decisionHandler(.cancel)
+                return
+            }
+        }
         if ownLocalPage || isServerURL(url) || external.allows(url) || (isLocal && !mainFrame && url.absoluteString == "about:blank") {
+            // Review 2026-10-24 (as on the Mac): eventsReady is reset in didCommit. A
+            // navigation that never commits (a cancelled download, a 204, a fragment
+            // link) left the page on screen without events.
             if mainFrame {
-                external.checkFinishURL(url)
-                // Review 2026-10-24 (as on the Mac): eventsReady is reset in didCommit. A
-                // navigation that never commits (a cancelled download, a 204, a fragment
-                // link) left the page on screen without events.
+                if !external.isCanvas { external.checkFinishURL(url) }
+            } else if external.isCanvas {
+                external.checkFrameFinish(url)
             }
             decisionHandler(ExamViewController.allowInPlace)
         } else {
@@ -817,6 +869,24 @@ final class ExamViewController: UIViewController, LockSurface,
     /// else as WebKit's own default (show what it can show, cancel the rest).
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url, !isServerURL(u) {
+            if !external.childAllows(u) {
+                if external.allows(u) {
+                    external.reportBlocked(u)
+                } else {
+                    EventLog.shared.record("blocked_navigation", u.host ?? u.absoluteString)
+                }
+                decisionHandler(.cancel)
+                return
+            }
+            let disposition = (navigationResponse.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition")
+            if AllowedSites.isAttachment(contentDisposition: disposition) {
+                external.reportDownloadBlocked(host: u.host)
+                decisionHandler(.cancel)
+                return
+            }
+        }
         if !navigationResponse.isForMainFrame, LockdownController.shared.isLocked {
             let disposition = (navigationResponse.response as? HTTPURLResponse)?
                 .value(forHTTPHeaderField: "Content-Disposition")
@@ -828,6 +898,10 @@ final class ExamViewController: UIViewController, LockSurface,
                 return
             }
         }
+        if external.isCanvas, !navigationResponse.isForMainFrame, navigationResponse.canShowMIMEType,
+           let u = navigationResponse.response.url {
+            external.checkFrameFinish(u)
+        }
         decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
     }
 
@@ -838,6 +912,22 @@ final class ExamViewController: UIViewController, LockSurface,
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if external.isCanvas {
+            let url = navigationAction.request.url
+            switch external.popupPlan(url: url) {
+            case .sameView:
+                if let url {
+                    if CanvasPopup.isCrossHost(url, openerHost: webView.url?.host) {
+                        EventLog.shared.record("canvas_sso_popup", url.host ?? "?")
+                    }
+                    webView.load(URLRequest(url: url))
+                }
+            case .block:
+                EventLog.shared.record("blocked_navigation", "popup \(url?.host ?? url?.absoluteString ?? "?")")
+                external.showNotice()
+            }
+            return nil
+        }
         if let url = navigationAction.request.url, isServerURL(url) || external.allows(url) {
             webView.load(URLRequest(url: url))
         } else if let url = navigationAction.request.url, LockdownController.shared.isLocked,
@@ -849,6 +939,11 @@ final class ExamViewController: UIViewController, LockSurface,
             EventLog.shared.record("blocked_navigation", url.host ?? url.absoluteString)
         }
         return nil
+    }
+
+    func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+                 completionHandler: @escaping @MainActor (UIContextMenuConfiguration?) -> Void) {
+        completionHandler(nil)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -864,6 +959,7 @@ final class ExamViewController: UIViewController, LockSurface,
         eventsReady = false                  // the new page asks for them ("flushEvents")
         hideConnecting()
         hidePageCrashed()                    // a page is back
+        external.canvasCommitted(webView.url)
         if LockdownController.shared.isLocked, let u = webView.url, isServerURL(u) || external.allows(u) {
             ExamViewController.lastLockedPage = u
         }
@@ -877,6 +973,9 @@ final class ExamViewController: UIViewController, LockSurface,
         if let u = webView.url { DebugLog.log("web", "page shown: \(u.host ?? u.scheme ?? "")\(u.path)") }
         pushBattery()
         applyFileAccess()
+        external.doneLoaded(webView.url)
+        if external.isCanvas { self.webView.disableDragAndDrop() }
+        external.canvasPageLoaded()
     }
 
     /// Review 2026-10-24: when the exam page's process crashed (last `crashWindow` seconds).
@@ -979,6 +1078,10 @@ final class ExamViewController: UIViewController, LockSurface,
         if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }
         DebugLog.log("web", "page load failed: \(ns.domain) \(ns.code) \(ns.localizedDescription)")
         var retry = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Config.startURL
+        if external.isCanvas, let start = external.startURL,
+           isServerURL(retry) || !external.allows(retry) || external.blocksMainFrame(retry) {
+            retry = start
+        }
         if !isServerURL(retry) && !external.allows(retry) { retry = Config.startURL }
         retryURL = retry
         let why = ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut

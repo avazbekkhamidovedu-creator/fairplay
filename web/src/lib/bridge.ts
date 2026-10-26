@@ -85,7 +85,7 @@ export interface OpenExternalParams {
   url: string;
   allowed_domains: string[];
   finish_url_contains: string | null;
-  /** Canvas mode: "canvas" makes the app fill the access code itself. */
+  /** Canvas mode: "canvas" opens the quiz inside the restricted Canvas browser. */
   kind?: "canvas";
   finish_url_regex?: string | null;
   /** Canvas mode: the course and item the student may reach in Canvas. */

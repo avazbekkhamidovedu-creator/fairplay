@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 
 log = logging.getLogger("proctora")
@@ -57,6 +58,18 @@ def _int(name: str, default: int) -> int:
         return int(os.environ.get(name, default))
     except ValueError:
         return default
+
+
+def _canvas_min_version(name: str, default: str) -> str:
+    """A minimum Canvas app version like 0.7.2 (a leading v is dropped), or "" for not supported
+    yet. Anything else stops the server at startup: a typo must never open the gate."""
+    raw = os.environ.get(name)
+    value = default if raw is None else raw.strip()
+    if value[:1] in ("v", "V"):
+        value = value[1:] or "?"
+    if value and not re.fullmatch(r"[0-9]+(\.[0-9]+)*", value):
+        raise ValueError(f"{name} must be a version like 0.7.2 or empty, not {raw!r}")
+    return value
 
 
 @dataclass
@@ -130,9 +143,25 @@ class Settings:
         default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
     min_app_version_ipad: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_IPAD", "").strip())
 
+    # Oldest app version that may start a Canvas exam, per platform. "" = Canvas exams are
+    # not supported on that platform yet (the start is refused). An env var set to "" turns
+    # the Mac default off.
+    canvas_min_version_mac: str = field(
+        default_factory=lambda: _canvas_min_version("FAIRPLAY_CANVAS_MIN_VERSION_MAC", "0.7.2"))
+    canvas_min_version_windows: str = field(
+        default_factory=lambda: _canvas_min_version("FAIRPLAY_CANVAS_MIN_VERSION_WINDOWS", ""))
+    canvas_min_version_ipad: str = field(
+        default_factory=lambda: _canvas_min_version("FAIRPLAY_CANVAS_MIN_VERSION_IOS", ""))
+
     # Optional: this server's public address, so integrations (app.integrations) can send
     # absolute integrity-report links. Unset: the links are sent as paths (/teacher/exams/...).
     public_url: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_PUBLIC_URL", "").strip().rstrip("/"))
+
+    def canvas_min_version(self, platform: str | None) -> str | None:
+        p = (platform or "").strip().lower()
+        v = {"mac": self.canvas_min_version_mac, "windows": self.canvas_min_version_windows,
+             "ipad": self.canvas_min_version_ipad, "ios": self.canvas_min_version_ipad}.get(p, "")
+        return v or None
 
     def min_app_version(self, platform: str | None) -> str | None:
         v = {"mac": self.min_app_version_mac, "windows": self.min_app_version_windows,

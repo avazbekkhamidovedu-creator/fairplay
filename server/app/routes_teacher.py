@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api/exams", tags=["teacher"])
 ONLINE_WINDOW_S = 15
 # Integrity events that are bookkeeping, not "flags" a teacher should look at.
 NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound",
-                  "offline_exit_code_issued", "canvas_code_issued",
+                  "offline_exit_code_issued", "canvas_quiz_started", "client_canvas_quiz_started",
                   "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
                   AUTO_CLOSE_EVENT)                       # 2026-10-23: the automatic close
 MAX_RESUME_EXTENSION = control.MAX_RESUME_EXTENSION
@@ -187,7 +187,6 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
         raise HTTPException(409, "Exam is not a draft")
     if "class_id" in body.model_fields_set:
         await check_class_for_exam(session, body.class_id, p)
-    await canvas_mode.release_before_change(session, e, body)
     prev_domains = list(e.allowed_domains or [])
     _apply(e, body)
     canvas_mode.apply_settings(e, body, prev_domains)
@@ -205,8 +204,6 @@ async def delete_exam(exam_id: str, p: Principal = Depends(require_teacher),
         raise HTTPException(409, integ.delete_refused_message(e))
     if e.status not in ("draft", "closed"):
         raise HTTPException(409, "Exam is live; close it first")
-    if canvas_mode.canvas_exam(e) and e.canvas_code_source == "managed" and e.canvas_code_enc:
-        await canvas_mode.clear_in_canvas(session, e)
     aids = (await session.execute(select(Attempt.id).where(Attempt.exam_id == exam_id))).scalars().all()
     await session.execute(delete(IntegrityEvent).where(IntegrityEvent.exam_id == exam_id))
     await session.execute(delete(ExamMaterial).where(ExamMaterial.exam_id == exam_id))   # 2026-10-23
@@ -226,7 +223,7 @@ async def open_exam(exam_id: str, body: OpenIn | None = None, p: Principal = Dep
     """Body (optional): {"open_to": "all" | [student ids]} -- who may start (default all)."""
     e = await _own_exam(session, exam_id, p)
     given = body or OpenIn()
-    await control.open_exam(session, e, given.open_to, given.canvas_access_code)
+    await control.open_exam(session, e, given.open_to)
     return await exam_out_full(session, e)
 
 

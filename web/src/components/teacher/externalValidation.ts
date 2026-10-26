@@ -1,8 +1,6 @@
 // Slice 3: client-side checks for external-website exams. Mirrors the server rules in
 // server/app/schemas.py (ExamIn / normalize_domain) so teachers see problems before saving.
 import type {
-  CanvasCodeSource,
-  CanvasCodeStatus,
   CanvasInfo,
   CanvasInput,
   CanvasQuizType,
@@ -26,11 +24,6 @@ export interface ExternalSettingsValue {
   external_kind?: ExternalKind | null;
   /** null = detected from the link. */
   canvas_quiz_type?: CanvasQuizType | null;
-  canvas_code_source?: CanvasCodeSource;
-  /** Typed code (manual only). Never filled from the server. */
-  canvas_access_code?: string;
-  /** The server already holds a typed code for this exam. */
-  canvas_code_stored?: boolean;
   /** null = the pattern FairPlay picks for the quiz type. */
   finish_url_regex?: string | null;
   /** Sign-in sites the teacher removed from the automatic list. */
@@ -44,7 +37,7 @@ export interface ExternalSettingsValue {
 }
 
 export type ExternalSettingsErrors = Partial<
-  Record<"external_url" | "allowed_domains" | "finish_url_contains" | "canvas_access_code" | "finish_url_regex", string>
+  Record<"external_url" | "allowed_domains" | "finish_url_contains" | "finish_url_regex", string>
 >;
 
 export const EMPTY_EXTERNAL_SETTINGS: ExternalSettingsValue = {
@@ -201,8 +194,6 @@ export function validateExternalSettings(v: ExternalSettingsValue): ExternalSett
   if (v.external_kind === "canvas") {
     if (!errors.external_url && !isHttpsUrl(v.external_url)) errors.external_url = "A Canvas link must start with https://";
     else if (!errors.external_url && canvasLinkKind(v.external_url) === null) errors.external_url = CANVAS_NO_SCOPE_HINT;
-    const codeErr = validateCanvasCode(v);
-    if (codeErr) errors.canvas_access_code = codeErr;
     const reErr = validateFinishRegex(v.finish_url_regex);
     if (reErr) errors.finish_url_regex = reErr;
   }
@@ -224,15 +215,11 @@ export function externalExamInput(v: ExternalSettingsValue): ExternalSettingsVal
     finish_url_contains: finish || null,
   };
   if (v.external_kind !== "canvas") return v.external_kind === null ? { ...base, external_kind: null } : base;
-  const source = effectiveCodeSource(v);
   const type = effectiveQuizType(v);
-  const code = v.canvas_access_code ?? "";
   const regex = (v.finish_url_regex ?? "").trim();
   const removed = v.canvas_removed_hosts ?? [];
   const canvas: CanvasInput = {
     quiz_type: type,
-    access_code_source: source,
-    ...(source === "manual" && code.trim() ? { access_code: code } : {}),
     removed_hosts: [...removed],
     open_book: v.canvas_open_book === true,
   };
@@ -264,12 +251,9 @@ export function externalSettingsFrom(
     ...base,
     external_kind: "canvas",
     canvas_quiz_type: type,
-    canvas_code_source: e.canvas?.access_code_source ?? "managed",
-    canvas_access_code: "",
     canvas_removed_hosts: [...(e.canvas?.removed_hosts ?? [])],
     ...(signIn ? { canvas_sign_in_hosts: [...signIn] } : {}),
     canvas_open_book: e.canvas?.open_book === true,
-    canvas_code_stored: e.canvas?.code_status === "set" && e.canvas.access_code_source === "manual",
     finish_url_regex: regex && regex !== defaultFinishRegex(type) ? regex : null,
   };
 }
@@ -331,9 +315,6 @@ export function canvasAccessLine(
     : `${base}.`;
 }
 
-export const CANVAS_CODE_MIN = 4;
-export const CANVAS_CODE_MAX = 64;
-
 const FINISH_REGEX_DEFAULT: Record<CanvasQuizType, string> = {
   classic: "/quizzes/\\d+/(submissions/\\d+|history)",
   new: "submission-confirmation|submission-screen",
@@ -366,31 +347,6 @@ export function detectCanvasQuizType(url: string | null | undefined): CanvasQuiz
 /** Override first, then the detected type, then Classic. */
 export function effectiveQuizType(v: Pick<ExternalSettingsValue, "external_url" | "canvas_quiz_type">): CanvasQuizType {
   return v.canvas_quiz_type ?? detectCanvasQuizType(v.external_url) ?? "classic";
-}
-
-/** Only Classic Quizzes can have the code set automatically; New Quizzes and assignments need a typed code. */
-export function effectiveCodeSource(v: Pick<ExternalSettingsValue, "external_url" | "canvas_quiz_type" | "canvas_code_source">): CanvasCodeSource {
-  if (effectiveQuizType(v) !== "classic") return "manual";
-  return v.canvas_code_source ?? "managed";
-}
-
-/** Error text for the typed access code, or null. Only checked when the teacher types the code. */
-export function validateCanvasCode(v: ExternalSettingsValue): string | null {
-  if (effectiveCodeSource(v) !== "manual") return null;
-  const code = v.canvas_access_code ?? "";
-  if (!code.trim()) return v.canvas_code_stored && !code ? null : "Type the access code you set in Canvas.";
-  if (code.length < CANVAS_CODE_MIN || code.length > CANVAS_CODE_MAX)
-    return `The code must be ${CANVAS_CODE_MIN} to ${CANVAS_CODE_MAX} characters.`;
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(code)) return "The code can only use letters, numbers, symbols and spaces.";
-  return null;
-}
-
-/** Warning when the typed code starts or ends with a space; the code is sent exactly as typed. */
-export function canvasCodeWarning(code: string | null | undefined): string | null {
-  const c = code ?? "";
-  if (c && c !== c.trim())
-    return "The code starts or ends with a space. FairPlay types it exactly as you entered it, spaces included.";
-  return null;
 }
 
 export const FINISH_REGEX_RULE =
@@ -582,11 +538,6 @@ export function validateFinishRegex(pattern: string | null | undefined): string 
   return null;
 }
 
-export const CODE_STATUS_LABEL: Record<CanvasCodeStatus, string> = {
-  set: "Set",
-  not_set: "Not set",
-  failed: "Failed",
-};
 
 
 // ---------- audit W-09: describe allowed sites exactly as the server and app apply them ----------

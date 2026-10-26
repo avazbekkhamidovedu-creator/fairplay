@@ -84,9 +84,6 @@ final class ExternalExamController {
     private var pendingEvents: [[String: Any]] = []
     private var sendingEvents = false
     private var finishing = false
-    private var canvasFills = CanvasFillBudget()
-    private var canvasBusy = false
-    private var canvasHelpShown = false
     private var finishWork: DispatchWorkItem?
     private var finishFromPopup = false
     private var popupObservation: NSKeyValueObservation?
@@ -98,6 +95,11 @@ final class ExternalExamController {
     private var recoveryPending = false
     private var recoveryTries = 0
     private var finalLoadDone = false
+    private var finishPatternRejected = false
+    private(set) var armed = false
+    private var keepArmedOnFirstCommit = false
+    private var markerToClear: String?
+    private var persistentNotice: String?
     private var blockLog = CanvasRecoveryGate()
     private var blockedReports = 0
     static let maxBlockReports = 100
@@ -107,10 +109,12 @@ final class ExternalExamController {
     private var noticeTimer: Timer?
     private var quizButton: NSButton?
     private var backButton: NSButton?
+    private var finishButton: NSButton?
 
     static let stripHeight: CGFloat = 52
 
     var clearsWebData = true
+    var defaults = UserDefaults.standard
     var networkEnabled = true
     var now: () -> Date = { Date() }
     var actionObserver: ((CanvasViewAction) -> Void)?
@@ -182,10 +186,10 @@ final class ExternalExamController {
         if isCanvas && url.scheme?.lowercased() != "https" { return "bad_request" }
         let rawRegex = isCanvas ? (body["finish_url_regex"] as? String) : nil
         let regex = CanvasFinish.compile(rawRegex)
-        let regexRejected = isCanvas && !(rawRegex ?? "").isEmpty && regex == nil
+        let finishUnusable = isCanvas && regex == nil
         var scope: CanvasScope?
-        if isCanvas, let raw = body["canvas_scope"], !(raw is NSNull) {
-            guard let parsed = CanvasScope(json: raw),
+        if isCanvas {
+            guard let raw = body["canvas_scope"], !(raw is NSNull), let parsed = CanvasScope(json: raw),
                   CanvasNavigation.decide(url: url, examHost: startHost, scope: parsed, phase: .lobby) == .allow else {
                 return "bad_request"
             }
@@ -196,9 +200,6 @@ final class ExternalExamController {
         finishWork?.cancel(); finishWork = nil
         closePopup()
         finishing = false
-        canvasFills = CanvasFillBudget()
-        canvasBusy = false
-        canvasHelpShown = false
         phase = .lobby
         autoOpened = false
         signInSeen = false
@@ -212,11 +213,22 @@ final class ExternalExamController {
         session = Session(attemptId: aid, startURL: url, rules: rules, finishContains: finish,
                           deadline: deadline, clockOffset: offset, title: title, token: token,
                           appSession: appSession, canvas: isCanvas, finishRegex: regex, scope: scope)
+        armed = false
+        finishPatternRejected = finishUnusable
+        persistentNotice = nil
+        markerToClear = nil
+        keepArmedOnFirstCommit = false
+        if scope != nil, CanvasQuizMarker.isSet(aid, in: defaults) {
+            phase = .quiz
+            armed = CanvasQuizMarker.isArmed(aid, in: defaults)
+            keepArmedOnFirstCommit = armed
+            DebugLog.log("external", "canvas phase restored: quiz")
+        }
         DebugLog.log("external", "website exam start: \(url.host ?? "?") rules=\(rules.count) finish=\(finish ?? "-") canvas=\(isCanvas) regex=\(regex != nil) scope=\(scope != nil)")
         showStrip(title: title)
-        if regexRejected {
+        if finishUnusable {
             EventLog.shared.record(.blockedNavigation("finish pattern rejected"))
-            showNotice("The finish page could not be set up. Ask your teacher.")
+            showNotice("The finish pattern of this exam is not valid. Your teacher must fix it.", persistent: true)
         }
         startTimers()
         observeURL()
@@ -230,7 +242,10 @@ final class ExternalExamController {
         guard let session, let host = url.host?.lowercased(), ExternalExamController.schemeOK(url) else {
             return false
         }
-        if session.canvas { return CanvasPolicy.allows(url, rules: session.rules) }
+        if session.canvas {
+            if MainWindowController.isServerURL(url, server: server) { return false }
+            return CanvasPolicy.allows(url, rules: session.rules)
+        }
         return session.rules.contains { $0.matches(host: host, path: url.path) }
     }
 
@@ -263,6 +278,31 @@ final class ExternalExamController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
+    var finishScheduled: Bool { finishWork != nil }
+
+    private func setArmed(_ value: Bool) {
+        guard armed != value else { return }
+        armed = value
+        if let aid = session?.attemptId { CanvasQuizMarker.setArmed(aid, value, in: defaults) }
+    }
+
+    /// A frame inside the exam page (New Quizzes show the submission screen in a frame) went to a page
+    /// that matches the finish pattern. Frames cannot be read again later, so after the debounce the
+    /// exam finishes if the same attempt is still running.
+    func checkFrameFinish(_ url: URL) {
+        guard let session, session.canvas, !finishing, finishWork == nil, allows(url),
+              finishHit(url, session: session) else { return }
+        let aid = session.attemptId
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.finishWork = nil
+            guard let current = self.session, current.attemptId == aid, !self.finishing, self.armed else { return }
+            self.finish(reason: "finish_url")
+        }
+        finishWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
     func isFinishPage(_ url: URL) -> Bool {
         guard let session else { return false }
         return finishHit(url, session: session)
@@ -270,7 +310,7 @@ final class ExternalExamController {
 
     private func finishHit(_ url: URL, session: Session) -> Bool {
         if session.canvas {
-            return CanvasFinish.matches(url, regex: session.finishRegex)
+            return armed && CanvasFinish.matches(url, regex: session.finishRegex)
         }
         if let needle = session.finishContains { return url.absoluteString.contains(needle) }
         return false
@@ -361,7 +401,7 @@ final class ExternalExamController {
 
     @objc private func finishPressed() {
         DebugLog.log("external", "Finish exam button pressed")
-        guard isActive, !finishing else { return }
+        guard isActive, !finishing, !isLockedIn else { return }
         guard let window, window.attachedSheet == nil else { return }
         let alert = NSAlert()
         alert.messageText = "Finish the exam?"
@@ -389,6 +429,7 @@ final class ExternalExamController {
              body: ["events": batch]) { _, _ in }
         let aid = session.attemptId
         let wasCanvas = session.canvas
+        markerToClear = aid
         teardown()
         var comps = URLComponents(url: server.appendingPathComponent("student/external-done/\(aid)"),
                                   resolvingAgainstBaseURL: false)
@@ -397,11 +438,20 @@ final class ExternalExamController {
         if wasCanvas && clearsWebData { clearCanvasData() }
     }
 
+    /// The hand-in page of a finished Canvas exam has loaded: the quiz marker of that attempt can go.
+    func externalDonePageLoaded(_ url: URL?) {
+        guard let aid = markerToClear, let url, MainWindowController.isServerURL(url, server: server),
+              url.path.lowercased().hasPrefix("/student/external-done/" + aid.lowercased()) else { return }
+        markerToClear = nil
+        CanvasQuizMarker.clear(aid, in: defaults)
+    }
+
     /// Leave external mode without submitting (emergency exit / safety unlock).
     func abort() {
         guard isActive else { return }
         DebugLog.log("external", "aborted (emergency exit / safety unlock)")
         let wasCanvas = session?.canvas == true
+        if let aid = session?.attemptId { CanvasQuizMarker.clear(aid, in: defaults) }
         teardown()
         if wasCanvas && clearsWebData { clearCanvasData() }
         webView?.load(URLRequest(url: server.appendingPathComponent("student")))
@@ -440,6 +490,14 @@ final class ExternalExamController {
         isCanvas && (CanvasPolicy.isBlank(url) || (allows(url) && (!mainFrame || !blocksMainFrame(url))))
     }
 
+    /// During a Canvas exam no page may open any page of the exam server: it could end the exam or
+    /// leave the lock. The app's own load of the hand-in page happens after the session is gone.
+    func blocksExamServer(_ url: URL) -> Bool {
+        isCanvas && MainWindowController.isServerURL(url, server: server)
+    }
+
+    var canvasStartURL: URL? { session?.canvas == true ? session?.startURL : nil }
+
     private var examHost: String { (session?.startURL.host ?? "").lowercased() }
 
     /// True when the restricted Canvas browser refuses this main-frame page of the exam's Canvas host.
@@ -474,7 +532,9 @@ final class ExternalExamController {
     func backAllowed(_ previous: URL) -> Bool {
         guard allowsMainFrame(previous) else { return false }
         if phase == .quiz {
+            guard let scope = session?.scope else { return false }
             return previous.host?.lowercased() == examHost && !CanvasNavigation.isSignIn(url: previous, examHost: examHost)
+                && CanvasNavigation.isUnderItem(previous, scope: scope)
         }
         return true
     }
@@ -482,13 +542,19 @@ final class ExternalExamController {
     static let blockedNotice = "This page is not available during the exam."
 
     /// A short message in the strip that fades after a few seconds.
-    func showNotice(_ text: String = ExternalExamController.blockedNotice) {
+    func showNotice(_ text: String = ExternalExamController.blockedNotice, persistent: Bool = false) {
+        if persistent { persistentNotice = text }
         guard let label = noticeLabel else { return }
         label.stringValue = text
         label.isHidden = false
         noticeTimer?.invalidate()
         let timer = Timer(timeInterval: 4, repeats: false) { [weak self] _ in
-            self?.noticeLabel?.isHidden = true
+            guard let self, let label = self.noticeLabel else { return }
+            if let kept = self.persistentNotice {
+                label.stringValue = kept
+            } else {
+                label.isHidden = true
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         noticeTimer = timer
@@ -496,7 +562,7 @@ final class ExternalExamController {
 
     /// A main-frame page of the exam view was committed: moves the phase on and refreshes the buttons.
     func canvasCommitted(_ url: URL?) {
-        guard let session, session.canvas, let url else { return }
+        guard let session, session.canvas, let url, url.scheme?.lowercased() == "https" else { return }
         guard let scope = session.scope else { return }
         if CanvasNavigation.isSignIn(url: url, examHost: examHost) { signInSeen = true }
         if !firstCommitSeen {
@@ -507,9 +573,20 @@ final class ExternalExamController {
         }
         if phase == .lobby, CanvasNavigation.entersQuiz(url: url, examHost: examHost, scope: scope) {
             phase = .quiz
+            CanvasQuizMarker.set(session.attemptId, in: defaults)
+            EventLog.shared.record(.canvasQuizStarted)
             DebugLog.log("external", "canvas phase: quiz")
         }
+        let keepArmed = keepArmedOnFirstCommit
+        keepArmedOnFirstCommit = false
+        if CanvasNavigation.entersQuiz(url: url, examHost: examHost, scope: scope) {
+            setArmed(true)
+        } else if scope.itemKind == "quizzes", !keepArmed, finishWork == nil,
+                  CanvasNavigation.isItemLanding(url: url, examHost: examHost, scope: scope) {
+            setArmed(false)
+        }
         updateNavButtons()
+        updateFinishButton()
     }
 
     /// Route changes made by the page itself (pushState) never reach the navigation policy. When the
@@ -593,17 +670,33 @@ final class ExternalExamController {
         }
     }
 
-    @objc private func quizPressed() {
-        guard let session, session.canvas, !finishing, let webView, !webView.isLoading else { return }
-        if let scope = session.scope, let current = webView.url,
-           current.host?.lowercased() == examHost, CanvasNavigation.isUnderItem(current, scope: scope) { return }
-        webView.load(URLRequest(url: session.startURL))
+    @objc private func quizPressed() { openExamLink() }
+
+    func openExamLink() {
+        guard let session, session.canvas, !finishing, finishWork == nil else { return }
+        if let webView {
+            if webView.isLoading { return }
+            if let scope = session.scope, let current = webView.url,
+               current.host?.lowercased() == examHost, CanvasNavigation.isUnderItem(current, scope: scope) { return }
+        }
+        setArmed(false)
+        perform(.load(session.startURL))
     }
 
     @objc private func backPressed() {
         guard let webView, session?.canvas == true, !finishing,
               let previous = webView.backForwardList.backItem?.url, backAllowed(previous) else { return }
         webView.goBack()
+    }
+
+    /// True once the quiz of a scoped Canvas exam has started: no control of the app ends the exam
+    /// then (only the finish page, the server, the deadline or the emergency exit).
+    var isLockedIn: Bool {
+        session?.canvas == true && session?.scope != nil && phase == .quiz && !finishPatternRejected
+    }
+
+    private func updateFinishButton() {
+        finishButton?.isHidden = isLockedIn
     }
 
     private func updateNavButtons() {
@@ -617,7 +710,7 @@ final class ExternalExamController {
 
     func popupPlan(url: URL?, openerHost: String?) -> CanvasPopup.Plan {
         guard let session, session.canvas else { return .block }
-        if let url, blocksMainFrame(url) { return .block }
+        if let url, !CanvasPolicy.isBlank(url), blocksExamServer(url) || blocksMainFrame(url) { return .block }
         if session.scope != nil, let url, !CanvasPolicy.isBlank(url), url.host?.lowercased() == examHost {
             return CanvasPolicy.allows(url, rules: session.rules) ? .sameView : .block
         }
@@ -685,104 +778,10 @@ final class ExternalExamController {
 
     func isPopup(_ view: WKWebView) -> Bool { popupView != nil && view === popupView }
 
-    private func canvasOrigin(_ view: WKWebView?, session: Session) -> String? {
-        guard let url = view?.url else { return nil }
-        return CanvasPolicy.fillOrigin(page: url, start: session.startURL, scope: session.scope)
-    }
-
     func canvasPageLoaded(_ view: WKWebView) {
         guard let session, session.canvas, !finishing else { return }
         updateNavButtons()
         autoOpenIfNeeded(url: view.url)
-        guard !canvasBusy, canvasOrigin(view, session: session) != nil else { return }
-        canvasBusy = true
-        view.evaluateJavaScript(CanvasScripts.probe, in: nil, in: .defaultClient) { [weak self, weak view] (result: Result<Any, Error>) in
-            guard let self else { return }
-            var found = false
-            if case .success(let value) = result { found = (value as? Bool) == true }
-            self.canvasProbed(found: found, view: view)
-        }
-    }
-
-    private func canvasProbed(found: Bool, view: WKWebView?) {
-        guard found, let session, !finishing, let view, canvasOrigin(view, session: session) != nil else {
-            canvasBusy = false
-            return
-        }
-        guard !canvasFills.exhausted else {
-            canvasBusy = false
-            canvasFailed("fill limit reached")
-            return
-        }
-        requestCanvasCode(attemptId: session.attemptId, view: view, retries: 0)
-    }
-
-    /// A 429 can be left over from an earlier run of this attempt (resume): up to three more tries,
-    /// each after the server's Retry-After, before the student is told to ask for help.
-    private func requestCanvasCode(attemptId: String, view: WKWebView, retries: Int) {
-        guard let session, session.attemptId == attemptId, !finishing else { canvasBusy = false; return }
-        fetchCanvasCode(session: session) { [weak self, weak view] code, status, retryAfter in
-            guard let self else { return }
-            guard let current = self.session, current.attemptId == attemptId, current.canvas, !self.finishing else {
-                self.canvasBusy = false
-                return
-            }
-            guard let code else {
-                if status == 429, retries < CanvasRetry.maxRetries {
-                    let wait = CanvasRetry.delay(retryAfter: retryAfter)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak view] in
-                        guard let self else { return }
-                        guard let view, self.canvasOrigin(view, session: current) != nil else {
-                            self.canvasBusy = false
-                            return
-                        }
-                        self.requestCanvasCode(attemptId: attemptId, view: view, retries: retries + 1)
-                    }
-                    return
-                }
-                self.canvasBusy = false
-                self.canvasFailed("code unavailable")
-                return
-            }
-            guard let view, let origin = self.canvasOrigin(view, session: current),
-                  self.canvasFills.take() else {
-                self.canvasBusy = false
-                return
-            }
-            DebugLog.log("external", "canvas access code fill \(self.canvasFills.used)")
-            let script = CanvasScripts.fill(code: code, origin: origin, pathPrefix: current.scope?.itemPath)
-            view.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self] (result: Result<Any, Error>) in
-                guard let self else { return }
-                self.canvasBusy = false
-                var outcome = "none"
-                if case .success(let value) = result, let text = value as? String { outcome = text }
-                if outcome != "clicked" { self.canvasFailed("fill \(outcome)") }
-            }
-        }
-    }
-
-    private func fetchCanvasCode(session: Session, completion: @escaping (String?, Int?, String?) -> Void) {
-        let ts = Int64(Date().timeIntervalSince1970 * 1000)
-        let body = CanvasProof.body(attemptId: session.attemptId, session: session.appSession,
-                                    deviceId: AppSession.shared.deviceId, ts: ts, sign: AppSession.sign)
-        Net.requestWithRetryAfter("POST", path: "api/student/attempts/\(session.attemptId)/canvas-code",
-                                  token: session.token,
-                                  appSession: session.appSession.isEmpty ? nil : session.appSession,
-                                  body: body) { status, json, retryAfter in
-            completion(CanvasProof.parseCode(status: status, json: json), status, retryAfter)
-        }
-    }
-
-    private func canvasFailed(_ reason: String) {
-        EventLog.shared.record(.canvasCodeFailed(reason))
-        guard !canvasHelpShown else { return }
-        canvasHelpShown = true
-        guard let window, window.attachedSheet == nil else { return }
-        let alert = NSAlert()
-        alert.messageText = "Ask your teacher for help"
-        alert.informativeText = "FairPlay could not enter the access code for this quiz."
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window, completionHandler: nil)
     }
 
     private func clearCanvasData() {
@@ -862,6 +861,8 @@ final class ExternalExamController {
             views.append(contentsOf: [back, quiz])
         }
         views.append(button)
+        finishButton = button
+        button.isHidden = isLockedIn
 
         let stack = NSStackView(views: views)
         stack.orientation = .horizontal
@@ -888,7 +889,7 @@ final class ExternalExamController {
     private func hideStrip() {
         strip?.removeFromSuperview()
         strip = nil; titleLabel = nil; timeLabel = nil
-        noticeLabel = nil; quizButton = nil; backButton = nil
+        noticeLabel = nil; quizButton = nil; backButton = nil; finishButton = nil
         if let container, let webView {
             webView.frame = container.bounds
             popupView?.frame = container.bounds

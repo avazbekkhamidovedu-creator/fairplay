@@ -12,8 +12,6 @@ import {
   CANVAS_QUIZ_TYPE_LABEL,
   defaultFinishRegex,
   detectCanvasQuizType,
-  effectiveCodeSource,
-  canvasCodeWarning,
   canvasAccessLine,
   canvasLinkKind,
   CANVAS_NO_SCOPE_HINT,
@@ -43,11 +41,6 @@ export interface ExternalExamSettingsProps {
   /** 2026-10-13: paper needs Scan & Grade, which is off unless the server switches it on. */
   allowPaper?: boolean;
   onDeliveryChange?: (next: Delivery) => void;
-  /**
-   * Canvas mode: whether the teacher has a Canvas account linked. null = not known yet.
-   * Needed for the automatic access code.
-   */
-  canvasLinked?: boolean | null;
 }
 
 const DELIVERY_CHOICES: { delivery: Delivery; title: string; hint: string }[] = [
@@ -89,7 +82,6 @@ export function ExternalExamSettings({
   delivery,
   onDeliveryChange,
   allowPaper = true,
-  canvasLinked = null,
 }: ExternalExamSettingsProps) {
   const uid = useId();
   const name = `exam-mode-${uid}`;
@@ -105,7 +97,6 @@ export function ExternalExamSettings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.allowed_domains]);
 
-  const [showCode, setShowCode] = useState(false);
   const chipsRef = useRef<HTMLUListElement>(null);
   const focusChips = () => chipsRef.current?.focus();
   const set = (patch: Partial<ExternalSettingsValue>) => onChange({ ...value, ...patch });
@@ -117,12 +108,10 @@ export function ExternalExamSettings({
   const canvas = external && value.external_kind === "canvas";
   const quizType = effectiveQuizType(value);
   const detected = detectCanvasQuizType(value.external_url);
-  const codeSource = effectiveCodeSource(value);
   const canvasHost = urlHost(value.external_url);
   const linkKind = canvasLinkKind(value.external_url);
   const removedHosts = value.canvas_removed_hosts ?? [];
   const signInHosts = (value.canvas_sign_in_hosts ?? CANVAS_SIGN_IN_HOSTS).filter((h) => !removedHosts.includes(h));
-  const codeWarning = canvasCodeWarning(value.canvas_access_code);
   const removeTeacherHost = (host: string) => {
     const next = normalizeDomains(value.allowed_domains).filter((d) => d !== host);
     setDomainText(next.join("\n"));
@@ -205,13 +194,12 @@ export function ExternalExamSettings({
                   type="radio"
                   name={`${name}-site`}
                   checked={canvas}
-                  onChange={() => set({ external_kind: "canvas", canvas_code_source: value.canvas_code_source ?? "managed" })}
+                  onChange={() => set({ external_kind: "canvas" })}
                 />
                 <span>
                   <span className="ext-choice-title">Canvas quiz</span>
                   <span className="ext-choice-hint">
-                    The quiz opens only inside FairPlay. FairPlay types the Canvas access code, so students cannot
-                    start it outside the lock.
+                    The quiz opens only inside FairPlay, locked to its course and quiz.
                   </span>
                 </span>
               </label>
@@ -272,100 +260,10 @@ export function ExternalExamSettings({
                   ? `Detected from the link: ${CANVAS_QUIZ_TYPE_LABEL[detected]}. Change it only if this is wrong.`
                   : "FairPlay could not tell the type from the link, so it assumes a Classic Quiz. Choose the right one."}
               </p>
-              {quizType !== "classic" && (
-                <p className="ext-hint ext-warn" role="note" data-testid="canvas-new-warning">
-                  New Quizzes cannot be set up automatically. FairPlay cannot set or change their access code, so
-                  you type the code yourself and it stays as you set it in Canvas.
-                </p>
-              )}
-
-              <fieldset className="ext-subset">
-              <legend className="ext-label">How the access code is set</legend>
-              <div className="ext-choices">
-                <label className={`ext-choice${codeSource === "managed" ? " selected" : ""}`}>
-                  <input
-                    type="radio"
-                    name={`${name}-code`}
-                    checked={codeSource === "managed"}
-                    disabled={quizType !== "classic"}
-                    onChange={() => set({ canvas_code_source: "managed" })}
-                  />
-                  <span>
-                    <span className="ext-choice-title">FairPlay sets and changes it for me</span>
-                    <span className="ext-choice-hint">
-                      FairPlay puts a random code on the quiz in Canvas when you open the exam and removes it when
-                      the exam closes. You never see it.
-                    </span>
-                  </span>
-                </label>
-                <label className={`ext-choice${codeSource === "manual" ? " selected" : ""}`}>
-                  <input
-                    type="radio"
-                    name={`${name}-code`}
-                    checked={codeSource === "manual"}
-                    onChange={() => set({ canvas_code_source: "manual" })}
-                  />
-                  <span>
-                    <span className="ext-choice-title">I will type the code I set in Canvas</span>
-                    <span className="ext-choice-hint">Set an access code on the quiz in Canvas, then type the same code here.</span>
-                  </span>
-                </label>
-              </div>
-              </fieldset>
-
-              {codeSource === "managed" && canvasLinked !== true && (
-                <p className="ext-hint ext-warn" role="note" data-testid="canvas-link-warning">
-                  {canvasLinked === false
-                    ? "No Canvas account is linked yet. Link your Canvas account first (under Canvas in the menu), or the exam cannot open."
-                    : "Link your Canvas account first. FairPlay needs it to set the code."}
-                </p>
-              )}
-
-              {codeSource === "manual" && (
-                <>
-                  <label htmlFor="exam-canvas-code-input">Canvas access code</label>
-                  <div className="ext-code-row">
-                  <input
-                    id="exam-canvas-code-input"
-                    className="ext-input"
-                    type={showCode ? "text" : "password"}
-                    autoComplete="new-password"
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    value={value.canvas_access_code ?? ""}
-                    placeholder={value.canvas_code_stored ? "A code is saved. Type a new one to replace it." : ""}
-                    aria-invalid={errors.canvas_access_code ? true : undefined}
-                    aria-describedby="exam-canvas-code-hint"
-                    onChange={(e) => set({ canvas_access_code: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    className="ext-code-toggle"
-                    aria-label={showCode ? "Hide access code" : "Show access code"}
-                    onClick={() => setShowCode((x) => !x)}
-                  >
-                    {showCode ? "Hide" : "Show"}
-                  </button>
-                  </div>
-                  {codeWarning && (
-                    <p className="ext-hint ext-warn" role="note" data-testid="canvas-code-space-warning">
-                      {codeWarning}
-                    </p>
-                  )}
-                  {errors.canvas_access_code && (
-                    <p className="ext-error" role="alert">
-                      {errors.canvas_access_code}
-                    </p>
-                  )}
-                </>
-              )}
-              {codeSource === "manual" && (
-                <p id="exam-canvas-code-hint" className="ext-hint">
-                  The code is never shown again after you save, to you or to students. If you lose a typed code, set
-                  a new one in Canvas and enter it here.
-                </p>
-              )}
+              <p className="ext-hint" data-testid="canvas-lock-line">
+                Students sign in to Canvas inside FairPlay and can only open this course and this quiz. Once the quiz
+                is started they cannot leave until they submit.
+              </p>
 
               {linkKind && (
                 <>

@@ -62,3 +62,22 @@ def check_app_version(request: Request, settings: Settings) -> str | None:
 
 async def upgrade_required_handler(_request: Request, exc: UpgradeRequired) -> JSONResponse:
     return JSONResponse({"detail": UPDATE_DETAIL, "min_app_version": exc.minimum}, status_code=426)
+
+
+CANVAS_UNSUPPORTED_DETAIL = "Canvas exams are not available on this device yet"
+
+
+CANVAS_LINK_DETAIL = "This Canvas exam link needs to be fixed by your teacher"
+
+
+def check_canvas_platform(request: Request, settings: Settings) -> None:
+    """Canvas exams start only from an app that has the restricted Canvas browser. A platform
+    with no minimum set (and a browser or unknown platform) gets 409; an app below the minimum
+    gets the normal 426 so it offers an update."""
+    from fastapi import HTTPException
+    platform = client_platform(request)
+    minimum = settings.canvas_min_version(platform)
+    if platform is None or not minimum:
+        raise HTTPException(409, CANVAS_UNSUPPORTED_DETAIL)
+    if older_than(request.headers.get(VERSION_HEADER), minimum):
+        raise UpgradeRequired(minimum)

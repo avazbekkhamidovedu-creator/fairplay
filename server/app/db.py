@@ -49,9 +49,21 @@ class Database:
                 await conn.execute(text("SELECT pg_advisory_xact_lock(724001)"))
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(_add_missing_columns)
+            await conn.run_sync(_clear_legacy_canvas_codes)
 
     async def dispose(self) -> None:
         await self.engine.dispose()
+
+
+def _clear_legacy_canvas_codes(conn) -> None:
+    """Canvas exams no longer use an access code: drop any code an earlier build stored."""
+    from sqlalchemy import inspect
+    insp = inspect(conn)
+    if "exams" not in insp.get_table_names():
+        return
+    if "canvas_code_enc" not in {c["name"] for c in insp.get_columns("exams")}:
+        return
+    conn.execute(text("UPDATE exams SET canvas_code_enc = NULL WHERE canvas_code_enc IS NOT NULL"))
 
 
 def _add_missing_columns(conn) -> None:

@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-import JavaScriptCore
 @testable import Proctora
 
 @Suite struct CanvasModeTests {
@@ -102,13 +101,21 @@ import JavaScriptCore
         #expect(!CanvasFinish.isSafe("a\\"))
     }
 
-    @Test func finishMatchesPathAndQueryOnly() {
+    @Test func finishMatchesThePathOnly() {
         let re = CanvasFinish.compile(#"/submissions/\d+"#)
         #expect(CanvasFinish.matches(URL(string: "https://c.example.edu/q/submissions/7?x=1")!, regex: re))
         #expect(!CanvasFinish.matches(URL(string: "https://c.example.edu/q/take#/submissions/7")!, regex: re))
         #expect(!CanvasFinish.matches(URL(string: "https://submissions.example.edu/q/take")!, regex: re))
         let long = URL(string: "https://c.example.edu/" + String(repeating: "a", count: 600) + "/submissions/7")!
         #expect(!CanvasFinish.matches(long, regex: re))
+        let history = CanvasFinish.compile(#"/quizzes/\d+/(submissions/\d+|history)"#)
+        #expect(!CanvasFinish.matches(URL(string: "https://c.example.edu/courses/1/quizzes/2/take?x=/quizzes/1/history")!, regex: history))
+        #expect(!CanvasFinish.matches(URL(string: "https://c.example.edu/courses/1/quizzes/2?next=/quizzes/1/submissions/5")!, regex: history))
+        #expect(!CanvasFinish.matches(URL(string: "https://c.example.edu/courses/1/quizzes/2#/quizzes/1/history")!, regex: history))
+        #expect(CanvasFinish.matches(URL(string: "https://c.example.edu/courses/1/quizzes/2/history?version=1")!, regex: history))
+        let confirmation = CanvasFinish.compile("submission-confirmation|submission-screen")
+        #expect(!CanvasFinish.matches(URL(string: "https://c.example.edu/x?page=submission-screen")!, regex: confirmation))
+        #expect(CanvasFinish.matches(URL(string: "https://c.example.edu/submission-screen?x=1")!, regex: confirmation))
     }
 
     @Test func finishMatching() {
@@ -138,90 +145,6 @@ import JavaScriptCore
         #expect(!CanvasPopup.isCrossHost(URL(string: "https://canvas.dku.edu/x")!, openerHost: opener))
     }
 
-    @Test func fillBudgetStopsAtThree() {
-        var b = CanvasFillBudget()
-        let first = b.take()
-        let second = b.take()
-        #expect(first)
-        #expect(second)
-        #expect(!b.exhausted)
-        let third = b.take()
-        #expect(third)
-        #expect(b.exhausted)
-        let fourth = b.take()
-        #expect(!fourth)
-        #expect(b.used == 3)
-    }
-
-    @Test func proofString() {
-        #expect(CanvasProof.message(attemptId: "a1b2c3", session: "sess12345", deviceId: "hw-abc", ts: 1_700_000_000_123)
-                == "canvascode|a1b2c3|sess12345|hw-abc|1700000000123")
-        let body = CanvasProof.body(attemptId: "a1b2c3", session: "s", deviceId: "d", ts: 5) { "sig:" + $0 }
-        #expect(body["proof"] as? String == "sig:canvascode|a1b2c3|s|d|5")
-        #expect((body["ts"] as? NSNumber)?.int64Value == 5)
-    }
-
-    @Test func codeReplyParsing() {
-        #expect(CanvasProof.parseCode(status: 200, json: ["code": "Ab3dEf", "valid_for_s": 60]) == "Ab3dEf")
-        #expect(CanvasProof.parseCode(status: 403, json: ["code": "Ab3dEf"]) == nil)
-        #expect(CanvasProof.parseCode(status: nil, json: nil) == nil)
-        #expect(CanvasProof.parseCode(status: 200, json: ["code": "abc"]) == nil)
-        #expect(CanvasProof.parseCode(status: 200, json: ["code": String(repeating: "a", count: 65)]) == nil)
-        #expect(CanvasProof.parseCode(status: 200, json: ["code": "ab\ncd"]) == nil)
-        #expect(CanvasProof.parseCode(status: 200, json: ["code": 12345]) == nil)
-    }
-
-    @Test func jsStringRoundTrips() {
-        let samples = ["Ab3dEf", "a\"b", "a\\b", "line1\nline2", "</script>", "it's", "x\u{2028}y\u{2029}z",
-                       "\"; alert(1); \"", "ключ-коды", "back`tick${1}"]
-        let ctx = JSContext()!
-        for s in samples {
-            let literal = CanvasScripts.jsString(s)
-            #expect(ctx.evaluateScript(literal)?.toString() == s)
-        }
-    }
-
-    @Test func fillHostIsTheStartHostOnly() {
-        let start = URL(string: "https://Canvas.DKU.edu/courses/1/quizzes/2")!
-        func origin(_ s: String) -> String? {
-            CanvasPolicy.fillOrigin(page: URL(string: s)!, start: start)
-        }
-        #expect(origin("https://canvas.dku.edu/courses/1/quizzes/2/take") == "https://canvas.dku.edu")
-        #expect(origin("https://CANVAS.dku.edu/courses/1/quizzes/2") == "https://canvas.dku.edu")
-        #expect(origin("https://canvas.dku.edu:443/courses/1/quizzes/2") == "https://canvas.dku.edu")
-        #expect(origin("https://canvas.dku.edu:8443/courses/1/quizzes/2") == nil)
-        #expect(origin("http://canvas.dku.edu/courses/1/quizzes/2") == nil)
-        #expect(origin("https://login.microsoftonline.com/courses/1/quizzes/2") == nil)
-        #expect(origin("https://x.instructure.com/courses/1/quizzes/2") == nil)
-        #expect(origin("https://x.canvas.dku.edu/courses/1/quizzes/2") == nil)
-        #expect(origin("https://canvas.dku.edu.evil.com/courses/1/quizzes/2") == nil)
-        #expect(origin("https://canvas.dku.edu./courses/1/quizzes/2") == nil)
-        #expect(origin("https://user:pw@canvas.dku.edu/courses/1/quizzes/2") == nil)
-        #expect(CanvasPolicy.fillOrigin(page: URL(string: "https://canvas.dku.edu/courses/1/quizzes/2")!,
-                                        start: URL(string: "http://canvas.dku.edu/courses/1/quizzes/2")!) == nil)
-    }
-
-    @Test func fillOnlyOnQuizPages() {
-        let start = URL(string: "https://canvas.dku.edu/courses/1/quizzes/2")!
-        func origin(_ s: String) -> String? { CanvasPolicy.fillOrigin(page: URL(string: s)!, start: start) }
-        #expect(origin("https://canvas.dku.edu/courses/12/quizzes/34/take") != nil)
-        #expect(origin("https://canvas.dku.edu/courses/12/assignments/5") != nil)
-        #expect(origin("https://canvas.dku.edu/login/saml") == nil)
-        #expect(origin("https://canvas.dku.edu/courses/x/quizzes/1") == nil)
-        #expect(origin("https://canvas.dku.edu/courses/1/modules") == nil)
-        #expect(origin("https://canvas.dku.edu/x/courses/1/quizzes/2") == nil)
-    }
-
-    @Test func retryAfterIsClamped() {
-        #expect(CanvasRetry.delay(retryAfter: nil) == 4)
-        #expect(CanvasRetry.delay(retryAfter: "abc") == 4)
-        #expect(CanvasRetry.delay(retryAfter: "0") == 1)
-        #expect(CanvasRetry.delay(retryAfter: "-5") == 1)
-        #expect(CanvasRetry.delay(retryAfter: " 7 ") == 7)
-        #expect(CanvasRetry.delay(retryAfter: "999") == 20)
-        #expect(CanvasRetry.maxRetries == 3)
-    }
-
     @Test func clearedWebDataRecords() {
         func gone(_ d: String, server: String = "exam.dku.edu") -> Bool {
             CanvasData.shouldRemove(domain: d, serverHost: server)
@@ -242,85 +165,14 @@ import JavaScriptCore
         #expect(gone("dku.edu", server: ""))
     }
 
-    private func stubContext(origin: String, withButton: Bool = true, pathname: String = "/") -> JSContext {
-        let ctx = JSContext()!
-        let button = withButton ? "{ disabled: true, removeAttribute: function () {}, click: function () { clicks++; } }" : "null"
-        ctx.evaluateScript("""
-        var sets = 0, clicks = 0, events = [];
-        function HTMLInputElement() {}
-        Object.defineProperty(HTMLInputElement.prototype, 'value', {
-          configurable: true,
-          set: function (v) { this.stored = v; sets++; },
-          get: function () { return this.stored; }
-        });
-        function Event(type, init) { this.type = type; this.bubbles = !!(init && init.bubbles); }
-        var button = \(button);
-        var el = new HTMLInputElement();
-        el.form = { querySelector: function () { return button; } };
-        el.dispatchEvent = function (e) { events.push(e.type + ':' + e.bubbles); };
-        var document = { querySelector: function () { return el; } };
-        var location = { origin: '\(origin)', pathname: '\(pathname)' };
-        """)
-        return ctx
-    }
-
-    @Test func fillScriptRunsInStubDom() {
-        let code = "Zq7Xk2Mn"
-        let script = CanvasScripts.fill(code: code, origin: "https://canvas.dku.edu")
-        let ctx = stubContext(origin: "https://canvas.dku.edu")
-        let result = ctx.evaluateScript(script)?.toString() ?? ""
-        #expect(result == "clicked")
-        #expect(!result.contains(code))
-        #expect(ctx.evaluateScript("sets")?.toInt32() == 1)
-        #expect(ctx.evaluateScript("clicks")?.toInt32() == 1)
-        #expect(ctx.evaluateScript("events.join(',')")?.toString() == "input:true,change:true")
-        #expect(ctx.evaluateScript("el.stored")?.toString() == code)
-        #expect(ctx.evaluateScript("button.disabled")?.toBool() == false)
-    }
-
-    @Test func fillScriptRefusesOtherOrigins() {
-        let code = "Zq7Xk2Mn"
-        let script = CanvasScripts.fill(code: code, origin: "https://canvas.dku.edu")
-        let ctx = stubContext(origin: "https://evil.example.com")
-        let result = ctx.evaluateScript(script)?.toString() ?? ""
-        #expect(result == "wrongorigin")
-        #expect(!result.contains(code))
-        #expect(ctx.evaluateScript("sets")?.toInt32() == 0)
-        #expect(ctx.evaluateScript("clicks")?.toInt32() == 0)
-        #expect(ctx.evaluateScript("events.length")?.toInt32() == 0)
-    }
-
-    @Test func fillScriptReportsMissingButtonWithoutTheCode() {
-        let code = "Zq7Xk2Mn"
-        let ctx = stubContext(origin: "https://canvas.dku.edu", withButton: false)
-        let result = ctx.evaluateScript(CanvasScripts.fill(code: code, origin: "https://canvas.dku.edu"))?.toString() ?? ""
-        #expect(result == "nobutton")
-        #expect(!result.contains(code))
-    }
-
-    @Test func fillScriptShape() {
-        let probe = CanvasScripts.probe
-        #expect(probe.contains("input#quiz_access_code"))
-        #expect(probe.contains("input[name=access_code]"))
-        let script = CanvasScripts.fill(code: "Zq7Xk2", origin: "https://canvas.dku.edu")
-        #expect(script.contains("location.origin !== "))
-        #expect(script.contains("\"https:\\/\\/canvas.dku.edu\"") || script.contains("\"https://canvas.dku.edu\""))
-        #expect(script.contains("\"Zq7Xk2\""))
-        #expect(script.contains("'input'"))
-        #expect(script.contains("'change'"))
-        #expect(script.contains("btn.click()"))
-        #expect(script.contains("button[type=submit], input[type=submit]"))
-        #expect(script.contains("button:not([type])"))
-        #expect(!script.contains(".btn-primary"))
-        #expect(!script.contains("return v"))
-    }
-
     // MARK: - Restricted Canvas browser
 
     private let host = "canvas.dku.edu"
 
     private func scope(_ kind: String = "quizzes", openBook: Bool = false) -> CanvasScope {
-        CanvasScope(courseId: "123", itemKind: kind, itemId: "456", openBook: openBook)
+        CanvasScope(courseId: "123", itemKind: kind, itemId: "456", openBook: openBook,
+                    signInHosts: ["login.microsoftonline.com", "*.duosecurity.com", "sso.dku.edu", "weird-idp.example.edu"],
+                    quizLtiHosts: ["*.quiz-lti-iad-prod.instructure.com"])
     }
 
     private func decide(_ path: String, _ phase: CanvasPhase, kind: String = "quizzes", openBook: Bool = false,
@@ -460,11 +312,72 @@ import JavaScriptCore
         }
     }
 
-    @Test func otherHostsAreLeftToTheSiteRules() {
-        #expect(decide("/inbox", .lobby, host: "login.microsoftonline.com") == .allow)
-        #expect(decide("/anything", .quiz, host: "x.quiz-lti-iad-prod.instructure.com") == .allow)
-        #expect(decide("/inbox", .quiz, host: "canvas.dku.edu.evil.com") == .allow)
+    @Test func otherHostsFollowTheSiteRulesInTheLobby() {
+        for h in ["login.microsoftonline.com", "docs.google.com", "canvas.dku.edu.evil.com", "example.com"] {
+            #expect(decide("/inbox", .lobby, host: h) == .allow, h)
+        }
         #expect(decide("/inbox", .lobby, host: "CANVAS.dku.edu") == .block)
+        #expect(decide("/inbox", .quiz, host: "CANVAS.dku.edu") == .block)
+    }
+
+    @Test func otherHostsInTheQuizPhase() {
+        for h in ["login.microsoftonline.com", "sso.dku.edu", "api-1a2b3c.duosecurity.com", "weird-idp.example.edu",
+                  "x.quiz-lti-iad-prod.instructure.com", "SSO.DKU.EDU"] {
+            #expect(decide("/anything", .quiz, host: h) == .allow, h)
+            #expect(decide("/anything", .quiz, kind: "assignments", openBook: true, host: h) == .allow, h)
+        }
+        for h in ["docs.google.com", "example.com", "canvas.dku.edu.evil.com", "evilcanvas.dku.edu", "a.instructure.com",
+                  "authn.example.edu", "accounts.google.com", "idp.example.org", "quiz-lti-pdx-prod.instructure.com",
+                  "duosecurity.com", "x.duosecurity.com.evil.com", "quiz-lti-iad-prod.instructure.com",
+                  "dku.edu", "files.example.com"] {
+            #expect(decide("/anything", .quiz, host: h) == .block, h)
+            #expect(decide("/anything", .quiz, kind: "assignments", openBook: true, host: h) == .block, h)
+        }
+        let plain = CanvasNavigation.decide(url: URL(string: "http://sso.dku.edu/x")!, examHost: host,
+                                            scope: scope(), phase: .quiz)
+        #expect(plain == .block)
+        let blank = CanvasNavigation.decide(url: URL(string: "about:blank")!, examHost: host, scope: scope(), phase: .quiz)
+        #expect(blank == .block)
+        let bare = CanvasScope(courseId: "123", itemKind: "quizzes", itemId: "456", openBook: false)
+        let none = CanvasNavigation.decide(url: URL(string: "https://sso.dku.edu/x")!, examHost: host, scope: bare, phase: .quiz)
+        #expect(none == .block)
+        let lobby = CanvasNavigation.decide(url: URL(string: "https://sso.dku.edu/x")!, examHost: host, scope: bare, phase: .lobby)
+        #expect(lobby == .allow)
+    }
+
+    @Test func hostListParsing() {
+        func parse(_ extra: [String: Any]) -> CanvasScope? {
+            var d: [String: Any] = ["course_id": "1", "item_kind": "quizzes", "item_id": "2"]
+            for (k, v) in extra { d[k] = v }
+            return CanvasScope(json: d)
+        }
+        let ok = parse(["sign_in_hosts": ["Login.Microsoftonline.com", "*.duosecurity.com"], "quiz_lti_hosts": ["*.quiz-lti-iad-prod.instructure.com"]])
+        #expect(ok?.signInHosts == ["login.microsoftonline.com", "*.duosecurity.com"])
+        #expect(ok?.quizLtiHosts == ["*.quiz-lti-iad-prod.instructure.com"])
+        #expect(parse([:])?.signInHosts == [])
+        #expect(parse([:])?.quizLtiHosts == [])
+        #expect(parse(["sign_in_hosts": [String]()])?.signInHosts == [])
+        #expect(parse(["sign_in_hosts": NSNull()])?.signInHosts == [])
+        let bad: [Any] = ["x.com", 5, [1], ["a b.com"], ["https://x.com"], ["*"], ["x.com/path"], ["x.com:443"], ["*."], [""],
+                          ["a..com"], [".x.com"], ["x.com."], ["*.*.x.com"], ["é.com"], [["x"]],
+                          Array(repeating: "x.com", count: CanvasScope.maxHostPatterns + 1)]
+        for value in bad {
+            #expect(parse(["sign_in_hosts": value]) == nil)
+            #expect(parse(["quiz_lti_hosts": value]) == nil)
+        }
+    }
+
+    @Test func hostPatternMatching() {
+        let patterns = ["login.example.com", "*.duosecurity.com"]
+        #expect(CanvasScope.hostMatches("login.example.com", patterns: patterns))
+        #expect(CanvasScope.hostMatches("LOGIN.example.com", patterns: patterns))
+        #expect(CanvasScope.hostMatches("api-1.duosecurity.com", patterns: patterns))
+        #expect(CanvasScope.hostMatches("a.b.duosecurity.com", patterns: patterns))
+        #expect(!CanvasScope.hostMatches("duosecurity.com", patterns: patterns))
+        #expect(!CanvasScope.hostMatches("evilduosecurity.com", patterns: patterns))
+        #expect(!CanvasScope.hostMatches("x.login.example.com", patterns: patterns))
+        #expect(!CanvasScope.hostMatches("login.example.com.evil.com", patterns: patterns))
+        #expect(!CanvasScope.hostMatches("login.example.com", patterns: []))
     }
 
     @Test func recoveryGateLimitsToOnePerSecond() {
@@ -582,50 +495,6 @@ import JavaScriptCore
         #expect(CanvasScope(json: ["course_id": "\u{0661}", "item_kind": "quizzes", "item_id": "2"] as [String: Any]) == nil)
     }
 
-    @Test func fillGateWithScope() {
-        let start = URL(string: "https://canvas.dku.edu/courses/123/quizzes/456")!
-        let sc = scope()
-        func origin(_ s: String, _ scope: CanvasScope?) -> String? {
-            CanvasPolicy.fillOrigin(page: URL(string: s)!, start: start, scope: scope)
-        }
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/456", sc) == "https://canvas.dku.edu")
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/456/take", sc) == "https://canvas.dku.edu")
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/456/", sc) == "https://canvas.dku.edu")
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/457", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/4567", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/courses/12/quizzes/456", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/courses/123/assignments/456", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/456/../457", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/456%2f..%2f457", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/login", sc) == nil)
-        #expect(origin("https://x.instructure.com/courses/123/quizzes/456", sc) == nil)
-        #expect(origin("https://canvas.dku.edu/courses/123/quizzes/457", nil) != nil)
-    }
-
-    @Test func fillScriptChecksThePath() {
-        let code = "Zq7Xk2Mn"
-        let prefix = "/courses/123/quizzes/456"
-        let script = CanvasScripts.fill(code: code, origin: "https://canvas.dku.edu", pathPrefix: prefix)
-        let cases: [(String, String)] = [
-            ("/courses/123/quizzes/456", "clicked"), ("/courses/123/quizzes/456/take", "clicked"),
-            ("/courses/123/quizzes/4567", "wrongpath"), ("/courses/123/quizzes/457", "wrongpath"),
-            ("/courses/12/quizzes/456", "wrongpath"), ("/", "wrongpath"),
-            ("/x/courses/123/quizzes/456", "wrongpath")
-        ]
-        for (path, expected) in cases {
-            let ctx = stubContext(origin: "https://canvas.dku.edu", pathname: path)
-            let result = ctx.evaluateScript(script)?.toString() ?? ""
-            #expect(result == expected, "\(path)")
-            if expected != "clicked" {
-                #expect(ctx.evaluateScript("sets")?.toInt32() == 0)
-                #expect(ctx.evaluateScript("clicks")?.toInt32() == 0)
-            }
-        }
-        let other = stubContext(origin: "https://evil.example.com", pathname: prefix)
-        #expect(other.evaluateScript(script)?.toString() == "wrongorigin")
-        #expect(CanvasScope(courseId: "123", itemKind: "quizzes", itemId: "456", openBook: false).itemPath == prefix)
-    }
-
     @Test func downloadQueriesAreBlocked() {
         for q in ["?download=1", "?download", "?Download=1", "?DOWNLOAD_FRD=1", "?download_frd=1", "?x=1&download_frd=1",
                   "?x=1&Download=true#frag"] {
@@ -642,7 +511,8 @@ import JavaScriptCore
 @MainActor @Suite struct CanvasControllerTests {
 
     private func canvasBody(scope: Any? = ["course_id": "123", "item_kind": "quizzes", "item_id": "456",
-                                           "open_book": false] as [String: Any],
+                                           "open_book": false, "sign_in_hosts": ["login.microsoftonline.com", "sso.dku.edu"],
+                                           "quiz_lti_hosts": ["*.quiz-lti-iad-prod.instructure.com"]] as [String: Any],
                             url: String = "https://canvas.dku.edu/courses/123/quizzes/456") -> [String: Any] {
         var body: [String: Any] = [
             "attempt_id": "a1b2c3", "url": url, "token": "tok12345", "session": "sess12345",
@@ -655,6 +525,7 @@ import JavaScriptCore
 
     private func makeController() -> ExternalExamController {
         let c = ExternalExamController(server: URL(string: "https://exam.example.com")!)
+        c.defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString) ?? .standard
         c.clearsWebData = false
         c.networkEnabled = false
         return c
@@ -672,6 +543,14 @@ import JavaScriptCore
         return r
     }
 
+    private func plainBody() -> [String: Any] {
+        var body = canvasBody(scope: nil)
+        body["kind"] = nil
+        body["url"] = "https://canvas.dku.edu/exam"
+        body["finish_url_regex"] = nil
+        return body
+    }
+
     private func page(_ path: String) -> URL { URL(string: "https://canvas.dku.edu" + path)! }
 
     @Test func startValidatesTheScope() {
@@ -680,12 +559,12 @@ import JavaScriptCore
         let started1 = c.start(body: canvasBody())
         #expect(started1 == nil)
         c.abort()
+        c.abort()
         let started2 = c.start(body: canvasBody(scope: nil))
-        #expect(started2 == nil)
-        c.abort()
+        #expect(started2 == "bad_request")
         let started3 = c.start(body: canvasBody(scope: NSNull()))
-        #expect(started3 == nil)
-        c.abort()
+        #expect(started3 == "bad_request")
+        #expect(!c.isActive)
         let bad: [Any] = [
             "x", 5, [String: Any](),
             ["course_id": "12a", "item_kind": "quizzes", "item_id": "456"] as [String: Any],
@@ -754,18 +633,27 @@ import JavaScriptCore
         #expect(c.blocksMainFrame(page("/courses/123")))
     }
 
-    @Test func withoutScopeNothingIsRestricted() {
+    @Test func canvasWithoutAScopeIsRefused() {
         let c = makeController()
         defer { c.abort() }
-        let started7 = c.start(body: canvasBody(scope: nil))
-        #expect(started7 == nil)
+        let missing = c.start(body: canvasBody(scope: nil))
+        #expect(missing == "bad_request")
+        let null = c.start(body: canvasBody(scope: NSNull()))
+        #expect(null == "bad_request")
+        #expect(!c.isActive)
+    }
+
+    @Test func plainExternalExamHasNoCanvasRules() {
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: plainBody())
+        #expect(started == nil)
+        #expect(!c.isCanvas)
         #expect(!c.blocksMainFrame(page("/inbox")))
-        #expect(!c.blocksMainFrame(page("/courses/999/quizzes/1")))
-        #expect(c.allows(page("/courses/999/quizzes/1")))
-        #expect(c.childAllows(page("/inbox")))
+        #expect(!c.isLockedIn)
         c.canvasCommitted(page("/courses/123/quizzes/456/take"))
         #expect(c.phase == .lobby)
-        #expect(c.popupPlan(url: page("/courses/999/quizzes/1"), openerHost: "canvas.dku.edu") == .child)
+        #expect(c.popupPlan(url: page("/courses/999/quizzes/1"), openerHost: "canvas.dku.edu") == .block)
     }
 
     @Test func popupsOnTheCanvasHostLoadInTheMainView() {
@@ -868,7 +756,7 @@ import JavaScriptCore
     @Test func recoveryNeedsAScope() {
         let c = makeController()
         defer { c.abort() }
-        let started = c.start(body: canvasBody(scope: nil))
+        let started = c.start(body: plainBody())
         #expect(started == nil)
         let r = record(c)
         c.recoverIfBlocked(page("/inbox"))
@@ -904,7 +792,7 @@ import JavaScriptCore
     @Test func examLinkOpensOnlyWithAScope() {
         let c = makeController()
         defer { c.abort() }
-        let started = c.start(body: canvasBody(scope: nil))
+        let started = c.start(body: plainBody())
         #expect(started == nil)
         let r = record(c)
         c.canvasCommitted(page("/login"))
@@ -919,6 +807,7 @@ import JavaScriptCore
         body["finish_url_contains"] = "/take"
         let started = c.start(body: body)
         #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
         #expect(!c.isFinishPage(page("/courses/123/quizzes/456/take")))
         #expect(c.isFinishPage(page("/courses/123/quizzes/456/submissions/9")))
         c.abort()
@@ -941,6 +830,103 @@ import JavaScriptCore
         let started = c.start(body: body)
         #expect(started == nil)
         #expect(!c.isFinishPage(page("/courses/123/quizzes/456/submissions/9")))
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(c.phase == .quiz)
+        #expect(!c.isLockedIn)
+    }
+
+    @Test func missingFinishPatternDoesNotLockIn() {
+        let c = makeController()
+        defer { c.abort() }
+        var body = canvasBody()
+        body["finish_url_regex"] = nil
+        let started = c.start(body: body)
+        #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(!c.isLockedIn)
+    }
+
+    @Test func validFinishPatternLocksIn() {
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(c.isLockedIn)
+    }
+
+    @Test func framesThatMatchTheFinishPatternFinishTheExam() {
+        let lti = "x.quiz-lti-iad-prod.instructure.com"
+        var body = canvasBody()
+        body["finish_url_regex"] = "submission-confirmation|submission-screen"
+        body["allowed_domains"] = ["canvas.dku.edu", lti]
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: body)
+        #expect(started == nil)
+        c.checkFrameFinish(URL(string: "https://\(lti)/session/1/submission-screen")!)
+        #expect(!c.finishScheduled)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        c.checkFrameFinish(URL(string: "https://\(lti)/session/1/take")!)
+        #expect(!c.finishScheduled)
+        c.checkFrameFinish(URL(string: "https://evil.example.com/submission-screen")!)
+        #expect(!c.finishScheduled)
+        c.checkFrameFinish(URL(string: "https://\(lti)/session/1/submission-screen?x=1#y")!)
+        #expect(c.finishScheduled)
+        c.abort()
+        #expect(!c.finishScheduled)
+    }
+
+    @Test func frameFinishNeedsACanvasSession() {
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: plainBody())
+        #expect(started == nil)
+        c.checkFrameFinish(page("/courses/123/quizzes/456/submissions/9"))
+        #expect(!c.finishScheduled)
+    }
+
+    @Test func offHostPagesInTheQuizPhaseNeedASignInOrQuizHost() {
+        var body = canvasBody()
+        body["allowed_domains"] = ["canvas.dku.edu", "login.microsoftonline.com", "sso.dku.edu",
+                                   "x.quiz-lti-iad-prod.instructure.com", "docs.google.com"]
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: body)
+        #expect(started == nil)
+        let docs = URL(string: "https://docs.google.com/document/d/1")!
+        let sso = URL(string: "https://sso.dku.edu/x")!
+        let lti = URL(string: "https://x.quiz-lti-iad-prod.instructure.com/s")!
+        #expect(!c.blocksMainFrame(docs))
+        #expect(c.popupPlan(url: docs, openerHost: "canvas.dku.edu") != .block)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(c.blocksMainFrame(docs))
+        #expect(!c.blocksMainFrame(sso))
+        #expect(!c.blocksMainFrame(lti))
+        #expect(!c.blocksMainFrame(URL(string: "https://login.microsoftonline.com/x")!))
+        #expect(c.popupPlan(url: docs, openerHost: "canvas.dku.edu") == .block)
+        #expect(c.popupPlan(url: sso, openerHost: "canvas.dku.edu") != .block)
+        #expect(c.popupPlan(url: URL(string: "about:blank"), openerHost: "canvas.dku.edu") == .child)
+        #expect(!c.childAllows(docs))
+        #expect(c.childAllows(sso))
+        #expect(c.childAllows(URL(string: "about:blank")!))
+    }
+
+    @Test func nonHttpsCommitsAreIgnored() {
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        let r = record(c)
+        c.canvasCommitted(URL(string: "about:blank"))
+        c.canvasCommitted(URL(string: "data:text/html,hi")!)
+        c.canvasCommitted(URL(string: "http://canvas.dku.edu/courses/123/quizzes/456/take")!)
+        #expect(c.phase == .lobby)
+        c.autoOpenIfNeeded(url: page("/"))
+        #expect(r.actions.isEmpty)
+        c.canvasCommitted(page("/"))
+        c.autoOpenIfNeeded(url: page("/"))
+        #expect(r.actions.count == 1)
     }
 
     @Test func warmSessionLandingOpensTheExamLink() {
@@ -988,6 +974,325 @@ import JavaScriptCore
         #expect(again == nil)
         c.canvasCommitted(URL(string: "https://other.example.com/")!)
         c.autoOpenIfNeeded(url: page("/"))
+        #expect(r.actions.count == 1)
+    }
+
+    @Test func quizPhaseSurvivesARestart() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        let first = makeController()
+        first.defaults = defaults
+        let started = first.start(body: canvasBody())
+        #expect(started == nil)
+        #expect(first.phase == .lobby)
+        #expect(!first.isLockedIn)
+        first.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(first.phase == .quiz)
+        #expect(first.isLockedIn)
+        #expect(CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        let second = makeController()
+        second.defaults = defaults
+        let restarted = second.start(body: canvasBody())
+        #expect(restarted == nil)
+        #expect(second.phase == .quiz)
+        #expect(second.isLockedIn)
+        #expect(second.blocksMainFrame(page("/")))
+        let again = second.start(body: canvasBody())
+        #expect(again == nil)
+        #expect(second.phase == .quiz)
+        second.abort()
+        #expect(!CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        let third = makeController()
+        third.defaults = defaults
+        let fresh = third.start(body: canvasBody())
+        #expect(fresh == nil)
+        #expect(third.phase == .lobby)
+        first.abort()
+        third.abort()
+    }
+
+    @Test func finishClearsTheQuizMarker() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        let c = makeController()
+        c.defaults = defaults
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        c.finish(reason: "finish_url")
+        #expect(!c.isActive)
+        #expect(CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        c.externalDonePageLoaded(URL(string: "https://exam.example.com/student/external-done/zzz9")!)
+        c.externalDonePageLoaded(URL(string: "https://evil.example.com/student/external-done/a1b2c3")!)
+        c.externalDonePageLoaded(nil)
+        #expect(CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        c.externalDonePageLoaded(URL(string: "https://exam.example.com/student/external-done/a1b2c3?reason=finish_url")!)
+        #expect(!CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        #expect(!CanvasQuizMarker.isArmed("a1b2c3", in: defaults))
+    }
+
+    @Test func aRestartedAttemptKeepsItsMarkerAfterAnUnfinishedHandIn() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        let c = makeController()
+        c.defaults = defaults
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        c.finish(reason: "finish_url")
+        let again = c.start(body: canvasBody())
+        #expect(again == nil)
+        c.externalDonePageLoaded(URL(string: "https://exam.example.com/student/external-done/a1b2c3")!)
+        #expect(CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        #expect(c.phase == .quiz)
+        c.abort()
+    }
+
+    @Test func markerIsPerAttemptAndNeedsAScope() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        CanvasQuizMarker.set("other1", in: defaults)
+        let c = makeController()
+        c.defaults = defaults
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        #expect(c.phase == .lobby)
+        c.abort()
+        CanvasQuizMarker.set("a1b2c3", in: defaults)
+        let noScope = c.start(body: plainBody())
+        #expect(noScope == nil)
+        #expect(c.phase == .lobby)
+        #expect(!c.isLockedIn)
+        c.abort()
+    }
+
+    @Test func markerHelpers() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        #expect(!CanvasQuizMarker.isSet("x1", in: defaults))
+        CanvasQuizMarker.set("x1", in: defaults)
+        #expect(CanvasQuizMarker.isSet("x1", in: defaults))
+        #expect(!CanvasQuizMarker.isSet("x2", in: defaults))
+        CanvasQuizMarker.clear("x1", in: defaults)
+        #expect(!CanvasQuizMarker.isSet("x1", in: defaults))
+    }
+
+    @Test func lockInNeedsTheQuizPhaseAndAScope() {
+        let c = makeController()
+        defer { c.abort() }
+        #expect(!c.isLockedIn)
+        let started = c.start(body: plainBody())
+        #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(!c.isLockedIn)
+        let assignment: [String: Any] = ["course_id": "123", "item_kind": "assignments", "item_id": "456"]
+        let scoped = c.start(body: canvasBody(scope: assignment, url: "https://canvas.dku.edu/courses/123/assignments/456"))
+        #expect(scoped == nil)
+        #expect(!c.isLockedIn)
+        c.canvasCommitted(page("/courses/123/assignments/456"))
+        #expect(c.isLockedIn)
+    }
+
+    @Test func backStaysInsideTheItemDuringTheQuiz() {
+        let c = makeController()
+        defer { c.abort() }
+        let open: [String: Any] = ["course_id": "123", "item_kind": "quizzes", "item_id": "456", "open_book": true]
+        let started = c.start(body: canvasBody(scope: open))
+        #expect(started == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(!c.blocksMainFrame(page("/courses/123/pages/x")))
+        #expect(!c.backAllowed(page("/courses/123/pages/x")))
+        #expect(!c.backAllowed(page("/courses/123/modules")))
+        #expect(c.backAllowed(page("/courses/123/quizzes/456")))
+        #expect(c.backAllowed(page("/courses/123/quizzes/456/take")))
+    }
+
+    @Test func examServerPagesAreBlockedDuringACanvasExam() {
+        let hand = URL(string: "https://exam.example.com/student/external-done/123")!
+        let others = ["https://exam.example.com/student", "https://exam.example.com/student/exam/a1b2c3",
+                      "https://exam.example.com/", "https://exam.example.com/teacher/login",
+                      "https://EXAM.example.com:443/student/done/a1b2c3"].map { URL(string: $0)! }
+        let c = makeController()
+        defer { c.abort() }
+        #expect(!c.blocksExamServer(hand))
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        for phase in 0..<2 {
+            #expect(c.blocksExamServer(hand))
+            #expect(!c.allows(hand))
+            #expect(c.blocksMainFrame(page("/")) == (phase == 1))
+            for url in others {
+                #expect(c.blocksExamServer(url), "\(url)")
+                #expect(!c.allows(url), "\(url)")
+                #expect(!c.childAllows(url), "\(url)")
+                #expect(c.popupPlan(url: url, openerHost: "canvas.dku.edu") == .block)
+            }
+            #expect(!c.blocksExamServer(page("/courses/123/quizzes/456")))
+            #expect(!c.blocksExamServer(URL(string: "https://login.microsoftonline.com/x")!))
+            c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        }
+        #expect(c.phase == .quiz)
+        c.finish(reason: "finish_url")
+        #expect(!c.isActive)
+        #expect(!c.blocksExamServer(hand))
+    }
+
+    @Test func examServerInAllowedDomainsStillBlockedDuringACanvasExam() {
+        let c = makeController()
+        defer { c.abort() }
+        var body = canvasBody()
+        body["allowed_domains"] = ["canvas.dku.edu", "*.example.com"]
+        let started = c.start(body: body)
+        #expect(started == nil)
+        let hand = URL(string: "https://exam.example.com/student/external-done/123")!
+        #expect(!c.allows(hand))
+        #expect(c.popupPlan(url: hand, openerHost: "canvas.dku.edu") == .block)
+        #expect(c.allows(URL(string: "https://other.example.com/x")!))
+    }
+
+    @Test func nonCanvasExamsKeepTheirServerRules() {
+        let c = makeController()
+        defer { c.abort() }
+        var plain = canvasBody()
+        plain["kind"] = nil
+        plain["canvas_scope"] = nil
+        plain["url"] = "https://canvas.dku.edu/exam"
+        let started = c.start(body: plain)
+        #expect(started == nil)
+        #expect(!c.blocksExamServer(URL(string: "https://exam.example.com/student/external-done/123")!))
+        #expect(c.canvasStartURL == nil)
+    }
+
+    @Test func finishCountsOnlyWhenArmed() {
+        let history = page("/courses/123/quizzes/456/history?version=1")
+        let submission = page("/courses/123/quizzes/456/submissions/5")
+        let c = makeController()
+        defer { c.abort() }
+        var body = canvasBody()
+        body["finish_url_regex"] = #"/quizzes/\d+/(submissions/\d+|history)"#
+        let started = c.start(body: body)
+        #expect(started == nil)
+        #expect(!c.armed)
+        #expect(!c.isFinishPage(submission))
+        c.canvasCommitted(page("/courses/123/quizzes/456"))
+        #expect(!c.armed)
+        #expect(!c.isFinishPage(history))
+        #expect(!c.isFinishPage(submission))
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(c.armed)
+        #expect(c.isFinishPage(submission))
+        #expect(c.isFinishPage(history))
+        c.canvasCommitted(page("/courses/123/quizzes/456/"))
+        #expect(!c.armed)
+        #expect(!c.isFinishPage(history))
+        #expect(!c.isFinishPage(submission))
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(c.isFinishPage(submission))
+    }
+
+    @Test func goToMyQuizDisarms() {
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: canvasBody())
+        #expect(started == nil)
+        let r = record(c)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(c.armed)
+        c.openExamLink()
+        #expect(!c.armed)
+        #expect(r.actions == [.load(URL(string: "https://canvas.dku.edu/courses/123/quizzes/456")!)])
+        #expect(!c.isFinishPage(page("/courses/123/quizzes/456/submissions/5")))
+    }
+
+    @Test func armedStateSurvivesARestart() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        let submission = page("/courses/123/quizzes/456/submissions/5")
+        let first = makeController()
+        first.defaults = defaults
+        let started = first.start(body: canvasBody())
+        #expect(started == nil)
+        first.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        #expect(CanvasQuizMarker.isArmed("a1b2c3", in: defaults))
+        let second = makeController()
+        second.defaults = defaults
+        let restarted = second.start(body: canvasBody())
+        #expect(restarted == nil)
+        #expect(second.armed)
+        #expect(second.isFinishPage(submission))
+        second.canvasCommitted(page("/courses/123/quizzes/456"))
+        #expect(!CanvasQuizMarker.isArmed("a1b2c3", in: defaults))
+        let third = makeController()
+        third.defaults = defaults
+        let again = third.start(body: canvasBody())
+        #expect(again == nil)
+        #expect(third.phase == .quiz)
+        #expect(!third.armed)
+        #expect(!third.isFinishPage(submission))
+        third.abort()
+        #expect(!CanvasQuizMarker.isArmed("a1b2c3", in: defaults))
+        #expect(!CanvasQuizMarker.isSet("a1b2c3", in: defaults))
+        first.abort()
+        second.abort()
+    }
+
+    @Test func assignmentPagesArmTheFinish() {
+        let c = makeController()
+        defer { c.abort() }
+        let scope: [String: Any] = ["course_id": "123", "item_kind": "assignments", "item_id": "456"]
+        var body = canvasBody(scope: scope, url: "https://canvas.dku.edu/courses/123/assignments/456")
+        body["finish_url_regex"] = #"/assignments/\d+/submissions/\d+"#
+        let started = c.start(body: body)
+        #expect(started == nil)
+        #expect(!c.armed)
+        c.canvasCommitted(page("/courses/123/assignments/456"))
+        #expect(c.armed)
+        #expect(c.isFinishPage(page("/courses/123/assignments/456/submissions/9")))
+    }
+
+    @Test func restoredArmedStateSurvivesTheStartPageLoad() {
+        let defaults = UserDefaults(suiteName: "fairplay.canvas.tests." + UUID().uuidString)!
+        let submission = page("/courses/123/quizzes/456/submissions/5")
+        let first = makeController()
+        first.defaults = defaults
+        let started = first.start(body: canvasBody())
+        #expect(started == nil)
+        first.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        let second = makeController()
+        second.defaults = defaults
+        let restarted = second.start(body: canvasBody())
+        #expect(restarted == nil)
+        #expect(second.armed)
+        second.canvasCommitted(URL(string: "about:blank"))
+        second.canvasCommitted(page("/courses/123/quizzes/456"))
+        #expect(second.armed)
+        #expect(second.isFinishPage(submission))
+        second.canvasCommitted(page("/courses/123/quizzes/456"))
+        #expect(!second.armed)
+        first.abort()
+        second.abort()
+    }
+
+    @Test func aPendingFinishIsNotCancelledByTheQuizLink() {
+        let lti = "x.quiz-lti-iad-prod.instructure.com"
+        var body = canvasBody()
+        body["finish_url_regex"] = "submission-confirmation|submission-screen"
+        body["allowed_domains"] = ["canvas.dku.edu", lti]
+        let c = makeController()
+        defer { c.abort() }
+        let started = c.start(body: body)
+        #expect(started == nil)
+        let r = record(c)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        c.checkFrameFinish(URL(string: "https://\(lti)/session/1/submission-screen")!)
+        #expect(c.finishScheduled)
+        c.openExamLink()
+        #expect(c.armed)
+        #expect(r.actions.isEmpty)
+        c.canvasCommitted(page("/courses/123/quizzes/456"))
+        #expect(c.armed)
+        c.abort()
+        #expect(!c.finishScheduled)
+        let again = c.start(body: body)
+        #expect(again == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        c.openExamLink()
+        #expect(!c.armed)
         #expect(r.actions.count == 1)
     }
 }

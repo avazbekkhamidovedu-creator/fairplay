@@ -15,6 +15,8 @@ final class ExternalExamController {
         let startURL: URL
         let rules: [SiteRule]
         let finishContains: String?
+        let canvas: Bool
+        let finishRegex: NSRegularExpression?
         var deadline: Date
         let clockOffset: TimeInterval
         let title: String
@@ -37,6 +39,17 @@ final class ExternalExamController {
     private var pendingEvents: [[String: Any]] = []
     private var sendingEvents = false
     private var finishing = false
+    private var browser: CanvasBrowser?
+    private var finishTimer: Timer?
+    private var noticeTimer: Timer?
+    private var recoveryPending = false
+    private var uploadReported = false
+    private var canvasScriptInstalled = false
+    private var persistentNotice: String?
+    private var doneAttempt: String?
+    var resetScripts: (() -> Void)?
+    var defaults = UserDefaults.standard
+    var clearsWebData = true
 
     private static let isoFrac: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -56,6 +69,8 @@ final class ExternalExamController {
         self.webView = webView
         self.bar = bar
         bar.onFinish = { [weak self] in self?.finishPressed() }
+        bar.onBack = { [weak self] in self?.backPressed() }
+        bar.onQuiz = { [weak self] in self?.quizPressed() }
     }
 
     private static func schemeOK(_ url: URL) -> Bool {
@@ -71,18 +86,55 @@ final class ExternalExamController {
               let token = body["token"] as? String, !token.isEmpty else {
             return "bad_request"
         }
-        let rules = SiteRule.rules(from: (body["allowed_domains"] as? [Any]) ?? [], startURL: url)
-        let finish = (body["finish_url_contains"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let isCanvas = (body["kind"] as? String) == "canvas"
+        let allowed = (body["allowed_domains"] as? [Any]) ?? []
+        let rules: [SiteRule]
+        var canvasSetup: CanvasSetup?
+        if isCanvas {
+            switch CanvasSetup.make(startURL: url, allowedDomains: allowed, rawScope: body["canvas_scope"],
+                                    rawRegex: body["finish_url_regex"] as? String) {
+            case .failure:
+                return "bad_request"
+            case .success(let setup):
+                rules = setup.rules
+                canvasSetup = setup
+            }
+        } else {
+            rules = SiteRule.rules(from: allowed, startURL: url)
+        }
+        let finish = isCanvas ? nil : (body["finish_url_contains"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let serverTime = ExternalExamController.parseDate(body["server_time"] as? String) ?? Date()
         let deadline = ExternalExamController.parseDate(body["deadline_at"] as? String) ?? Date().addingTimeInterval(3600)
         let title = (body["title"] as? String) ?? "Exam"
         stopTimers()
+        finishTimer?.invalidate(); finishTimer = nil
         finishing = false
-        session = Session(attemptId: aid, startURL: url, rules: rules, finishContains: finish, deadline: deadline,
+        recoveryPending = false
+        uploadReported = false
+        session = Session(attemptId: aid, startURL: url, rules: rules, finishContains: finish, canvas: isCanvas,
+                          finishRegex: canvasSetup?.finishRegex, deadline: deadline,
                           clockOffset: serverTime.timeIntervalSince(Date()), title: title, token: token,
                           appSession: (body["session"] as? String) ?? "")
-        DebugLog.log("external", "website exam start: \(url.host ?? "?") rules=\(rules.count) finish=\(finish ?? "-")")
+        let finishRejected = canvasSetup?.finishRejected == true
+        doneAttempt = nil
+        if let canvasSetup {
+            let restored = CanvasQuizMarker.isSet(aid, in: defaults)
+            browser = CanvasBrowser(startURL: url, rules: rules, scope: canvasSetup.scope, quizStarted: restored,
+                                    armed: restored && CanvasQuizMarker.isArmed(aid, in: defaults),
+                                    finishUsable: !finishRejected)
+            installCanvasScript()
+        } else {
+            browser = nil
+        }
+        DebugLog.log("external", "website exam start: \(url.host ?? "?") rules=\(rules.count) finish=\(finish ?? "-") canvas=\(isCanvas)")
         bar?.setExternal(title: title)
+        bar?.setCanvasButtons(isCanvas)
+        updateBar()
+        persistentNotice = nil
+        if finishRejected {
+            EventLog.shared.record("blocked_navigation", "finish pattern rejected")
+            showNotice("The finish page could not be set up. Ask your teacher.", persistent: true)
+        }
         startTimers()
         observeURL()
         webView?.load(URLRequest(url: url))
@@ -91,14 +143,52 @@ final class ExternalExamController {
 
     func allows(_ url: URL) -> Bool {
         guard let session, let host = url.host?.lowercased(), ExternalExamController.schemeOK(url) else { return false }
+        if session.canvas { return browser?.allows(url) ?? false }
         return session.rules.contains { $0.matches(host: host, path: url.path) }
     }
 
     func checkFinishURL(_ url: URL?) {
-        guard let session, !finishing, let needle = session.finishContains, let url else { return }
-        if url.absoluteString.contains(needle) {
+        guard let session, !finishing, let url, finishHit(url, session: session) else { return }
+        guard session.canvas else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.finish(reason: "finish_url") }
+            return
         }
+        guard finishTimer == nil else { return }
+        let aid = session.attemptId
+        let timer = Timer(timeInterval: 2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.finishTimer = nil
+                guard let current = self.session, current.attemptId == aid, !self.finishing,
+                      let live = self.webView?.url, self.finishHit(live, session: current) else { return }
+                self.finish(reason: "finish_url")
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        finishTimer = timer
+    }
+
+    func checkFrameFinish(_ url: URL) {
+        guard let session, session.canvas, !finishing, finishTimer == nil, allows(url),
+              finishHit(url, session: session) else { return }
+        let aid = session.attemptId
+        let timer = Timer(timeInterval: 2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.finishTimer = nil
+                guard let current = self.session, current.attemptId == aid, !self.finishing,
+                      self.browser?.finishArmedNow == true else { return }
+                self.finish(reason: "finish_url")
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        finishTimer = timer
+    }
+
+    private func finishHit(_ url: URL, session: Session) -> Bool {
+        if session.canvas { return browser?.isFinish(url, regex: session.finishRegex) ?? false }
+        guard let needle = session.finishContains else { return false }
+        return url.absoluteString.contains(needle)
     }
 
     // MARK: - Events
@@ -172,7 +262,7 @@ final class ExternalExamController {
 
     private func finishPressed() {
         DebugLog.log("external", "Finish exam button pressed")
-        guard isActive, !finishing else { return }
+        guard isActive, !finishing, !isLockedIn else { return }
         confirmFinish? { [weak self] in self?.finish(reason: "student_finished") }
     }
 
@@ -185,32 +275,213 @@ final class ExternalExamController {
                       "client_time": ExternalExamController.isoFrac.string(from: Date())])
         post(path: "api/student/attempts/\(session.attemptId)/events", session: session, body: ["events": batch]) { _, _ in }
         let aid = session.attemptId
+        let wasCanvas = session.canvas
+        doneAttempt = wasCanvas ? aid : nil
         teardown()
         var comps = URLComponents(url: server.appendingPathComponent("student/external-done/\(aid)"), resolvingAgainstBaseURL: false)
         comps?.queryItems = [URLQueryItem(name: "reason", value: reason)]
         if let url = comps?.url { webView?.load(URLRequest(url: url)) }
+        if wasCanvas && clearsWebData { clearCanvasData() }
     }
 
     /// Leave website mode without submitting (invigilator exit).
     func abort() {
         guard isActive else { return }
         DebugLog.log("external", "aborted (invigilator exit)")
+        let wasCanvas = session?.canvas == true
+        if let aid = session?.attemptId { CanvasQuizMarker.clear(aid, in: defaults) }
         teardown()
+        if wasCanvas && clearsWebData { clearCanvasData() }
         webView?.load(URLRequest(url: server.appendingPathComponent("student")))
     }
 
     private func teardown() {
         stopTimers()
+        finishTimer?.invalidate(); finishTimer = nil
+        noticeTimer?.invalidate(); noticeTimer = nil
+        persistentNotice = nil
         urlObservation?.invalidate(); urlObservation = nil
+        removeCanvasScript()
         bar?.setExternal(title: nil)
         session = nil
+        browser = nil
         pendingEvents.removeAll()
     }
 
     private func observeURL() {
         urlObservation?.invalidate()
         urlObservation = webView?.observe(\.url, options: [.new]) { [weak self] wv, _ in
-            DispatchQueue.main.async { self?.checkFinishURL(wv.url) }
+            DispatchQueue.main.async {
+                let url = wv.url
+                self?.checkFinishURL(url)
+                self?.updateBar()
+                self?.recoverIfBlocked(url)
+            }
+        }
+    }
+
+    // MARK: - Canvas mode
+
+    var isCanvas: Bool { session?.canvas == true }
+
+    var isLockedIn: Bool { browser?.isLockedIn == true }
+
+    var startURL: URL? { session?.startURL }
+
+    static let blockedNotice = CanvasBrowser.blockedNotice
+
+    func childAllows(_ url: URL, mainFrame: Bool = true) -> Bool {
+        guard isCanvas, let browser else { return false }
+        return browser.childAllows(url, mainFrame: mainFrame)
+    }
+
+    func blocksMainFrame(_ url: URL) -> Bool { browser?.blocksMainFrame(url) ?? false }
+
+    func reportBlocked(_ url: URL) {
+        if let detail = browser?.recordBlocked(url) { EventLog.shared.record("blocked_navigation", detail) }
+        showNotice()
+    }
+
+    func reportDownloadBlocked(host: String?) {
+        EventLog.shared.record("blocked_navigation", "download from \(host ?? "?")")
+        showNotice()
+    }
+
+    func popupPlan(url: URL?) -> CanvasPopup.Plan {
+        guard isCanvas, let browser else { return .block }
+        return browser.popupPlan(url: url)
+    }
+
+    func noteUploadRefused() {
+        guard isCanvas, !uploadReported else { return }
+        uploadReported = true
+        EventLog.shared.record("canvas_upload_unsupported", "file questions need a file panel")
+    }
+
+    func showNotice(_ text: String = ExternalExamController.blockedNotice, persistent: Bool = false) {
+        if persistent { persistentNotice = text }
+        bar?.setNotice(text)
+        noticeTimer?.invalidate()
+        let timer = Timer(timeInterval: 4, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.bar?.setNotice(self.persistentNotice)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        noticeTimer = timer
+    }
+
+    func canvasCommitted(_ url: URL?) {
+        guard let session, session.canvas else { return }
+        if browser?.committed(url) == true {
+            CanvasQuizMarker.set(session.attemptId, in: defaults)
+            EventLog.shared.record("canvas_quiz_started")
+            DebugLog.log("external", "canvas phase: quiz")
+        }
+        persistArmed()
+        updateBar()
+    }
+
+    func doneLoaded(_ url: URL?) {
+        guard let aid = doneAttempt, session == nil, let url,
+              url.path.lowercased().hasSuffix("/student/external-done/" + aid.lowercased()) else { return }
+        doneAttempt = nil
+        CanvasQuizMarker.clear(aid, in: defaults)
+    }
+
+    func canvasPageLoaded() {
+        guard let session, session.canvas, !finishing else { return }
+        updateBar()
+        if let target = browser?.autoOpenTarget(webView?.url) {
+            DebugLog.log("external", "canvas exam link opened after sign-in")
+            perform(.load(target))
+        }
+    }
+
+    private func recoverIfBlocked(_ url: URL?) {
+        guard isCanvas, !finishing else { return }
+        guard let step = browser?.recover(url: url, now: Date(), previous: webView?.backForwardList.backItem?.url) else {
+            return
+        }
+        if let report = step.report { EventLog.shared.record("blocked_navigation", report) }
+        if step.notice { showNotice() }
+        if let action = step.action { perform(action) }
+        if step.recheck { scheduleRecheck() }
+    }
+
+    private func scheduleRecheck() {
+        guard !recoveryPending else { return }
+        recoveryPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + CanvasRecoveryGate.minInterval + 0.1) { [weak self] in
+            guard let self else { return }
+            self.recoveryPending = false
+            self.recoverIfBlocked(self.webView?.url)
+        }
+    }
+
+    private func perform(_ action: CanvasViewAction) {
+        switch action {
+        case .goBack:
+            webView?.goBack()
+        case .load(let url):
+            webView?.load(URLRequest(url: url))
+        }
+    }
+
+    private func quizPressed() {
+        guard isCanvas, !finishing, finishTimer == nil, let webView, !webView.isLoading,
+              let start = session?.startURL else { return }
+        if browser?.isOnItem(webView.url) == true { return }
+        browser?.disarm(keepingOn: webView.url, regex: session?.finishRegex)
+        persistArmed()
+        webView.load(URLRequest(url: start))
+    }
+
+    private func backPressed() {
+        guard isCanvas, !finishing, let webView,
+              let previous = webView.backForwardList.backItem?.url, browser?.backAllowed(previous) == true else { return }
+        webView.goBack()
+    }
+
+    private func persistArmed() {
+        guard let aid = session?.attemptId, let browser, browser.phase == .quiz else { return }
+        CanvasQuizMarker.setArmed(browser.armed, aid, in: defaults)
+    }
+
+    private func updateBar() {
+        guard isCanvas else { return }
+        bar?.setFinishAllowed(!isLockedIn)
+        if let previous = webView?.backForwardList.backItem?.url {
+            bar?.setBackEnabled(browser?.backAllowed(previous) ?? false)
+        } else {
+            bar?.setBackEnabled(false)
+        }
+    }
+
+    private func removeCanvasScript() {
+        guard canvasScriptInstalled else { return }
+        canvasScriptInstalled = false
+        resetScripts?()
+    }
+
+    private func installCanvasScript() {
+        guard !canvasScriptInstalled, let controller = webView?.configuration.userContentController else { return }
+        canvasScriptInstalled = true
+        let js = CanvasScripts.pageGuard(serverOrigin: FilePicker.origin(server))
+        controller.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+    }
+
+    private func clearCanvasData() {
+        let store = WKWebsiteDataStore.default()
+        let serverHost = (server.host ?? "").lowercased()
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        store.fetchDataRecords(ofTypes: types) { records in
+            let others = records.filter { CanvasData.shouldRemove(domain: $0.displayName, serverHost: serverHost) }
+            guard !others.isEmpty else { return }
+            store.removeData(ofTypes: types, for: others) {
+                DebugLog.log("external", "canvas web data cleared: \(others.count) site(s)")
+            }
         }
     }
 }

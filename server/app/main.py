@@ -14,7 +14,6 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from .admission import AdmissionLimit
 from .app_version import UpgradeRequired, upgrade_required_handler
-from . import canvas_mode
 from .config import Settings
 from .db import Database, set_db
 from .routes_auth import router as auth_router
@@ -106,7 +105,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         detail = [{k: e[k] for k in ("type", "loc", "msg") if k in e} for e in exc.errors()]
         return JSONResponse({"detail": detail}, status_code=422)
     app.state.settings = settings
-    canvas_mode.set_secret(settings.secret)
     app.add_exception_handler(UpgradeRequired, upgrade_required_handler)   # S2: 426
     app.add_middleware(SignPrivateUploads)     # audit L-18: expiring links to scan images
     app.add_middleware(GuardMiddleware)        # audit L-04 / S-16: size limits + headers

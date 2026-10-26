@@ -9,11 +9,18 @@ final class LockBar: UIView {
 
     var onInvigilator: (() -> Void)?
     var onFinish: (() -> Void)?
+    var onBack: (() -> Void)?
+    var onQuiz: (() -> Void)?
 
     private let badge = UILabel()
     private let titleLabel = UILabel()
     private let countdown = UILabel()
     private let finish = UIButton(type: .system)
+    private let backButton = UIButton(type: .system)
+    private let quizButton = UIButton(type: .system)
+    private let notice = UILabel()
+    private var externalOn = false
+    private var finishAllowed = true
     private let clock = UILabel()
     private var clockTimer: Timer?
 
@@ -41,12 +48,24 @@ final class LockBar: UIView {
         finish.setTitle("Finish exam", for: .normal)
         finish.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         finish.addTarget(self, action: #selector(finishTapped), for: .touchUpInside)
+        for (button, title) in [(backButton, "Back"), (quizButton, "Go to my quiz")] {
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+            button.isHidden = true
+        }
+        backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
+        quizButton.addTarget(self, action: #selector(quizTapped), for: .touchUpInside)
+        notice.font = .systemFont(ofSize: 13, weight: .medium)
+        notice.textColor = LockBar.amber
+        notice.lineBreakMode = .byTruncatingTail
+        notice.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        notice.isHidden = true
         clock.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         clock.textColor = UIColor(white: 0.4, alpha: 1)
 
         let spacer = UIView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let stack = UIStackView(arrangedSubviews: [BrandMark.view(size: 28), badge, titleLabel, spacer, countdown, finish, clock])
+        let stack = UIStackView(arrangedSubviews: [BrandMark.view(size: 28), badge, titleLabel, notice, spacer, countdown, backButton, quizButton, finish, clock])
         stack.axis = .horizontal
         stack.alignment = .center
         stack.spacing = 16
@@ -78,8 +97,32 @@ final class LockBar: UIView {
     /// Website exam: title + countdown + Finish. nil = questions exam (bar shows the lock only).
     func setExternal(title: String?) {
         titleLabel.text = title ?? "FairPlay exam"
+        externalOn = title != nil
+        finishAllowed = true
         countdown.isHidden = title == nil
         finish.isHidden = title == nil
+        if title == nil { setCanvasButtons(false) }
+        setNotice(nil)
+    }
+
+    func setFinishAllowed(_ allowed: Bool) {
+        finishAllowed = allowed
+        finish.isHidden = !(externalOn && allowed)
+    }
+
+    func setCanvasButtons(_ on: Bool) {
+        backButton.isHidden = !on
+        quizButton.isHidden = !on
+        backButton.isEnabled = false
+    }
+
+    func setBackEnabled(_ enabled: Bool) { backButton.isEnabled = enabled }
+
+    func setNotice(_ text: String?) {
+        notice.text = text
+        notice.isHidden = text == nil
+        titleLabel.isHidden = text != nil
+        clock.isHidden = text != nil
     }
 
     func setCountdown(_ text: String, warn: Bool) {
@@ -113,4 +156,8 @@ final class LockBar: UIView {
     }
 
     @objc private func finishTapped() { onFinish?() }
+
+    @objc private func backTapped() { onBack?() }
+
+    @objc private func quizTapped() { onQuiz?() }
 }

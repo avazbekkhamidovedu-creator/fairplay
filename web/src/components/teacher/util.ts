@@ -4,8 +4,6 @@ import type { Exam } from "../../api/types";
 /** Human message for any thrown error (ApiError detail, else a connection message). */
 export function errorText(e: unknown, fallback = "Cannot reach the server. Check your connection and try again."): string {
   if (e instanceof ApiError) {
-    if (e.code === "canvas_code_failed")
-      return e.detail || "FairPlay could not set the Canvas access code. Link your Canvas account, or choose to type the code yourself.";
     return e.detail || fallback;
   }
   return fallback;
@@ -111,9 +109,8 @@ export function eventLabel(type: string): string {
     swap_requested: "Asked to continue on another computer",
     swap_approved: "You moved the exam to another computer",
     weak_lock: "Not using the strongest lock",
-    canvas_code_issued: "Canvas access code typed by the app",
-    canvas_code_refused: "Canvas access code refused (not given to this computer)",
-    canvas_code_failed: "Canvas access code did not work",
+    canvas_quiz_started: "Started the Canvas quiz",
+    client_canvas_quiz_started: "Started the Canvas quiz",
     canvas_upload_unsupported: "Canvas file upload not supported on this computer",
     canvas_sso_popup: "Canvas sign-in window opened",
     blocked_navigation: "Tried to open a blocked website",

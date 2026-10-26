@@ -5,8 +5,6 @@ Each function checks the exam's state, commits, and drops the caches it changed;
 permission checks stay with the caller."""
 from __future__ import annotations
 
-import asyncio
-
 from datetime import timedelta
 
 from fastapi import HTTPException
@@ -14,7 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import app_client as ac
-from . import canvas_mode
+from .canvas_mode import scope_of
 from .access import eligible_students
 from .closing import close_exam_now, max_extra
 from .integrations.registry import integration_for
@@ -41,8 +39,7 @@ async def checked_open_to(session: AsyncSession, e: Exam, value) -> list[int] | 
     return wanted
 
 
-async def open_exam(session: AsyncSession, e: Exam, open_to="all",
-                    canvas_access_code: str | None = None) -> None:
+async def open_exam(session: AsyncSession, e: Exam, open_to="all") -> None:
     """Make the exam live with a new start code and invigilator code (409 when it can't)."""
     if e.status == "live":
         raise HTTPException(409, "Exam is already live")
@@ -65,15 +62,10 @@ async def open_exam(session: AsyncSession, e: Exam, open_to="all",
             raise HTTPException(409, "The automatic close time has passed. Change or clear "
                                      "\"Close automatically at\" in the exam settings.")
         clear_closes = True          # re-opened after its close time: the teacher closes it
+    if e.external_kind == "canvas" and scope_of(e.external_url) is None:
+        raise HTTPException(409, "The Canvas link does not open one quiz or assignment. Fix the link "
+                                 "in the exam settings before opening the exam.")
     open_to_value = await checked_open_to(session, e, open_to)
-    canvas = e.external_kind == "canvas"
-    if canvas:
-        if not await canvas_mode.claim_open(session, e):
-            if e.status == "live":
-                raise HTTPException(409, "Exam is already live")
-            raise HTTPException(409, "This exam is already being opened. Try again in a moment.")
-        await canvas_mode.prepare_open(session, e, canvas_access_code)
-        e.canvas_open_claim = None
     if clear_closes:
         e.closes_at = None
     e.open_to = open_to_value
@@ -83,12 +75,7 @@ async def open_exam(session: AsyncSession, e: Exam, open_to="all",
     e.closed_at = None
     e.auto_closed = False
     e.updated_at = now
-    try:
-        await session.commit()
-    except BaseException:
-        if canvas:
-            await asyncio.shield(canvas_mode.undo_open(session, e))
-        raise
+    await session.commit()
     await invalidate_exam(get_store(), e.id)
 
 

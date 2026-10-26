@@ -9,29 +9,6 @@ enum CanvasPolicy {
         return rules.contains { $0.matches(host: host, path: url.path) }
     }
 
-    /// The origin the access code may be typed into: https, no credentials, port 443 or none, and
-    /// the host exactly the exam's start host (never an SSO or wildcard host).
-    static func fillOrigin(page: URL, start: URL, scope: CanvasScope? = nil) -> String? {
-        func host(_ u: URL) -> String? {
-            guard u.scheme?.lowercased() == "https", u.user == nil, u.password == nil,
-                  let h = u.host?.lowercased(), !h.isEmpty else { return nil }
-            if let port = u.port, port != 443 { return nil }
-            return h
-        }
-        guard let pageHost = host(page), let startHost = host(start), pageHost == startHost else { return nil }
-        if let scope {
-            guard CanvasNavigation.isUnderItem(page, scope: scope) else { return nil }
-        } else {
-            guard isQuizPath(page.path) else { return nil }
-        }
-        return "https://" + pageHost
-    }
-
-    /// The quiz or assignment pages of the exam's Canvas host: the only pages that get the code.
-    static func isQuizPath(_ path: String) -> Bool {
-        path.range(of: #"^/courses/\d+/(quizzes|assignments)/\d+"#, options: .regularExpression) != nil
-    }
-
     static func isBlank(_ url: URL?) -> Bool {
         guard let url else { return true }
         return url.absoluteString.lowercased() == "about:blank"
@@ -44,17 +21,52 @@ struct CanvasScope: Equatable {
     let itemKind: String
     let itemId: String
     let openBook: Bool
+    var signInHosts: [String] = []
+    var quizLtiHosts: [String] = []
 }
 
 extension CanvasScope {
 
     static let maxIdLength = 20
 
-    var itemPath: String { "/courses/\(courseId)/\(itemKind)/\(itemId)" }
-
     static func isId(_ text: String) -> Bool {
         !text.isEmpty && text.count <= maxIdLength
             && text.unicodeScalars.allSatisfy { $0.value >= 0x30 && $0.value <= 0x39 }
+    }
+
+    static let maxHostPatterns = 50
+
+    /// `host` or `*.suffix`: lower-case letters, digits, dot, dash and underscore only.
+    static func isHostPattern(_ text: String) -> Bool {
+        let body = text.hasPrefix("*.") ? String(text.dropFirst(2)) : text
+        guard !body.isEmpty, body.count <= 253, !body.hasPrefix("."), !body.hasSuffix("."), !body.contains("..")
+        else { return false }
+        return body.unicodeScalars.allSatisfy {
+            ($0.value >= 0x61 && $0.value <= 0x7A) || ($0.value >= 0x30 && $0.value <= 0x39)
+                || $0 == "." || $0 == "-" || $0 == "_"
+        }
+    }
+
+    /// Nil when the value is present but not a list of valid host patterns. Absent or null is empty.
+    static func hostList(_ value: Any?) -> [String]? {
+        guard let value, !(value is NSNull) else { return [] }
+        guard let list = value as? [Any], list.count <= maxHostPatterns else { return nil }
+        var result: [String] = []
+        for item in list {
+            guard let text = item as? String else { return nil }
+            let lower = text.lowercased()
+            guard isHostPattern(lower) else { return nil }
+            result.append(lower)
+        }
+        return result
+    }
+
+    static func hostMatches(_ host: String, patterns: [String]) -> Bool {
+        let h = host.lowercased()
+        return patterns.contains { pattern in
+            if pattern.hasPrefix("*.") { return h.hasSuffix("." + String(pattern.dropFirst(2))) }
+            return h == pattern
+        }
     }
 
     /// The `canvas_scope` object of the openExternal message. Nil when it is absent or malformed.
@@ -68,13 +80,46 @@ extension CanvasScope {
         guard let course = text("course_id"), CanvasScope.isId(course),
               let item = text("item_id"), CanvasScope.isId(item),
               let kind = dict["item_kind"] as? String, kind == "quizzes" || kind == "assignments" else { return nil }
-        self.init(courseId: course, itemKind: kind, itemId: item, openBook: (dict["open_book"] as? Bool) == true)
+        guard let signIn = CanvasScope.hostList(dict["sign_in_hosts"]),
+              let lti = CanvasScope.hostList(dict["quiz_lti_hosts"]) else { return nil }
+        self.init(courseId: course, itemKind: kind, itemId: item, openBook: (dict["open_book"] as? Bool) == true,
+                  signInHosts: signIn, quizLtiHosts: lti)
     }
 }
 
 enum CanvasViewAction: Equatable {
     case goBack
     case load(URL)
+}
+
+/// Remembers on this Mac that the quiz of an attempt has started, so a relaunch or a reload
+/// cannot fall back to the looser lobby rules.
+enum CanvasQuizMarker {
+
+    static func key(_ attemptId: String) -> String { "fairplay.canvasQuizStarted." + attemptId }
+
+    static func isSet(_ attemptId: String, in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: key(attemptId))
+    }
+
+    static func set(_ attemptId: String, in defaults: UserDefaults) {
+        defaults.set(true, forKey: key(attemptId))
+    }
+
+    static func armedKey(_ attemptId: String) -> String { "fairplay.canvasFinishArmed." + attemptId }
+
+    static func isArmed(_ attemptId: String, in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: armedKey(attemptId))
+    }
+
+    static func setArmed(_ attemptId: String, _ armed: Bool, in defaults: UserDefaults) {
+        defaults.set(armed, forKey: armedKey(attemptId))
+    }
+
+    static func clear(_ attemptId: String, in defaults: UserDefaults) {
+        defaults.removeObject(forKey: key(attemptId))
+        defaults.removeObject(forKey: armedKey(attemptId))
+    }
 }
 
 enum CanvasPhase: Equatable {
@@ -133,8 +178,16 @@ enum CanvasNavigation {
         return isUnderItem(segs, scope: scope)
     }
 
+    /// Other hosts follow the site rules in the lobby. In the quiz phase a main-frame page on another
+    /// host opens only over https for the sign-in and quiz-lti hosts the server listed.
     static func decide(url: URL, examHost: String, scope: CanvasScope, phase: CanvasPhase) -> Decision {
-        guard onHost(url, examHost: examHost) else { return .allow }
+        guard onHost(url, examHost: examHost) else {
+            guard phase == .quiz else { return .allow }
+            guard url.scheme?.lowercased() == "https", let host = url.host, !host.isEmpty else { return .block }
+            let listed = CanvasScope.hostMatches(host, patterns: scope.signInHosts)
+                || CanvasScope.hostMatches(host, patterns: scope.quizLtiHosts)
+            return listed ? .allow : .block
+        }
         guard let segs = segments(url) else { return .block }
         if hasDownloadQuery(url) { return .block }
         return decide(segments: segs, scope: scope, phase: phase)
@@ -183,6 +236,12 @@ enum CanvasNavigation {
         }
         if scope.itemKind == "assignments" { return true }
         return segs.count >= 5 && segs[4] == "take"
+    }
+
+    /// The exact item page `/courses/C/K/I` (a trailing slash is fine).
+    static func isItemLanding(url: URL, examHost: String, scope: CanvasScope) -> Bool {
+        guard onHost(url, examHost: examHost), let segs = segments(url) else { return false }
+        return segs.count == 4 && isUnderItem(segs, scope: scope)
     }
 
     /// The dashboard or the exam's course page: where a sign-in lands.
@@ -446,21 +505,10 @@ enum CanvasFinish {
 
     static func matches(_ url: URL, regex: NSRegularExpression?) -> Bool {
         guard let regex else { return false }
-        let text = url.path + (url.query.map { "?" + $0 } ?? "")
+        let text = url.path
         let limited = String(text.prefix(maxInput))
         let range = NSRange(limited.startIndex..., in: limited)
         return regex.firstMatch(in: limited, options: [], range: range) != nil
-    }
-}
-
-enum CanvasRetry {
-
-    static let maxRetries = 3
-
-    /// Seconds to wait after a 429: the Retry-After value (whole seconds) clamped to 1...20, 4 when absent.
-    static func delay(retryAfter: String?) -> TimeInterval {
-        guard let text = retryAfter?.trimmingCharacters(in: .whitespaces), let n = Int(text) else { return 4 }
-        return TimeInterval(min(20, max(1, n)))
     }
 }
 
@@ -502,95 +550,13 @@ enum CanvasPopup {
     }
 }
 
-struct CanvasFillBudget {
-
-    static let maxFills = 3
-
-    private(set) var used = 0
-
-    var exhausted: Bool { used >= CanvasFillBudget.maxFills }
-
-    mutating func take() -> Bool {
-        guard !exhausted else { return false }
-        used += 1
-        return true
-    }
-}
-
-enum CanvasProof {
-
-    static func message(attemptId: String, session: String, deviceId: String, ts: Int64) -> String {
-        "canvascode|\(attemptId)|\(session)|\(deviceId)|\(ts)"
-    }
-
-    static func body(attemptId: String, session: String, deviceId: String, ts: Int64,
-                     sign: (String) -> String) -> [String: Any] {
-        let proof = sign(message(attemptId: attemptId, session: session, deviceId: deviceId, ts: ts))
-        return ["proof": proof, "ts": NSNumber(value: ts)]
-    }
-
-    static func parseCode(status: Int?, json: [String: Any]?) -> String? {
-        guard status == 200, let code = json?["code"] as? String,
-              code.count >= 4, code.count <= 64,
-              code.unicodeScalars.allSatisfy({ $0.value >= 32 && $0.value != 127 }) else { return nil }
-        return code
-    }
-}
-
 enum CanvasScripts {
-
-    static let field = "input#quiz_access_code, input[name=access_code]"
-
-    static let probe = "(function () { try { return !!document.querySelector('\(field)'); } catch (e) { return false; } })();"
 
     static let popupGuard = """
     (function () {
       document.addEventListener('contextmenu', function (e) { e.preventDefault(); }, true);
       document.addEventListener('dragstart', function (e) { e.preventDefault(); }, true);
+      try { Object.defineProperty(window, 'print', { value: function () {}, writable: false, configurable: false }); } catch (e) {}
     })();
     """
-
-    static func jsString(_ s: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [s]),
-              var text = String(data: data, encoding: .utf8), text.count >= 2 else { return "\"\"" }
-        text.removeFirst()
-        text.removeLast()
-        return text
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-    }
-
-    static func fill(code: String, origin: String, pathPrefix: String? = nil) -> String {
-        var pathCheck = ""
-        if let pathPrefix {
-            pathCheck = """
-              var pre = \(jsString(pathPrefix));
-              var here = location.pathname;
-              if (!(here === pre || here.indexOf(pre + '/') === 0)) { return 'wrongpath'; }
-
-            """
-        }
-        return """
-        (function () {
-          if (location.origin !== \(jsString(origin))) { return 'wrongorigin'; }
-        \(pathCheck)
-          try {
-            var el = document.querySelector('\(field)');
-            if (!el) { return 'nofield'; }
-            var v = \(jsString(code));
-            var d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-            if (d && d.set) { d.set.call(el, v); } else { el.value = v; }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            var form = el.form || el.closest('form');
-            var btn = form ? (form.querySelector('button[type=submit], input[type=submit]') || form.querySelector('button:not([type])')) : null;
-            if (!btn) { return 'nobutton'; }
-            btn.removeAttribute('disabled');
-            btn.disabled = false;
-            btn.click();
-            return 'clicked';
-          } catch (e) { return 'error'; }
-        })();
-        """
-    }
 }

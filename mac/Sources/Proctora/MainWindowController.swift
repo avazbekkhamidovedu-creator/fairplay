@@ -108,6 +108,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         (function () {
           document.addEventListener('contextmenu', function (e) { e.preventDefault(); }, true);
           document.addEventListener('dragstart', function (e) { e.preventDefault(); }, true);
+          try { Object.defineProperty(window, 'print', { value: function () {}, writable: false, configurable: false }); } catch (e) {}
         })();
         """
         ucc.addUserScript(WKUserScript(source: guardJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
@@ -313,7 +314,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     func reload() {
         guard Config.serverIsAcceptable else { return }
         if webView.url == nil || webView.url?.scheme == "about" {
-            webView.load(URLRequest(url: Config.startURL))
+            webView.load(URLRequest(url: external.canvasStartURL ?? Config.startURL))
         } else {
             webView.reload()
         }
@@ -688,6 +689,12 @@ final class MainWindowController: NSWindowController, LockSurface,
             }
             return
         }
+        if external.blocksExamServer(url) {
+            DebugLog.log("web", "navigation BLOCKED (exam server page during a Canvas exam): \(url.path)")
+            external.reportBlocked(url)
+            decisionHandler(.cancel)
+            return
+        }
         // Audit M-15: the student app never opens teacher pages or the API docs on the
         // exam server (a teacher login there shows start codes, exit codes, answer keys).
         if isServerURL(url) && MainWindowController.isTeacherPath(url.path) {
@@ -751,6 +758,9 @@ final class MainWindowController: NSWindowController, LockSurface,
             return
         }
         if ownLocalPage || isServerURL(url) || external.allows(url) {
+            if external.isCanvas, !(navigationAction.targetFrame?.isMainFrame ?? true) {
+                external.checkFrameFinish(url)
+            }
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 // Canvas exams finish from the committed URL (observeURL), not from an action
                 // the response check can still cancel.
@@ -772,6 +782,12 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// else as WebKit's own default (show what it can show, cancel the rest).
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url,
+           external.blocksExamServer(u) {
+            external.reportBlocked(u)
+            decisionHandler(.cancel)
+            return
+        }
         if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url,
            !isServerURL(u), !external.childAllows(u) {
             if external.allows(u) {
@@ -803,6 +819,10 @@ final class MainWindowController: NSWindowController, LockSurface,
                 decisionHandler(.cancel)
                 return
             }
+        }
+        if navigationResponse.canShowMIMEType, external.isCanvas, !navigationResponse.isForMainFrame,
+           webView === self.webView, let u = navigationResponse.response.url {
+            external.checkFrameFinish(u)
         }
         decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
     }
@@ -927,6 +947,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         pushBattery()
         applyFileAccess()
         external.canvasPageLoaded(webView)
+        external.externalDonePageLoaded(webView.url)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -941,7 +962,11 @@ final class MainWindowController: NSWindowController, LockSurface,
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
         if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }   // interrupted by policy
         var retry = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Config.startURL
-        if !isServerURL(retry) && !external.allows(retry) { retry = Config.startURL }
+        if let canvasStart = external.canvasStartURL {
+            if !external.allows(retry) { retry = canvasStart }
+        } else if !isServerURL(retry) && !external.allows(retry) {
+            retry = Config.startURL
+        }
         let target = retry.absoluteString
             .replacingOccurrences(of: "\\", with: "")
             .replacingOccurrences(of: "'", with: "")

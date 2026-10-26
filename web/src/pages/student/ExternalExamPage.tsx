@@ -207,10 +207,8 @@ export default function ExternalExamPage() {
           )}
           {phase === "opening" && attempt?.external_kind === "canvas" && (
             <p className="ext-small" data-testid="canvas-note">
-              Your Canvas quiz opens inside FairPlay. You may need to sign in to Canvas.
-              {attempt.canvas?.quiz_type === "classic"
-                ? " FairPlay enters the quiz access code for you, so you do not need one."
-                : " If the quiz asks for an access code, ask your teacher."}
+              Your Canvas quiz opens inside FairPlay. Sign in to Canvas, then open your quiz. You can only open this
+              course and this quiz, and you cannot leave until you submit.
             </p>
           )}
         </main>

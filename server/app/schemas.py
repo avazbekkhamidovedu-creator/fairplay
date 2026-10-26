@@ -502,8 +502,6 @@ class QuestionIn(BaseModel):
 class CanvasIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
     quiz_type: Literal["classic", "new", "assignment"] | None = None
-    access_code_source: Literal["managed", "manual"] = "managed"
-    access_code: str | None = Field(default=None, max_length=64)
     removed_hosts: list[str] = Field(default_factory=list, max_length=MAX_ALLOWED_DOMAINS)
     open_book: bool = False
 
@@ -512,14 +510,6 @@ class CanvasIn(BaseModel):
     def _removed(cls, v: list[str]) -> list[str]:
         return list(dict.fromkeys(x.strip().lower() for x in v if x and x.strip()))
 
-    @field_validator("access_code")
-    @classmethod
-    def _code(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if len(v) < 4 or not v.isprintable():
-            raise ValueError("access_code must be 4 to 64 printable characters")
-        return v
 
 
 class ExamIn(BaseModel):
@@ -814,12 +804,6 @@ class AppBeatIn(BaseModel):
     signature: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]+$")
 
 
-class CanvasCodeIn(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    proof: str = Field(default="", pattern=r"^[0-9a-f]{64}$")
-    ts: int = Field(default=0, ge=0, le=2 ** 62)
-
-
 class ExitCodeIn(BaseModel):
     code: str = Field(min_length=1, max_length=16)
     # Audit 2026-10-13: the app's nonce; the reply then carries proofs over
@@ -862,17 +846,6 @@ class OpenIn(BaseModel):
     start; everyone else sees the exam as not open for them yet."""
     model_config = ConfigDict(extra="ignore")
     open_to: Literal["all"] | list[int] = Field(default="all")
-    canvas_access_code: str | None = Field(default=None, max_length=64)
-
-    @field_validator("canvas_access_code")
-    @classmethod
-    def _canvas_code(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if len(v) < 4 or not v.isprintable():
-            raise ValueError("canvas_access_code must be 4 to 64 printable characters")
-        return v
-
     @field_validator("open_to")
     @classmethod
     def _limit(cls, v):
