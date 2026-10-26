@@ -10,7 +10,7 @@ from __future__ import annotations
 import itertools
 import os
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import canvas_nav as N
 import config as C
@@ -78,8 +78,12 @@ def array_after(body: str, header: str) -> list[list[str]]:
 HOST = "canvas.dku.edu"
 
 
+SIGN_IN = ("login.microsoftonline.com", "*.duosecurity.com", "sso.dku.edu", "weird-idp.example.edu")
+QUIZ_LTI = ("*.quiz-lti-iad-prod.instructure.com",)
+
+
 def sc(kind="quizzes", open_book=False) -> N.Scope:
-    return N.Scope("123", kind, "456", open_book)
+    return N.Scope("123", kind, "456", open_book, SIGN_IN, QUIZ_LTI)
 
 
 def d(path, phase, kind="quizzes", open_book=False, host=None):
@@ -167,6 +171,8 @@ def swift_tables() -> None:
             pass
         for m in pat.finditer(body):
             path, ph, opts, want = swift_unescape(m[1]), m[2], m[3], m[4]
+            if "host: h" in opts:
+                continue
             kind, ob, host = "quizzes", False, None
             for o in re.finditer(r", (kind|openBook|host): ([^,)]+)", opts):
                 k, v = o[1], o[2].strip()
@@ -178,6 +184,53 @@ def swift_tables() -> None:
                     host = v.strip('"')
             t.eq(d(path, ph, kind, ob, host), A if want == "allow" else B, f"{name}: {path} {ph} {opts}")
             single += 1
+
+    # otherHostsInTheQuizPhase (the loop variable h is the host)
+    body = bodies["otherHostsInTheQuizPhase"]
+    allow_hosts, block_hosts = array_after(body, "for h in")
+    for h in allow_hosts:
+        t.eq(d("/anything", "quiz", host=h), A, f"quiz phase other host allowed {h}")
+        t.eq(N.decide("https://" + h + "/anything", HOST, sc("assignments", True), "quiz"), A, f"quiz phase other host allowed {h} (assignment, open book)")
+        single += 2
+    for h in block_hosts:
+        t.eq(d("/anything", "quiz", host=h), B, f"quiz phase other host blocked {h}")
+        t.eq(N.decide("https://" + h + "/anything", HOST, sc("assignments", True), "quiz"), B, f"quiz phase other host blocked {h} (assignment, open book)")
+        t.eq(N.decide("https://" + h + "/anything", HOST, sc(), "lobby"), A, f"lobby leaves {h} to the site rules")
+        single += 3
+    t.eq(N.decide("http://sso.dku.edu/x", HOST, sc(), "quiz"), B, "plain http sign-in host in the quiz phase")
+    t.eq(N.decide("about:blank", HOST, sc(), "quiz"), B, "about:blank in the quiz phase (main frame, scope rule)")
+    bare = N.Scope("123", "quizzes", "456", False)
+    t.eq(N.decide("https://sso.dku.edu/x", HOST, bare, "quiz"), B, "no host lists: sign-in host blocked in the quiz phase")
+    t.eq(N.decide("https://sso.dku.edu/x", HOST, bare, "lobby"), A, "no host lists: lobby leaves it to the site rules")
+    single += 4
+
+    # hostListParsing / hostPatternMatching
+    body = bodies["hostListParsing"]
+    hp = 0
+
+    def parse(extra):
+        d_ = {"course_id": "1", "item_kind": "quizzes", "item_id": "2", **extra}
+        return N.scope_from_json(d_)
+    ok = parse({"sign_in_hosts": ["Login.Microsoftonline.com", "*.duosecurity.com"], "quiz_lti_hosts": ["*.quiz-lti-iad-prod.instructure.com"]})
+    t.eq(ok is not None and ok.sign_in_hosts == ("login.microsoftonline.com", "*.duosecurity.com")
+         and ok.quiz_lti_hosts == ("*.quiz-lti-iad-prod.instructure.com",), True, "host lists parsed and lower-cased")
+    t.eq((parse({}).sign_in_hosts, parse({"sign_in_hosts": None}).sign_in_hosts, parse({"sign_in_hosts": []}).sign_in_hosts), ((), (), ()),
+         "absent, null and empty host lists are empty")
+    bad_lists = [x for x in array_after(body, "let bad: [Any] =")] or []
+    literal = ["x.com", 5, [1], ["a b.com"], ["https://x.com"], ["*"], ["x.com/path"], ["x.com:443"], ["*."], [""], ["a..com"],
+               [".x.com"], ["x.com."], ["*.*.x.com"], ["\u00e9.com"], [["x"]], ["x.com"] * 51]
+    for v in literal:
+        t.eq(parse({"sign_in_hosts": v}), None, f"bad host list {str(v)[:30]}")
+        t.eq(parse({"quiz_lti_hosts": v}), None, f"bad quiz-lti list {str(v)[:30]}")
+        hp += 2
+    pats = ["login.example.com", "*.duosecurity.com"]
+    for h, want in (("login.example.com", True), ("LOGIN.example.com", True), ("api-1.duosecurity.com", True),
+                    ("a.b.duosecurity.com", True), ("duosecurity.com", False), ("evilduosecurity.com", False),
+                    ("x.login.example.com", False), ("login.example.com.evil.com", False)):
+        t.eq(N.host_matches(h, pats), want, f"hostMatches {h}")
+        hp += 1
+    t.eq(N.host_matches("login.example.com", []), False, "hostMatches empty")
+    single += hp + 1
 
     # segments(encodedPath:)
     seg_n = 0
@@ -241,33 +294,25 @@ def swift_tables() -> None:
         g.first_time(f"p{i}")
     t.eq(g.first_time("a"), True, "recovery gate forgets after 200")
 
-    # fillGateWithScope
-    start = "https://canvas.dku.edu/courses/123/quizzes/456"
-    body = bodies["fillGateWithScope"]
-    fn = 0
-    for m in re.finditer(r'origin\(' + STR + r', (sc|nil)\) (== "https://canvas.dku.edu"|== nil|!= nil)', body):
-        scope = None if m[2] == "nil" else sc()
-        got = N.fill_origin(swift_unescape(m[1]), start, scope)
-        want = "https://canvas.dku.edu" if "https" in m[3] else (None if m[3] == "== nil" else got)
-        if m[3] == "!= nil":
-            t.eq(got is not None, True, f"fill {m[1]}")
-        else:
-            t.eq(got, want, f"fill {m[1]}")
-        fn += 1
-    # legacy fillOrigin tables (no scope)
+    # examServerPagesAreBlockedDuringACanvasExam: every exam-server URL it lists is "the server"
+    server = "https://exam.example.com"
+    body = bodies["examServerPagesAreBlockedDuringACanvasExam"]
+    srv = re.findall(r'URL\(string: ' + STR + r'\)!', body) + [x for arr in array_after(body, "let others =") for x in arr]
+    srv = [swift_unescape(x) for x in srv if x.startswith("https://exam.example.com") or x.startswith("https://EXAM")]
+    for u in srv:
+        t.eq(N.is_server_url(u, server), True, f"server url {u}")
+    for u in ("https://canvas.dku.edu/courses/123/quizzes/456", "https://login.microsoftonline.com/x",
+              "http://exam.example.com/student", "https://exam.example.com:8443/student",
+              "https://exam.example.com.evil.test/student", "https://sub.exam.example.com/"):
+        t.eq(N.is_server_url(u, server), False, f"not the server {u}")
+    t.eq(N.is_server_url("http://127.0.0.1:8765/student", "http://127.0.0.1:8765"), True, "plain http server")
+    t.eq(N.is_server_url("http://127.0.0.1/student", "http://127.0.0.1:80"), True, "default port filled in")
+    fn = len(srv)
+    t.eq(fn >= 5, True, "exam-server URLs parsed from the Swift test")
+    mk = N.QuizMarker({})
+    t.eq([mk.is_set("a"), (mk.set("a"), mk.is_set("a"))[1], mk.is_set("b"), (mk.clear("a"), mk.is_set("a"))[1]],
+         [False, True, False, False], "marker helpers")
     leg = 0
-    for fname, st in (("fillHostIsTheStartHostOnly", "https://Canvas.DKU.edu/courses/1/quizzes/2"),
-                      ("fillOnlyOnQuizPages", "https://canvas.dku.edu/courses/1/quizzes/2")):
-        for m in re.finditer(r'#expect\(origin\(' + STR + r'\) (== "https://canvas.dku.edu"|== nil|!= nil)\)', bodies[fname]):
-            got = N.fill_origin(swift_unescape(m[1]), st)
-            if m[2] == "!= nil":
-                t.eq(got is not None, True, f"{fname} {m[1]}")
-            else:
-                t.eq(got, "https://canvas.dku.edu" if "https" in m[2] else None, f"{fname} {m[1]}")
-            leg += 1
-    t.eq(fn >= 12, True, "fillGateWithScope rows parsed")
-    t.eq(N.fill_origin("https://canvas.dku.edu/courses/1/quizzes/2", "http://canvas.dku.edu/courses/1/quizzes/2"), None,
-         "fill: http start host")
 
     # hostPolicyIsHttpsAndExact
     rules = [S.SiteRule(x) for x in ("canvas.dku.edu", "*.instructure.com", "login.microsoftonline.com")]
@@ -286,7 +331,7 @@ def swift_tables() -> None:
     n_total = t.n
     check(f"Swift tables: {n_total} expectations parsed from CanvasModeTests.swift all agree with the port "
           f"({n_lobby_allowed} lobby-allowed paths, {single} single-line decide() cases, {seg_n} segment cases, "
-          f"{ent} phase-entry, {land} landing/sign-in, {fn + leg} fill-gate, {pol} host/popup)",
+          f"{ent} phase-entry, {land} landing/sign-in, {fn + leg} exam-server, {pol} host/popup)",
           not t.bad and n_total > 400, "; ".join(t.bad[:6]) + f" ({len(t.bad)} bad, {n_total} total)")
 
 
@@ -523,6 +568,26 @@ def lookalikes(exam_host="canvas.dku.edu") -> None:
             hbad.append(f"{url}: got {got} want {want}")
     check(f"{len(host_cases)} look-alike hosts, schemes, ports and userinfo through site rules + scope rule",
           not hbad, "; ".join(hbad[:8]))
+
+    # the quiz phase on other hosts: only the scope's listed sign-in and quiz-lti hosts stay open
+    lists = N.Scope("123", "quizzes", "456", False,
+                    ("*.duosecurity.com", "login.microsoftonline.com", "go.canvas.duke.edu", "shib.oit.duke.edu", "saml.fake.test"),
+                    ("*.quiz-lti-iad-prod.instructure.com",))
+    qcases = [("https://login.microsoftonline.com/x", "allow"), ("https://saml.fake.test/idp/sso", "allow"),
+              ("https://go.canvas.duke.edu/x", "allow"), ("https://shib.oit.duke.edu/idp", "allow"),
+              ("https://api-1a2b3c.duosecurity.com/frame", "allow"), ("https://x.quiz-lti-iad-prod.instructure.com/a", "allow"),
+              ("https://duosecurity.com/", "block"), ("https://x.duosecurity.com.evil.com/", "block"),
+              ("https://quiz-lti-iad-prod.instructure.com/a", "block"), ("https://go.fake.test/sso/start", "block"),
+              ("https://docs.google.com/document/d/1", "block"), ("https://files.example.com/a.pdf", "block"),
+              ("http://login.microsoftonline.com/x", "block"), ("https://login.microsoftonline.com:8443/x", "allow"),
+              ("about:blank", "block"), (f"https://{exam_host}/courses/123/quizzes/456/take", "allow"), (f"https://{exam_host}/", "block")]
+    qbad = []
+    for url, want in qcases:
+        got = "block" if N.decide(url, exam_host, lists, N.QUIZ) == N.BLOCK else "allow"
+        if got != want:
+            qbad.append(f"{url}: got {got} want {want}")
+    check(f"{len(qcases)} hosts in the quiz phase: only the scope's listed sign-in and quiz-lti hosts open (https only)",
+          not qbad, "; ".join(qbad[:6]))
 
     # popups obey the same rules (ExternalExamController.popupPlan)
     def popup(url):

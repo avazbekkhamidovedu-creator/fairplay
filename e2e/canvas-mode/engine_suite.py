@@ -1,4 +1,4 @@
-"""The browser part of Canvas mode, run in one engine: probe, fill, submit, decoys, wrong code, finish, popups."""
+"""The browser part of Canvas mode run in one engine: quiz page, submit, finish by the server's regex, popups."""
 import json
 import re
 import time
@@ -7,33 +7,13 @@ from urllib.parse import urlsplit
 import config as C
 import standin as S
 from browsers import settle, wait_new_document
-from lib import check, fake, fake_state, note
+from lib import check, fake_state, note
 
 REGEX_POS = ["/courses/1/quizzes/1/submissions/5", "/courses/1/quizzes/1/history?version=1",
-             "/courses/1/quizzes/1/submissions/5?x=1"]
+             "/courses/1/quizzes/1/submissions/5?x=1", "/courses/1/quizzes/1/%73ubmissions/5"]
 REGEX_NEG = ["/courses/1/quizzes/1", "/courses/1/quizzes/1/take", "/courses/1/quizzes/1/submissions",
-             "/courses/1/pages/decoy"]
-
-
-def drive(stand, page, first_click=None, max_rounds=8):
-    """Everything the app does after a main-frame load, repeated until nothing more happens."""
-    if first_click:
-        page.set_mark()
-        page.click(first_click)
-        wait_new_document(page)
-    outcomes = []
-    for _ in range(max_rounds):
-        settle(page)
-        out = stand.on_loaded(page)
-        outcomes.append(out)
-        if out != "clicked":
-            break
-        # the fill clicked the form's button: wait for the resulting navigation
-        try:
-            wait_new_document(page, timeout=2.0)
-        except TimeoutError:
-            pass
-    return outcomes
+             "/courses/1/pages/decoy", "/courses/1/quizzes/1/take?next=/quizzes/1/submissions/5",
+             "/courses/1/quizzes/1/take#/quizzes/1/history"]
 
 
 def regex_checks(eng, page, regex):
@@ -52,66 +32,19 @@ def regex_checks(eng, page, regex):
 
 def run(eng_name, engine, open_msg, label=None, done_cb=None):
     eng = eng_name
-    rules = None
     stand = S.NativeStandIn(open_msg)
     rules = stand.rules
     page = engine.new_page()
 
-    # ------------------------------------------------------------ gates: decoy and sign-in pages
-    base_issue = stand.issue_calls
-    for name, url in [("decoy page on the Canvas host", f"{C.CANVAS}/courses/1/pages/decoy"),
-                      ("sign-in host page", f"https://{C.SSO_HOST}/login"),
-                      ("host that is not allowed", f"https://{C.OTHER_HOST}/blocked")]:
-        page.goto(url)
-        settle(page)
-        out = stand.on_loaded(page)
-        check(f"[{eng}] {name}: no fetch, no fill (stand-in says {out})",
-              out == "gate" and page.value_of("#quiz_access_code") in ("", None))
-    check(f"[{eng}] no canvas-code request was sent for those pages", stand.issue_calls == base_issue)
-    # defence in depth: the fill script itself refuses another origin
-    page.goto(f"https://{C.SSO_HOST}/login")
-    settle(page)
-    r = page.eval(S.SCRIPTS.fill("DUMMY-NOT-A-CODE", C.CANVAS))
-    check(f"[{eng}] fill script run on the wrong origin returns wrongorigin and types nothing",
-          r == "wrongorigin" and page.value_of("#quiz_access_code") == "", str(r))
-    check(f"[{eng}] fake Canvas saw no decoy form post", fake_state()["typed_on_decoy"] == 0)
-
-    # ------------------------------------------------------------ wrong code: help after 3 fills
-    real = fake_state()["code"]
-    fake("POST", "/code", {"code": "NotTheRealCode999"})
-    fake("POST", "/forget-sessions")
-    engine.fresh_context()
-    page.close() if False else None
-    page = engine.new_page()
-    wrong0 = fake_state()["wrong"]
-    page.goto(C.QUIZ_URL + "/take")
-    outs = drive(stand, page)
-    st = fake_state()
-    check(f"[{eng}] wrong code: 3 fills, then the help state (no 4th fill)",
-          stand.budget.used == 3 and outs[-1] == "help" and st["wrong"] - wrong0 == 3,
-          f"fills={stand.budget.used} outs={outs} wrong={st['wrong'] - wrong0}")
-    check(f"[{eng}] help state recorded canvas_code_failed", "canvas_code_failed:fill limit reached" in stand.log, str(stand.log))
-    check(f"[{eng}] server issued exactly 3 codes for the 3 fills", stand.issue_calls - base_issue == 3,
-          str(stand.issue_calls - base_issue))
-    fake("POST", "/code", {"code": real})
-    fake("POST", "/forget-sessions")
-    engine.fresh_context()
-
-    # ------------------------------------------------------------ the happy path
-    stand = S.NativeStandIn(open_msg)          # the app restarted: fresh fill budget, same attempt
-    page = engine.new_page()
     page.goto(C.QUIZ_URL)
     settle(page)
-    out0 = stand.on_loaded(page)
-    check(f"[{eng}] landing page: probe finds no field, nothing typed", out0 == "nofield", out0)
-    acc0 = fake_state()["accepted"]
-    outs = drive(stand, page, first_click="#take_quiz")
+    check(f"[{eng}] quiz landing page loads with no form to fill (there is no access code)",
+          page.eval("document.querySelector('input[type=password]') === null") is True and "Take the Quiz" in page.text(), page.url)
+    page.set_mark()
+    page.click("#take_quiz")
+    wait_new_document(page)
     settle(page)
-    check(f"[{eng}] access-code form filled by the app, quiz opened without a human typing",
-          outs == ["clicked", "nofield"] and "What is 2+2?" in page.text() and fake_state()["accepted"] == acc0 + 1,
-          f"{outs} {page.url}")
-    check(f"[{eng}] the code the server issued is the one the fake Canvas holds (fill used a server-issued code)",
-          len(stand.codes_seen) == 1 and stand.codes_seen[0] == fake_state()["code"])
+    check(f"[{eng}] the quiz opens straight from the Take the Quiz link", "What is 2+2?" in page.text(), page.url)
     check(f"[{eng}] before finishing, finish regex does not match the quiz page", not stand.finish_hit(page.url), page.url)
     page.click("input[name=q1][value='4']")
     page.set_mark()
@@ -149,8 +82,6 @@ def run(eng_name, engine, open_msg, label=None, done_cb=None):
         time.sleep(0.5)
         msgs = page.eval("window.__msgs.map(function(m){return m.d + '@' + m.o;})")
         check(f"[{eng}] sign-in popup can postMessage to its opener", any(m.startswith("opener-alive@https://sso.fake.test") for m in msgs), str(msgs))
-        out = stand.on_loaded(pop)
-        check(f"[{eng}] the popup's field is not filled (host gate)", out == "gate" and pop.value_of("#quiz_access_code") == "")
         pop.close()
     pop = page.click_popup("#open_sso_coop")
     if pop is None:
@@ -160,13 +91,6 @@ def run(eng_name, engine, open_msg, label=None, done_cb=None):
         has = pop.eval("window.opener !== null")
         note(f"[{eng}] observed: sign-in popup served with Cross-Origin-Opener-Policy same-origin has window.opener {'kept' if has else 'NULL'}")
         time.sleep(0.4)
-        pop.close()
-    pop = page.click_popup("#open_other")
-    if pop is not None:
-        settle(pop)
-        out = stand.on_loaded(pop)
-        check(f"[{eng}] a page the app would block is also never filled even if a browser let it open", out == "gate"
-              and pop.value_of("#quiz_access_code") == "")
         pop.close()
     page.close()
     return stand

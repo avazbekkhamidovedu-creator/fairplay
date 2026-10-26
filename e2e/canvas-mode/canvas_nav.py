@@ -1,5 +1,6 @@
 """The restricted Canvas browser, ported from mac/Sources/Proctora/CanvasMode.swift
-(CanvasScope, CanvasNavigation, CanvasRecoveryGate and the scoped CanvasPolicy.fillOrigin).
+(CanvasScope, CanvasNavigation, CanvasRecoveryGate, CanvasQuizMarker) and the exam-server test of
+MainWindowController.
 
 Pure functions on URL strings; no browser. `path` is always the percent-encoded path of the URL as
 URLComponents.percentEncodedPath gives it (query and fragment never part of it).
@@ -22,6 +23,47 @@ class Scope:
     item_kind: str
     item_id: str
     open_book: bool = False
+    sign_in_hosts: tuple = ()
+    quiz_lti_hosts: tuple = ()
+
+
+MAX_HOST_PATTERNS = 50
+
+
+def is_host_pattern(text: str) -> bool:
+    """CanvasScope.isHostPattern: `host` or `*.suffix`, lower-case letters, digits, dot, dash, underscore."""
+    body = text[2:] if text.startswith("*.") else text
+    if not body or len(body) > 253 or body.startswith(".") or body.endswith(".") or ".." in body:
+        return False
+    return all(("a" <= c <= "z") or ("0" <= c <= "9") or c in ".-_" for c in body)
+
+
+def host_list(value):
+    """CanvasScope.hostList: None when present but not a list of valid patterns; absent or null is empty."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > MAX_HOST_PATTERNS:
+        return None
+    out = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        low = item.lower()
+        if not is_host_pattern(low):
+            return None
+        out.append(low)
+    return tuple(out)
+
+
+def host_matches(host: str, patterns) -> bool:
+    h = host.lower()
+    for p in patterns:
+        if p.startswith("*."):
+            if h.endswith("." + p[2:]):
+                return True
+        elif h == p:
+            return True
+    return False
 
 
 def is_id(text: str) -> bool:
@@ -49,7 +91,10 @@ def scope_from_json(obj) -> Scope | None:
         return None
     if kind not in ("quizzes", "assignments"):
         return None
-    return Scope(course, kind, item, obj.get("open_book") is True)
+    sign_in, lti = host_list(obj.get("sign_in_hosts")), host_list(obj.get("quiz_lti_hosts"))
+    if sign_in is None or lti is None:
+        return None
+    return Scope(course, kind, item, obj.get("open_book") is True, sign_in, lti)
 
 
 def segments_of_path(path: str) -> list[str] | None:
@@ -162,8 +207,17 @@ def has_download_query(url: str) -> bool:
 
 
 def decide(url: str, exam_host: str, scope: Scope, phase: str) -> str:
+    """CanvasNavigation.decide: other hosts follow the site rules in the lobby; in the quiz phase a main-frame
+    page on another host opens only over https for a host in the scope's sign-in or quiz-lti lists."""
     if not on_host(url, exam_host):
-        return ALLOW
+        if phase != QUIZ:
+            return ALLOW
+        u = _split(url)
+        host = host_of(url)
+        if u is None or u.scheme.lower() != "https" or not host:
+            return BLOCK
+        listed = host_matches(host, scope.sign_in_hosts) or host_matches(host, scope.quiz_lti_hosts)
+        return ALLOW if listed else BLOCK
     segs = segments(url)
     if segs is None:
         return BLOCK
@@ -181,6 +235,14 @@ def enters_quiz(url: str, exam_host: str, scope: Scope) -> bool:
     if scope.item_kind == "assignments":
         return True
     return len(segs) >= 5 and segs[4] == "take"
+
+
+def is_item_landing(url: str, exam_host: str, scope: Scope) -> bool:
+    """The exact item page /courses/C/K/I (a trailing slash is fine)."""
+    if not on_host(url, exam_host):
+        return False
+    segs = segments(url)
+    return segs is not None and len(segs) == 4 and is_under_item_segs(segs, scope)
 
 
 def is_landing(url: str, exam_host: str, scope: Scope) -> bool:
@@ -227,36 +289,47 @@ class RecoveryGate:
         return True
 
 
-def _fill_host(url: str):
-    u = _split(url)
-    if u is None:
-        return None
-    try:
-        host, port = u.hostname, u.port
-    except ValueError:
-        return None
-    if u.scheme.lower() != "https" or u.username is not None or u.password is not None or not host:
-        return None
-    if port is not None and port != 443:
-        return None
-    return host.lower()
+def is_server_url(url: str, server: str) -> bool:
+    """MainWindowController.isServerURL: same scheme, host (any case) and port, default ports filled in."""
+    u, sv = _split(url), _split(server)
+    if u is None or sv is None or not u.hostname:
+        return False
+
+    def port(x):
+        try:
+            return x.port or (443 if x.scheme.lower() == "https" else 80)
+        except ValueError:
+            return -1
+    return (u.hostname.lower() == (sv.hostname or "").lower() and port(u) == port(sv)
+            and u.scheme.lower() == sv.scheme.lower())
 
 
-def is_quiz_path(path: str) -> bool:
-    import re
-    return re.match(r"^/courses/\d+/(quizzes|assignments)/\d+", path) is not None
+class QuizMarker:
+    """CanvasQuizMarker: the per-attempt flag in UserDefaults that survives a relaunch."""
 
+    def __init__(self, defaults: dict | None = None):
+        self.defaults = {} if defaults is None else defaults
 
-def fill_origin(page: str, start: str, scope: Scope | None = None):
-    """CanvasPolicy.fillOrigin(page:start:scope:)."""
-    ph, sh = _fill_host(page), _fill_host(start)
-    if not ph or not sh or ph != sh:
-        return None
-    if scope is not None:
-        if not is_under_item(page, scope):
-            return None
-    else:
-        u = _split(page)
-        if not is_quiz_path(unquote(u.path)):
-            return None
-    return "https://" + ph
+    @staticmethod
+    def key(attempt_id: str) -> str:
+        return "fairplay.canvasQuizStarted." + attempt_id
+
+    def is_set(self, attempt_id: str) -> bool:
+        return bool(self.defaults.get(self.key(attempt_id)))
+
+    def set(self, attempt_id: str) -> None:
+        self.defaults[self.key(attempt_id)] = True
+
+    @staticmethod
+    def armed_key(attempt_id: str) -> str:
+        return "fairplay.canvasFinishArmed." + attempt_id
+
+    def is_armed(self, attempt_id: str) -> bool:
+        return bool(self.defaults.get(self.armed_key(attempt_id)))
+
+    def set_armed(self, attempt_id: str, armed: bool) -> None:
+        self.defaults[self.armed_key(attempt_id)] = armed
+
+    def clear(self, attempt_id: str) -> None:
+        self.defaults.pop(self.key(attempt_id), None)
+        self.defaults.pop(self.armed_key(attempt_id), None)

@@ -35,11 +35,11 @@
   }
   window.webkit = { messageHandlers: { proctora: { postMessage: async (m) => {
     window.__native.push(JSON.parse(JSON.stringify(m)));
-    if (m.action === 'hello') send({type:'state', locked: st.locked, trusted: true, version: '0.5', app_version: '0.7.1', platform: 'mac'});
-    else if (m.action === 'attest') send({type:'attestation', nonce:m.nonce, device_id:DEVICE, signature: await hmac(`start|${m.nonce}|${DEVICE}`), version:'0.7.1', build:'release'});
+    if (m.action === 'hello') send({type:'state', locked: st.locked, trusted: true, version: '0.5', app_version: %VERSION%, platform: 'mac'});
+    else if (m.action === 'attest') send({type:'attestation', nonce:m.nonce, device_id:DEVICE, signature: await hmac(`start|${m.nonce}|${DEVICE}`), version:%VERSION%, build:'release'});
     else if (m.action === 'session') setExam(m);
     else if (m.action === 'lock') { if (m.session) setExam(m); st.locked = true; beat(); send({type:'locked'}); }
     else if (m.action === 'unlock') unlock();
-    else if (m.action === 'preflight') send({type:'preflight', problems: [], checks: [], platform: 'mac', app_version: '0.7.1', apps_to_close: []});
+    else if (m.action === 'preflight') send({type:'preflight', problems: [], checks: [], platform: 'mac', app_version: %VERSION%, apps_to_close: []});
   } } } };
 })();

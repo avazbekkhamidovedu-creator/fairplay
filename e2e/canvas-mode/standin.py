@@ -1,8 +1,5 @@
 """The native app's Canvas behaviour, ported from mac/Sources/Proctora (CanvasMode.swift and the
 Canvas parts of ExternalExamController.swift), driving a real web page.
-
-The probe and fill JavaScript is NOT re-typed: it is read out of CanvasMode.swift at run time and
-the Swift string interpolation is applied here, so the exact text the app injects runs in the page.
 """
 from __future__ import annotations
 
@@ -22,53 +19,24 @@ import config as C
 SWIFT = os.path.join(C.REPO, "mac", "Sources", "Proctora", "CanvasMode.swift")
 
 
-# ---------------------------------------------------------------- scripts out of the Swift file
-def _swift_source() -> str:
-    with open(SWIFT, encoding="utf-8") as f:
-        return f.read()
+SWIFT = os.path.join(C.REPO, "mac", "Sources", "Proctora", "CanvasMode.swift")
 
 
-def _dedent_swift(block: str, closing_indent: str) -> str:
-    out = []
-    for line in block.split("\n"):
-        out.append(line[len(closing_indent):] if line.startswith(closing_indent) else line.lstrip())
-    return "\n".join(out)
-
-
-def _multiline(src: str, header: str, anchor: str = '"""\n') -> str:
+def _multiline(src: str, header: str) -> str:
+    """The text of the Swift multi-line string literal that follows `header`, dedented by its closing quotes."""
     i = src.index(header)
-    start = src.index(anchor, i) + len(anchor)
+    start = src.index('"""\n', i) + 4
     end = src.index('"""', start)
     body = src[start:end]
-    closing_indent = body.rsplit("\n", 1)[1] if "\n" in body else ""
-    return _dedent_swift(body.rsplit("\n", 1)[0], closing_indent)
+    indent = body.rsplit("\n", 1)[1] if "\n" in body else ""
+    lines = body.rsplit("\n", 1)[0].split("\n")
+    return "\n".join(line[len(indent):] if line.startswith(indent) else line.lstrip() for line in lines)
 
 
 class Scripts:
     def __init__(self):
-        src = _swift_source()
-        self.field = re.search(r'static let field = "([^"]+)"', src).group(1)
-        probe = re.search(r'static let probe = "(.*)"\n', src).group(1)
-        self.probe = probe.replace(r"\(field)", self.field)
-        self._fill = _multiline(src, "static func fill(code: String, origin: String", 'return """\n')
-        self._path_check = _multiline(src, "var pathCheck = \"\"")
-        self.popup_guard = _multiline(src, "static let popupGuard")
-        assert r"\(" in self._fill and r"\(field)" in self._fill and r"\(pathCheck)" in self._fill
-
-    @staticmethod
-    def js_string(s: str) -> str:
-        text = json.dumps(s, ensure_ascii=False).replace("/", "\\/")
-        return text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-
-    def fill(self, code: str, origin: str, path_prefix: str | None = None) -> str:
-        check = "" if path_prefix is None else self._path_check.replace(
-            r"\(jsString(pathPrefix))", self.js_string(path_prefix))
-        out = (self._fill.replace(r"\(pathCheck)", check)
-               .replace(r"\(field)", self.field)
-               .replace(r"\(jsString(origin))", self.js_string(origin))
-               .replace(r"\(jsString(code))", self.js_string(code)))
-        assert r"\(" not in out, "unreplaced Swift interpolation"
-        return out
+        with open(SWIFT, encoding="utf-8") as f:
+            self.popup_guard = _multiline(f.read(), "static let popupGuard")
 
 
 SCRIPTS = Scripts()
@@ -129,31 +97,6 @@ def policy_allows(url: str, rules: list[SiteRule]) -> bool:
     return any(r.matches(host, path) for r in rules)
 
 
-def _fill_host(url: str):
-    p = _parts(url)
-    if not p:
-        return None
-    scheme, user, pw, host, port, _ = p
-    if scheme != "https" or user is not None or pw is not None or not host:
-        return None
-    if port is not None and port != 443:
-        return None
-    return host
-
-
-def is_quiz_path(path: str) -> bool:
-    return re.match(r"^/courses/\d+/(quizzes|assignments)/\d+", path) is not None
-
-
-def fill_origin(page: str, start: str):
-    ph, sh = _fill_host(page), _fill_host(start)
-    if not ph or not sh or ph != sh:
-        return None
-    if not is_quiz_path(unquote(urlsplit(page).path)):
-        return None
-    return "https://" + ph
-
-
 def is_blank(url: str | None) -> bool:
     return not url or url.lower() == "about:blank"
 
@@ -170,8 +113,8 @@ def popup_plan(url, opener_host, rules, opener_survives_cross_origin: bool) -> s
 
 
 def finish_text(url: str) -> str:
-    u = urlsplit(url)
-    return unquote(u.path) + ("?" + u.query if u.query else "")
+    """CanvasFinish.matches reads URL.path: decoded, never the query or the fragment."""
+    return unquote(urlsplit(url).path)
 
 
 def finish_matches(url: str, regex: str | None) -> bool:
@@ -234,42 +177,6 @@ def is_safe_pattern(pattern: str) -> bool:
     return not stack
 
 
-class FillBudget:
-    MAX = 3
-
-    def __init__(self):
-        self.used = 0
-
-    @property
-    def exhausted(self):
-        return self.used >= self.MAX
-
-    def take(self):
-        if self.exhausted:
-            return False
-        self.used += 1
-        return True
-
-
-def retry_delay(retry_after) -> float:
-    try:
-        n = int(str(retry_after).strip())
-    except (TypeError, ValueError):
-        return 4.0
-    return float(min(20, max(1, n)))
-
-
-def parse_code(status, js) -> str | None:
-    if status != 200 or not isinstance(js, dict):
-        return None
-    code = js.get("code")
-    if not isinstance(code, str) or not (4 <= len(code) <= 64):
-        return None
-    if not all(ord(ch) >= 32 and ord(ch) != 127 for ch in code):
-        return None
-    return code
-
-
 # ---------------------------------------------------------------- HTTP to the FairPlay server
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -315,14 +222,17 @@ def login(user: str, password: str | None = None) -> str:
 
 
 def start_attempt(token: str, exam_id: str, start_code: str, device: str = C.DEVICE, key: str = C.APP_KEY,
-                  platform: str | None = "mac", signature_override: str | None = None):
+                  platform: str | None = "mac", signature_override: str | None = None,
+                  version: str | None = C.APP_VERSION):
     """What the Mac app does to start: challenge, signed nonce, POST start."""
     s, ch = jhttp("GET", f"/api/student/exams/{exam_id}/challenge", token=token)
     assert s == 200, ch
     nonce = ch["nonce"]
     client = {"device_id": device, "nonce": nonce,
-              "signature": signature_override or sign(key, f"start|{nonce}|{device}"), "version": "0.7.1"}
+              "signature": signature_override or sign(key, f"start|{nonce}|{device}"), "version": version or C.APP_VERSION}
     h = {"X-FairPlay-Platform": platform} if platform else {}
+    if version and platform:
+        h["X-FairPlay-Version"] = version
     return jhttp("POST", f"/api/student/exams/{exam_id}/start", {"start_code": start_code, "client": client},
                  token, h)
 
@@ -342,80 +252,12 @@ class NativeStandIn:
         self.finish_regex = open_msg.get("finish_url_regex")
         self.scope = N.scope_from_json(open_msg.get("canvas_scope"))
         self.device, self.key = device or open_msg.get("device") or C.DEVICE, key
-        self.budget = FillBudget()
-        self.help_shown = False
         self.log: list[str] = []
-        self.codes_seen: list[str] = []
-        self.issue_calls = 0
-
-    def code_body(self, ts=None, device=None, key=None, session=None):
-        ts = ts if ts is not None else fresh_ts()
-        msg = f"canvascode|{self.aid}|{session or self.session}|{device or self.device}|{ts}"
-        return {"proof": sign(key or self.key, msg), "ts": ts}
-
-    def request_code(self, body=None, headers=None):
-        self.issue_calls += 1
-        h = {"X-FairPlay-Session": self.session, "X-FairPlay-Platform": "mac", **(headers or {})}
-        return http("POST", f"/api/student/attempts/{self.aid}/canvas-code",
-                    body if body is not None else self.code_body(), self.token, h)
-
-    def fetch_code(self):
-        s, h, t = self.request_code()
-        try:
-            js = json.loads(t)
-        except ValueError:
-            js = None
-        code = parse_code(s, js)
-        if code:
-            self.codes_seen.append(code)
-        return code, s, h.get("Retry-After")
 
     def report(self, typ: str, detail: str) -> None:
         http("POST", f"/api/student/attempts/{self.aid}/events",
              {"events": [{"type": typ, "detail": detail}]}, self.token,
-             {"X-FairPlay-Session": self.session})
-
-    def failed(self, reason: str) -> None:
-        self.log.append(f"canvas_code_failed:{reason}")
-        self.report("canvas_code_failed", reason)
-        self.help_shown = True
-
-    def on_loaded(self, page, sleep=time.sleep) -> str:
-        """canvasPageLoaded + canvasProbed + requestCanvasCode for one finished main-frame load."""
-        url = page.url
-        if self.origin(url) is None:
-            return "gate"
-        if page.eval(SCRIPTS.probe) is not True:
-            return "nofield"
-        if self.budget.exhausted:
-            self.failed("fill limit reached")
-            return "help"
-        retries = 0
-        while True:
-            code, status, retry_after = self.fetch_code()
-            if code:
-                break
-            if status == 429 and retries < 3:
-                sleep(retry_delay(retry_after))
-                retries += 1
-                if self.origin(page.url) is None:
-                    return "gate"
-                continue
-            self.failed("code unavailable")
-            return "help"
-        origin = self.origin(page.url)
-        if origin is None or not self.budget.take():
-            return "gate"
-        self.log.append(f"fill {self.budget.used}")
-        prefix = None if self.scope is None else f"/courses/{self.scope.course_id}/{self.scope.item_kind}/{self.scope.item_id}"
-        outcome = page.eval(SCRIPTS.fill(code, origin, prefix))
-        if outcome != "clicked":
-            self.failed(f"fill {outcome}")
-            return "help"
-        return "clicked"
-
-    def origin(self, url: str):
-        return N.fill_origin(url, self.start_url, self.scope)
+             {"X-FairPlay-Session": self.session, "X-FairPlay-Platform": "mac", "X-FairPlay-Version": C.APP_VERSION})
 
     def finish_hit(self, url: str) -> bool:
         return finish_matches(url, self.finish_regex)

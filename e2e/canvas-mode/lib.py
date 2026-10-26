@@ -42,8 +42,13 @@ def fake_state():
     return fake("GET", "/")
 
 
-def fake_code() -> str:
-    return fake_state()["code"]
+def server_hits(prefix: str) -> int:
+    """How many GET requests for `prefix` the FairPlay server has logged so far."""
+    try:
+        with open(os.path.join(C.SCRATCH, "server.log"), encoding="utf-8", errors="replace") as f:
+            return f.read().count(f'"GET {prefix}')
+    except OSError:
+        return 0
 
 
 def wait_http(url: str, timeout: float = 90) -> None:
@@ -81,7 +86,8 @@ class Services:
         self.server_log_path = os.path.join(C.SCRATCH, "server.log")
         server_log = open(self.server_log_path, "w")
         env = {**os.environ, "FAIRPLAY_FEATURES": "scan,lms,practice", "FAIRPLAY_SECRET": C.SECRET,
-               "PYTHONUNBUFFERED": "1"}
+               "PYTHONUNBUFFERED": "1",
+               "FAIRPLAY_CANVAS_SSO_HOSTS": f"{C.SAML_HOST},login.microsoftonline.com,*.duosecurity.com"}
         self.procs.append(subprocess.Popen(
             [C.VENV_PY, os.path.join(C.HERE, "run_server.py")], cwd=os.path.join(C.REPO, "server"),
             stdout=server_log, stderr=subprocess.STDOUT, env=env))

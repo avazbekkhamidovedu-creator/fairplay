@@ -8,7 +8,8 @@ APP_JS = open(os.path.join(C.HERE, "fake_app.js")).read()
 
 
 def fake_app(device: str) -> str:
-    return APP_JS.replace("%KEY%", json.dumps(C.APP_KEY)).replace("%DEVICE%", json.dumps(device))
+    return (APP_JS.replace("%KEY%", json.dumps(C.APP_KEY)).replace("%DEVICE%", json.dumps(device))
+            .replace("%VERSION%", json.dumps(C.APP_VERSION)))
 
 
 def app_context(browser, device: str = C.DEVICE):

@@ -1,15 +1,16 @@
 """A fake Canvas (Classic Quizzes) for the Canvas mode end-to-end run.
 
 HTTPS on 127.0.0.1:443 with a self-signed certificate, routed by Host header:
-  canvas.fake.test  the Canvas site (pages and REST API)
+  canvas.fake.test  the Canvas site (pages)
   sso.fake.test     an allowed sign-in site
+  go.fake.test      sign-in redirect hop
+  saml.fake.test    the identity provider
   other.fake.test   a site that is not allowed
 An admin interface on plain http://127.0.0.1:9444 lets the test read and reset the state.
 """
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import ssl
@@ -18,18 +19,17 @@ import sys
 import threading
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 CANVAS_HOST = "canvas.fake.test"
 SSO_HOST = "sso.fake.test"
 OTHER_HOST = "other.fake.test"
 GO_HOST = "go.fake.test"
 SAML_HOST = "saml.fake.test"
-TOKEN = "fake-canvas-teacher-token-0001"
+EXAM_SERVER = "http://127.0.0.1:8765"
 ADMIN_PORT = 9444
 QUIZ = "/courses/1/quizzes/1"
 QUIZ2 = "/courses/1/quizzes/2"
-QUIZ2_CODE = "second-quiz-own-code"
 
 lock = threading.Lock()
 state: dict = {}
@@ -38,10 +38,8 @@ state: dict = {}
 def reset() -> None:
     with lock:
         state.clear()
-        state.update({"code": "", "sessions": {}, "wrong": 0, "accepted": 0, "submitted": 0,
-                      "api_calls": [], "page_hits": [], "typed_on_decoy": 0, "set_calls": 0,
-                      "require_login": False, "warm_sso": False, "quiz2_posts": 0, "quiz2_real_code": 0,
-                      "quiz2_ok": 0, "downloads": 0, "attachments": 0, "logins": 0})
+        state.update({"sessions": {}, "submitted": 0, "page_hits": [], "require_login": False,
+                      "warm_sso": False, "skip_go": False, "downloads": 0, "attachments": 0, "logins": 0})
 
 
 reset()
@@ -52,22 +50,6 @@ def page(title: str, body: str, extra_head: str = "") -> bytes:
             f"<body>{body}</body></html>").encode()
 
 
-ACCESS_FORM = """
-<h1>Quiz access</h1>
-%(links)s
-%(error)s
-<form class="access_code_form" id="access_code_form" action="/courses/1/quizzes/1/take" method="post" accept-charset="UTF-8">
-  <input type="hidden" name="authenticity_token" value="tok">
-  <label for="quiz_access_code">Access code</label>
-  <input type="password" name="access_code" id="quiz_access_code" autocomplete="off">
-  <button type="submit" class="btn btn-primary" id="submit_access" disabled>Submit</button>
-</form>
-<script>
-  var i = document.getElementById('quiz_access_code'), b = document.getElementById('submit_access');
-  i.addEventListener('input', function () { b.disabled = i.value.length === 0; });
-</script>
-"""
-
 QUIZ_BODY = """
 <h1>Fake Quiz</h1>
 <form id="quiz_form" action="/courses/1/quizzes/1/submit" method="post">
@@ -76,18 +58,6 @@ QUIZ_BODY = """
   <label><input type="radio" name="q1" value="4"> 4</label>
   <button type="submit" id="submit_quiz" class="btn btn-primary">Submit Quiz</button>
 </form>
-"""
-
-DECOY_BODY = """
-<h1>A page about something else</h1>
-<form class="access_code_form" action="/courses/1/pages/decoy" method="post">
-  <input type="password" name="access_code" id="quiz_access_code">
-  <button type="submit" class="btn btn-primary" id="decoy_submit" disabled>Submit</button>
-</form>
-<script>
-  window.__decoySubmitted = false;
-  document.querySelector('form').addEventListener('submit', function () { window.__decoySubmitted = true; });
-</script>
 """
 
 OPENER_BODY = """
@@ -107,7 +77,6 @@ OPENER_BODY = """
 
 POPUP_BODY = """
 <h1>Sign in</h1>
-<input type="password" id="quiz_access_code" name="access_code">
 <p id="state">loading</p>
 <script>
   var has = window.opener !== null;
@@ -126,6 +95,8 @@ SIDE_LINKS = """
   <a id="l_quizlist" href="/courses/1/quizzes">Quizzes</a>
   <a id="l_quiz1" href="/courses/1/quizzes/1">Quiz 1</a>
   <a id="l_quiz2" href="/courses/1/quizzes/2">Quiz 2</a>
+  <a id="l_history" href="/courses/1/quizzes/1/history">Quiz 1 history</a>
+  <a id="l_sub5" href="/courses/1/quizzes/1/submissions/5">Quiz 1 submission</a>
   <a id="l_files" href="/courses/1/files">Files</a>
   <a id="l_pages" href="/courses/1/pages/p1">Page p1</a>
   <a id="l_modules" href="/courses/1/modules">Modules</a>
@@ -144,6 +115,10 @@ SIDE_LINKS = """
   <a id="l_rootfile" href="/files/77">Root file 77</a>
   <a id="l_wiki" href="/courses/1/wiki/w1">Wiki</a>
   <a id="l_other" href="https://other.fake.test/blocked">Other site</a>
+  <a id="l_examserver" href="http://127.0.0.1:8765/student">Exam server home</a>
+  <a id="l_examdone" href="http://127.0.0.1:8765/student/external-done/x?reason=finish_url">Exam server hand-in</a>
+  <a id="l_examgo" href="/courses/1/quizzes/1/go-exam">Redirects to the exam server</a>
+  <button id="spa_exam" onclick="location.href='http://127.0.0.1:8765/student/external-done/x?reason=finish_url'">Script to the exam server</button>
   <button id="spa_pages" onclick="history.pushState({}, '', '/courses/1/pages/p1'); document.getElementById('route').textContent = location.pathname;">SPA to pages</button>
   <button id="spa_dash" onclick="history.pushState({}, '', '/'); document.getElementById('route').textContent = location.pathname;">SPA to dashboard</button>
   <span id="route"></span>
@@ -160,6 +135,8 @@ DASHBOARD_BODY = """
   <a id="nav_inbox" href="/conversations">Inbox</a>
   <a id="nav_calendar" href="/calendar">Calendar</a>
   <a id="nav_profile" href="/profile">Account</a>
+  <a id="nav_exam" href="http://127.0.0.1:8765/student">Exam server</a>
+  <a id="nav_examgo" href="/courses/1/quizzes/1/go-exam">Exam server by redirect</a>
 </nav>
 <button id="spa_inbox">Inbox (single page)</button>
 <button id="spa_replace">Calendar (replace)</button>
@@ -174,18 +151,6 @@ DASHBOARD_BODY = """
   });
   window.addEventListener('popstate', render);
   render();
-</script>
-"""
-
-ACCESS_FORM2 = """
-<h1>Quiz 2 access</h1>
-<form class="access_code_form" id="access_code_form" action="/courses/1/quizzes/2/take" method="post">
-  <input type="password" name="access_code" id="quiz_access_code" autocomplete="off">
-  <button type="submit" class="btn btn-primary" id="submit_access" disabled>Submit</button>
-</form>
-<script>
-  var i = document.getElementById('quiz_access_code'), b = document.getElementById('submit_access');
-  i.addEventListener('input', function () { b.disabled = i.value.length === 0; });
 </script>
 """
 
@@ -221,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             if sid is None or sid not in state["sessions"]:
                 sid = hashlib.sha1(os.urandom(16)).hexdigest()
-                state["sessions"][sid] = {"accepted": False}
+                state["sessions"][sid] = {}
                 new = True
             return sid, state["sessions"][sid], new
 
@@ -268,13 +233,13 @@ class Handler(BaseHTTPRequestHandler):
         if host == SAML_HOST:
             return self._saml(method, path)
         if host == OTHER_HOST:
-            return self._send(200, page("blocked", "<h1>Not allowed</h1><input id=quiz_access_code>"))
+            return self._send(200, page("blocked", "<h1>Not allowed</h1>"))
         if host != CANVAS_HOST:
             return self._send(404, page("404", "no such host"))
-        if path.startswith("/api/v1/"):
-            return self._api(method, path)
         sid, sess, new = self._session()
         ck = sid if new else None
+        if path == QUIZ + "/go-exam":
+            return self._redirect(EXAM_SERVER + "/student/external-done/x?reason=finish_url", cookie=ck)
         routed = self._site(method, path, sess, ck)
         if routed:
             return
@@ -286,24 +251,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._take(method, sess, ck)
         if method == "POST" and path == QUIZ + "/submit":
             self._body()
-            if not self._can_take(sess):
-                return self._send(403, page("Forbidden", "Access code required"), cookie=ck)
             with lock:
                 state["submitted"] += 1
             return self._redirect(QUIZ + "/submissions/5", cookie=ck)
         if method == "GET" and path == QUIZ + "/submissions/5":
             return self._send(200, page("Submitted", "<h1>Quiz submitted</h1>"), cookie=ck)
-        if method == "GET" and path == "/courses/1/pages/decoy":
-            return self._send(200, page("Decoy", DECOY_BODY), cookie=ck)
-        if method == "POST" and path == "/courses/1/pages/decoy":
-            self._body()
-            with lock:
-                state["typed_on_decoy"] += 1
-            return self._send(200, page("Decoy", "<h1>posted</h1>"), cookie=ck)
         if method == "GET" and path == "/courses/1/pages/opener":
             return self._send(200, page("Opener", OPENER_BODY), cookie=ck)
         if method == "GET" and path == "/courses/1/assignments/9":
-            return self._send(200, page("Assignment", "<h1>An assignment</h1><input id=quiz_access_code>"), cookie=ck)
+            return self._send(200, page("Assignment", "<h1>An assignment</h1>" + SIDE_LINKS), cookie=ck)
         return self._send(404, page("Not found", "<h1>Not found</h1>"), cookie=ck)
 
     def _site(self, method, path, sess, ck):
@@ -332,6 +288,8 @@ class Handler(BaseHTTPRequestHandler):
                     return True
                 if logged:
                     self._redirect("/", cookie=ck)
+                elif state["skip_go"]:
+                    self._redirect(f"https://{SAML_HOST}/idp/sso?SAMLRequest=abc", cookie=ck)
                 else:
                     self._redirect(f"https://{GO_HOST}/sso/start?RelayState=%2F", cookie=ck)
                 return True
@@ -346,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         simple = {
             "/conversations": "Inbox", "/calendar": "Calendar", "/profile": "Account",
             "/courses/2": "Course 2", "/courses/1/grades": "Grades",
-            "/courses/1/modules": "Modules", "/courses/1/files": "Files", "/courses/1/files/77": "File 77",
+            "/courses/1/modules": "Modules", "/courses/1/quizzes/1/history": "Quiz history", "/courses/1/files": "Files", "/courses/1/files/77": "File 77",
             "/files/77": "File 77", "/courses/1/assignments": "Assignments", "/courses/1/assignments/9": "Assignment 9",
             "/courses/1/assignments/10": "Assignment 10", "/courses/1/assignments/9/submissions/1": "Submission 1",
             "/courses/1/assignments/9/submission-confirmation": "Submitted", "/courses/1/pages/p1": "Page p1", "/courses/1/wiki/w1": "Wiki w1",
@@ -377,18 +335,7 @@ class Handler(BaseHTTPRequestHandler):
                                  + SIDE_LINKS), cookie=ck)
             return True
         if path == QUIZ2 + "/take":
-            if method == "POST":
-                form = parse_qs(self._body().decode("utf-8", "replace"), keep_blank_values=True)
-                given = (form.get("access_code") or [""])[0]
-                with lock:
-                    state["quiz2_posts"] += 1
-                    if state["code"] and given == state["code"]:
-                        state["quiz2_real_code"] += 1
-                    if given == QUIZ2_CODE:
-                        state["quiz2_ok"] += 1
-                self._send(200, page("Quiz 2", "<h1>Quiz 2 answer page</h1>"), cookie=ck)
-            else:
-                self._send(200, page("Quiz 2 access", ACCESS_FORM2 + SIDE_LINKS), cookie=ck)
+            self._send(200, page("Quiz 2 take", "<h1>Quiz 2 questions</h1>" + SIDE_LINKS), cookie=ck)
             return True
         return False
 
@@ -409,30 +356,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, page("Signing in", SAML_POST))
         return self._send(404, page("404", "no"))
 
-    def _can_take(self, sess):
-        with lock:
-            return (not state["code"]) or sess["accepted"]
-
     def _take(self, method, sess, ck):
-        if method == "POST":
-            form = parse_qs(self._body().decode("utf-8", "replace"), keep_blank_values=True)
-            given = (form.get("access_code") or [""])[0]
-            with lock:
-                code = state["code"]
-                ok = bool(code) and hmac.compare_digest(given.encode(), code.encode())
-                if ok:
-                    sess["accepted"] = True
-                    state["accepted"] += 1
-                else:
-                    state["wrong"] += 1
-            if ok:
-                return self._redirect(QUIZ + "/take", cookie=ck)
-            err = '<p class="error" id="bad_code">Invalid access code.</p>'
-            return self._send(200, page("Access code", ACCESS_FORM % {"error": err, "links": SIDE_LINKS}),
-                              cookie=ck)
-        if self._can_take(sess):
-            return self._send(200, page("Taking Fake Quiz", QUIZ_BODY + SIDE_LINKS), cookie=ck)
-        return self._send(200, page("Access code", ACCESS_FORM % {"error": "", "links": SIDE_LINKS}), cookie=ck)
+        return self._send(200, page("Taking Fake Quiz", QUIZ_BODY + SIDE_LINKS), cookie=ck)
 
     def _sso(self, method, path):
         if path == "/popup":
@@ -441,35 +366,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, page("SSO popup COOP", POPUP_BODY),
                               headers={"Cross-Origin-Opener-Policy": "same-origin"})
         if path == "/login":
-            return self._send(200, page("SSO", "<h1>Sign in</h1><input id=quiz_access_code>"))
+            return self._send(200, page("SSO", "<h1>Sign in</h1>"))
         return self._send(404, page("404", "no"))
-
-    def _api(self, method, path):
-        body = self._body()
-        auth = self.headers.get("Authorization", "")
-        with lock:
-            state["api_calls"].append({"method": method, "path": path, "auth_ok": auth == f"Bearer {TOKEN}"})
-        if auth != f"Bearer {TOKEN}":
-            return self._send(401, b'{"errors":[{"message":"Invalid access token."}]}', "application/json")
-        if path == "/api/v1/users/self":
-            return self._send(200, json.dumps({"id": 7, "name": "Fake Teacher", "login_id": "fteacher"}).encode(),
-                              "application/json")
-        if path == "/api/v1/courses" and method == "GET":
-            return self._send(200, json.dumps([{"id": 1, "name": "Fake Course", "course_code": "FAKE101"}]).encode(),
-                              "application/json")
-        if path.startswith("/api/v1/courses/1/users"):
-            return self._send(200, b"[]", "application/json")
-        if method == "PUT" and path == "/api/v1/courses/1/quizzes/1":
-            form = parse_qs(body.decode(), keep_blank_values=True)
-            if "quiz[access_code]" not in form:
-                return self._send(400, b'{"errors":[]}', "application/json")
-            with lock:
-                state["code"] = form["quiz[access_code]"][0]
-                state["set_calls"] += 1
-                for s in state["sessions"].values():
-                    s["accepted"] = False
-            return self._send(200, b'{"id":1}', "application/json")
-        return self._send(404, b'{"errors":[{"message":"no route"}]}', "application/json")
 
 
 class Admin(BaseHTTPRequestHandler):
@@ -495,14 +393,9 @@ class Admin(BaseHTTPRequestHandler):
         data = json.loads(self.rfile.read(n) or b"{}")
         if self.path == "/reset":
             reset()
-        elif self.path == "/code":
-            with lock:
-                state["code"] = data.get("code", "")
-                for s in state["sessions"].values():
-                    s["accepted"] = False
         elif self.path == "/mode":
             with lock:
-                for k in ("require_login", "warm_sso"):
+                for k in ("require_login", "warm_sso", "skip_go"):
                     if k in data:
                         state[k] = bool(data[k])
         elif self.path == "/forget-sessions":

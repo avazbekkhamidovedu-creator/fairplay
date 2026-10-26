@@ -1,11 +1,10 @@
-"""Teacher UI phase: link Canvas, build a class, create and open a Canvas exam in the real web UI."""
+"""Teacher UI phase: build a class, create and open a Canvas exam in the real web UI."""
 import re
 import time
 
 import config as C
-from lib import check, fake, fake_state, note, section
+from lib import check, fake_state, section
 
-import browsers
 
 CAPTURED = []      # every API response body the teacher UI saw
 
@@ -19,25 +18,14 @@ def teacher_login(p):
 
 
 def run(browser, shots: str):
-    """Returns dict(exam_id, start_code, invigilator_code, teacher_ctx, code)."""
-    section("3. Teacher UI: link Canvas, class, Canvas exam, open")
+    """Returns dict(exam_id, start_code, class_id, ctx, page)."""
+    section("3. Teacher UI: class, Canvas exam, open")
     ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, ignore_https_errors=True)
     T = ctx.new_page()
     errors = []
     T.on("pageerror", lambda e: errors.append(str(e)))
     T.on("response", lambda r: _capture(r))
     teacher_login(T)
-
-    # --- link the fake Canvas account
-    T.goto(f"{C.SERVER}/teacher/lms")
-    T.wait_for_selector("#lms-url")
-    T.fill("#lms-url", C.CANVAS)
-    T.fill("#lms-token", C.TOKEN)
-    T.get_by_role("button", name=re.compile(r"^Connect Canvas")).click()
-    T.wait_for_timeout(1500)
-    check("UI: Canvas account linked (fake accepted the token)",
-          any(c["path"] == "/api/v1/users/self" and c["auth_ok"] for c in fake_state()["api_calls"]))
-    T.screenshot(path=f"{shots}/ui-01-lms.png")
 
     # --- class with students
     T.goto(f"{C.SERVER}/teacher/classes")
@@ -63,15 +51,19 @@ def run(browser, shots: str):
     T.fill("#exam-allowed-domains", C.SSO_HOST)
     T.wait_for_selector("[data-testid=canvas-settings]")
     ctext = T.inner_text("[data-testid=canvas-settings]")
-    check("UI: type detected as Classic, managed code chosen by default",
-          "Classic" in ctext and "FairPlay sets and changes it for me" in ctext, ctext[:300])
-    check("UI: no 'link Canvas' warning because an account is linked",
+    page_text = T.inner_text("body")
+    check("UI: type detected as Classic, the lock-in sentence is shown",
+          "Classic" in ctext and "cannot leave until they submit" in ctext, ctext[:300])
+    check("UI: no access-code field, option or sentence anywhere on the Canvas setup page",
+          T.locator("#exam-canvas-code-input").count() == 0 and not re.search(r"(?i)access code|managed|I will type the code", page_text),
+          re.sub(r"\s+", " ", page_text)[:200])
+    check("UI: no 'link Canvas' warning and no Canvas account is needed",
           T.locator("[data-testid=canvas-link-warning]").count() == 0)
     T.screenshot(path=f"{shots}/ui-03-setup.png", full_page=True)
     T.get_by_role("button", name="Save exam").click()
     T.wait_for_url(re.compile(r".*/teacher/exams/e_[A-Za-z0-9_-]+"), timeout=15000)
     exam_id = re.search(r"/exams/(e_[A-Za-z0-9_-]+)", T.url).group(1)
-    check("UI: exam saved as draft; fake Canvas has no code yet", fake_state()["code"] == "")
+    check("UI: exam saved as draft", True)
     T.wait_for_timeout(500)
     T.screenshot(path=f"{shots}/ui-04-draft.png", full_page=True)
 
@@ -80,12 +72,9 @@ def run(browser, shots: str):
     T.get_by_text(re.compile(r"^\d{6}$")).first.wait_for(timeout=20000)
     T.wait_for_timeout(800)
     text = T.inner_text("body")
-    code = fake_state()["code"]
-    check("fake Canvas now has a random 24-char code",
-          len(code) == 24 and re.fullmatch(r"[A-Za-z0-9]{24}", code) is not None and
-          not set(code) & set("0O1lI"), code[:2] + "…")
-    check("exactly one rotation call reached the fake", fake_state()["set_calls"] == 1, str(fake_state()["set_calls"]))
     start_code = re.search(r"\b(\d{6})\b", text).group(1)
+    check("exam opened and the fake Canvas got no API request at all (the server has nothing to set there)",
+          not any("/api/v1/" in h for h in fake_state()["page_hits"]), str(fake_state()["page_hits"][:3]))
     T.screenshot(path=f"{shots}/ui-05-open.png", full_page=True)
     T.goto(f"{C.SERVER}/teacher/exams/{exam_id}?tab=live")
     T.wait_for_timeout(1500)
@@ -96,14 +85,9 @@ def run(browser, shots: str):
     edit_html = T.content()
     T.screenshot(path=f"{shots}/ui-06-edit.png", full_page=True)
 
-    texts = [text, live_text, edit_text, edit_html]
-    check("code is not in any teacher page text or HTML", all(code not in t for t in texts))
-    bodies = [b for b in CAPTURED]
-    check("code is not in any API response the teacher UI received", all(code not in b for b in bodies),
-          f"{len(bodies)} responses")
+    check("no access-code wording on the live or edit pages", not re.search(r"(?i)access code", live_text + edit_text), "")
     check("no page error in the teacher UI", not errors, str(errors[:2]))
-    return {"exam_id": exam_id, "start_code": start_code, "class_id": class_id, "ctx": ctx, "page": T,
-            "code": code}
+    return {"exam_id": exam_id, "start_code": start_code, "class_id": class_id, "ctx": ctx, "page": T}
 
 
 def _capture(r):

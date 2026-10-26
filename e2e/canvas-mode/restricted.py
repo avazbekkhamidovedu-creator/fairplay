@@ -1,8 +1,9 @@
 """The Canvas part of ExternalExamController / MainWindowController, ported: the restricted browser's
-session state and delegate callbacks, driving a Tab (tabs.py). The fill flow is NativeStandIn.on_loaded.
+session state and delegate callbacks, driving a Tab (tabs.py).
 
 Source of truth: mac/Sources/Proctora/ExternalExamController.swift (canvasCommitted, recoverIfBlocked,
-autoOpenIfNeeded, quizPressed, backPressed, backAllowed, reportBlocked, checkFinishURL) and
+autoOpenIfNeeded, quizPressed, backPressed, backAllowed, reportBlocked, checkFinishURL, blocksExamServer,
+isLockedIn, popupPlan) and
 MainWindowController.swift (decidePolicyFor action and response, didCommit, didFinish).
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ import time
 from urllib.parse import urlsplit
 
 import canvas_nav as N
+import config as C
 import standin as S
 
 MAX_BLOCK_REPORTS = 100
@@ -19,8 +21,11 @@ NOTICE = "This page is not available during the exam."
 
 
 class RestrictedApp:
-    def __init__(self, open_msg: dict, tab, clock=time.time):
+    def __init__(self, open_msg: dict, tab, clock=time.time, defaults: dict | None = None, server: str = C.SERVER):
         self.stand = S.NativeStandIn(open_msg)
+        self.server = server
+        self.marker = N.QuizMarker(defaults)
+        self.aid = open_msg["attempt_id"]
         self.tab = tab
         tab.app = self
         self.clock = clock
@@ -43,15 +48,50 @@ class RestrictedApp:
         self.queued: list[tuple[str, str]] = []
         self.timeline: list[str] = []
         self.auto_open_count = 0
-        self.fills_attempted = 0
         self.recoveries: list[str] = []
+        self.armed = False
+        self.first_commit_seen = False
+        self.start_error: str | None = None
+        if self.scope is None or N.decide(self.start_url, self.exam_host, self.scope, N.LOBBY) != N.ALLOW:
+            self.start_error = "bad_request"
+        if self.scope is not None and self.marker.is_set(self.aid):
+            self.phase = N.QUIZ
+            self.armed = self.marker.is_armed(self.aid)
 
     # ---------------------------------------------------------------- policy helpers
+    def blocks_exam_server(self, url: str) -> bool:
+        return N.is_server_url(url, self.server)
+
     def allows(self, url: str) -> bool:
+        if self.blocks_exam_server(url):
+            return False
         return S.policy_allows(url, self.stand.rules)
+
+    @property
+    def locked_in(self) -> bool:
+        return self.scope is not None and self.phase == N.QUIZ
+
+    @property
+    def finish_button_visible(self) -> bool:
+        return not self.locked_in
+
+    def popup_plan(self, url: str | None, opener_host: str | None, survives: bool = False) -> str:
+        if url and not S.is_blank(url) and (self.blocks_exam_server(url) or self.blocks_main_frame(url)):
+            return "block"
+        if self.scope is not None and url and not S.is_blank(url) and (N.host_of(url) or "") == self.exam_host:
+            return "sameView" if S.policy_allows(url, self.stand.rules) else "block"
+        return S.popup_plan(url, opener_host, self.stand.rules, survives)
 
     def blocks_main_frame(self, url: str) -> bool:
         return self.scope is not None and N.decide(url, self.exam_host, self.scope, self.phase) == N.BLOCK
+
+    def set_armed(self, value: bool) -> None:
+        if self.armed != value:
+            self.armed = value
+            self.marker.set_armed(self.aid, value)
+
+    def finish_hit(self, url: str) -> bool:
+        return self.armed and self.stand.finish_hit(url)
 
     def allows_main_frame(self, url: str) -> bool:
         return self.allows(url) and not self.blocks_main_frame(url)
@@ -64,7 +104,8 @@ class RestrictedApp:
             return False
         if self.phase == N.QUIZ:
             h = (urlsplit(previous).hostname or "").lower()
-            return h == self.exam_host and not N.is_sign_in(previous, self.exam_host)
+            return (h == self.exam_host and not N.is_sign_in(previous, self.exam_host)
+                    and self.scope is not None and N.is_under_item(previous, self.scope))
         return True
 
     # ---------------------------------------------------------------- events
@@ -81,6 +122,10 @@ class RestrictedApp:
 
     # ---------------------------------------------------------------- delegate: decidePolicyFor
     def decide_navigation(self, url: str, main_frame: bool) -> bool:
+        if main_frame and self.blocks_exam_server(url):
+            self.timeline.append(f"server {url}")
+            self.report_blocked(url)
+            return False
         if main_frame and self.allows(url) and self.blocks_main_frame(url):
             self.timeline.append(f"block {url}")
             self.report_blocked(url)
@@ -99,6 +144,9 @@ class RestrictedApp:
         return d == "attachment" or d.startswith("attachment;") or d.startswith("attachment ")
 
     def decide_response(self, url: str, main_frame: bool, disposition: str | None = None) -> bool:
+        if main_frame and self.blocks_exam_server(url):
+            self.report_blocked(url)
+            return False
         if main_frame and not self.child_allows(url):
             if self.allows(url):
                 self.report_blocked(url)
@@ -115,11 +163,23 @@ class RestrictedApp:
     def on_commit(self, url: str) -> None:
         if self.scope is None or not url:
             return
+        if not url.lower().startswith("https://"):
+            return
         if N.is_sign_in(url, self.exam_host):
             self.sign_in_seen = True
+        if not self.first_commit_seen:
+            self.first_commit_seen = True
+            if url != self.start_url and N.is_landing(url, self.exam_host, self.scope):
+                self.sign_in_seen = True
         if self.phase == N.LOBBY and N.enters_quiz(url, self.exam_host, self.scope):
             self.phase = N.QUIZ
+            self.marker.set(self.aid)
+            self.record("canvas_quiz_started", "")
             self.timeline.append(f"phase quiz at {url}")
+        if N.enters_quiz(url, self.exam_host, self.scope):
+            self.set_armed(True)
+        elif self.scope.item_kind == "quizzes" and N.is_item_landing(url, self.exam_host, self.scope):
+            self.set_armed(False)
 
     def queue(self, kind: str, url: str) -> None:
         self.queued.append((kind, url))
@@ -142,18 +202,16 @@ class RestrictedApp:
         if self.finish_due is not None and now >= self.finish_due:
             self.finish_due = None
             live = self.tab.url
-            if not self.finishing and self.stand.finish_hit(live):
+            if not self.finishing and self.finish_hit(live):
                 self.finishing = True
                 self.finish_reason = "finish_url"
+                self.marker.clear(self.aid)
 
     # ---------------------------------------------------------------- canvasPageLoaded
     def page_loaded(self) -> None:
         if self.finishing:
             return
         self.auto_open_if_needed()
-        out = self.stand.on_loaded(self.tab)
-        if out == "clicked":
-            self.fills_attempted += 1
 
     def auto_open_if_needed(self) -> None:
         if self.scope is None or self.auto_opened or not self.sign_in_seen or self.phase != N.LOBBY:
@@ -168,7 +226,7 @@ class RestrictedApp:
 
     # ---------------------------------------------------------------- checkFinishURL (Canvas)
     def check_finish_url(self, url: str) -> None:
-        if self.finishing or not url or not self.stand.finish_hit(url):
+        if self.finishing or not url or not self.finish_hit(url):
             return
         if self.finish_due is not None:
             return
@@ -216,6 +274,7 @@ class RestrictedApp:
         if (self.scope is not None and (urlsplit(cur).hostname or "").lower() == self.exam_host
                 and N.is_under_item(cur, self.scope)):
             return
+        self.set_armed(False)
         self.tab.load(self.start_url)
 
     def back_pressed(self) -> None:
@@ -230,6 +289,8 @@ class RestrictedApp:
 
     # ---------------------------------------------------------------- start
     def start(self) -> None:
+        if self.start_error:
+            return
         self.tab.load(self.start_url)
 
     # ---------------------------------------------------------------- test helpers
@@ -238,8 +299,11 @@ class RestrictedApp:
         if settle:
             self.tab.settle()
 
+    def abort(self) -> None:
+        self.marker.clear(self.aid)
+
     def goto_unguarded(self, url: str) -> None:
-        """A page that reached the view without passing the delegate (the fill gate must still hold)."""
+        """A page that reached the view without passing the delegate."""
         self.tab.app = None
         try:
             self.tab.load(url)
