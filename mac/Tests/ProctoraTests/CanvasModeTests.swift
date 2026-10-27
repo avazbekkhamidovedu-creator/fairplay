@@ -232,13 +232,13 @@ import Foundation
     @Test func caseIsExact() {
         for path in ["/Courses/123/quizzes/456", "/courses/123/Quizzes/456", "/COURSES/123/QUIZZES/456",
                      "/Login", "/Courses/123", "/courses/123/quizzes/456/TAKE/../x"] {
-            #expect(decide(path, .lobby) == .block, path)
+            #expect(decide(path, .lobby) == .block, "\(path)")
         }
         #expect(decide("/courses/123/quizzes/456/Take", .lobby) == .allow)
         for path in ["/Inbox", "/INBOX/1", "/Conversations", "/API/v1/x", "/Users/self", "/CALENDAR",
                      "/Courses/999/pages"] {
-            #expect(decide(path, .lobby) == .block, path)
-            #expect(decide(path, .quiz, openBook: true) == .block, path)
+            #expect(decide(path, .lobby) == .block, "\(path)")
+            #expect(decide(path, .quiz, openBook: true) == .block, "\(path)")
         }
     }
 
@@ -256,21 +256,21 @@ import Foundation
     @Test func quizPhaseKeepsOnlyTheItem() {
         for path in ["/courses/123/quizzes/456", "/courses/123/quizzes/456/", "/courses/123/quizzes/456/take",
                      "/courses/123/quizzes/456/submissions/9", "/courses/123/quizzes/456/history?version=1"] {
-            #expect(decide(path, .quiz) == .allow, path)
+            #expect(decide(path, .quiz) == .allow, "\(path)")
         }
         for path in ["/login", "/login/", "/login/saml", "/login/session_token?return_to=/inbox"] {
-            #expect(decide(path, .quiz) == .allow, path)
-            #expect(decide(path, .quiz, kind: "assignments") == .allow, path)
+            #expect(decide(path, .quiz) == .allow, "\(path)")
+            #expect(decide(path, .quiz, kind: "assignments") == .allow, "\(path)")
         }
         for path in ["/loginx", "/Login", "/login/../inbox", "/login/%2e%2e/inbox", "/login%2f..%2finbox"] {
-            #expect(decide(path, .quiz) == .block, path)
+            #expect(decide(path, .quiz) == .block, "\(path)")
         }
         for path in ["/", "/courses/123", "/courses/123/quizzes", "/courses/123/assignments",
                      "/courses/123/pages/x", "/courses/123/modules", "/courses/123/files/1", "/courses/123/wiki/x",
                      "/files/1", "/courses/12", "/courses/123/quizzes/4567", "/courses/123/quizzes/456x",
                      "/courses/999/quizzes/456", "/conversations", "/inbox", "/profile", "/groups/1", "/calendar",
                      "/accounts/1", "/api/v1/users/self", "/users/1", "/dashboard"] {
-            #expect(decide(path, .quiz) == .block, path)
+            #expect(decide(path, .quiz) == .block, "\(path)")
         }
         #expect(decide("/courses/123/assignments/456/anything", .quiz, kind: "assignments") == .allow)
         #expect(decide("/courses/123/quizzes/456", .quiz, kind: "assignments") == .block)
@@ -281,9 +281,9 @@ import Foundation
                      "/courses/123/modules/items/5", "/courses/123/files", "/courses/123/files/77",
                      "/courses/123/files/folder/a/b", "/courses/123/wiki/page", "/files/77", "/files/77/preview",
                      "/courses/123/pages/", "/courses/123/quizzes/456/take"] {
-            #expect(decide(path, .quiz, openBook: true) == .allow, path)
+            #expect(decide(path, .quiz, openBook: true) == .allow, "\(path)")
             let closed: CanvasNavigation.Decision = path.contains("quizzes") ? .allow : .block
-            #expect(decide(path, .quiz, openBook: false) == closed, path)
+            #expect(decide(path, .quiz, openBook: false) == closed, "\(path)")
         }
         for path in ["/courses/123/files/77/download", "/files/77/download", "/courses/123/files/77/download/x",
                      "/courses/12/pages/x", "/courses/1234/modules", "/courses/999/files/1", "/courses/123/pagesx",
@@ -292,7 +292,7 @@ import Foundation
                      "/courses/123", "/filesx/1", "/file/1", "/",
                      "/courses/123/pages/../../999/pages", "/courses/123/files/1%2f..%2f..",
                      "/courses/123/modules/%2e%2e/x"] {
-            #expect(decide(path, .quiz, openBook: true) == .block, path)
+            #expect(decide(path, .quiz, openBook: true) == .block, "\(path)")
         }
         #expect(decide("/courses/123/pages/x", .lobby, openBook: true) == .block)
         #expect(decide("/courses/123/modules", .lobby, openBook: true) == .block)
@@ -314,7 +314,7 @@ import Foundation
 
     @Test func otherHostsFollowTheSiteRulesInTheLobby() {
         for h in ["login.microsoftonline.com", "docs.google.com", "canvas.dku.edu.evil.com", "example.com"] {
-            #expect(decide("/inbox", .lobby, host: h) == .allow, h)
+            #expect(decide("/inbox", .lobby, host: h) == .allow, "\(h)")
         }
         #expect(decide("/inbox", .lobby, host: "CANVAS.dku.edu") == .block)
         #expect(decide("/inbox", .quiz, host: "CANVAS.dku.edu") == .block)
@@ -323,15 +323,15 @@ import Foundation
     @Test func otherHostsInTheQuizPhase() {
         for h in ["login.microsoftonline.com", "sso.dku.edu", "api-1a2b3c.duosecurity.com", "weird-idp.example.edu",
                   "x.quiz-lti-iad-prod.instructure.com", "SSO.DKU.EDU"] {
-            #expect(decide("/anything", .quiz, host: h) == .allow, h)
-            #expect(decide("/anything", .quiz, kind: "assignments", openBook: true, host: h) == .allow, h)
+            #expect(decide("/anything", .quiz, host: h) == .allow, "\(h)")
+            #expect(decide("/anything", .quiz, kind: "assignments", openBook: true, host: h) == .allow, "\(h)")
         }
         for h in ["docs.google.com", "example.com", "canvas.dku.edu.evil.com", "evilcanvas.dku.edu", "a.instructure.com",
                   "authn.example.edu", "accounts.google.com", "idp.example.org", "quiz-lti-pdx-prod.instructure.com",
                   "duosecurity.com", "x.duosecurity.com.evil.com", "quiz-lti-iad-prod.instructure.com",
                   "dku.edu", "files.example.com"] {
-            #expect(decide("/anything", .quiz, host: h) == .block, h)
-            #expect(decide("/anything", .quiz, kind: "assignments", openBook: true, host: h) == .block, h)
+            #expect(decide("/anything", .quiz, host: h) == .block, "\(h)")
+            #expect(decide("/anything", .quiz, kind: "assignments", openBook: true, host: h) == .block, "\(h)")
         }
         let plain = CanvasNavigation.decide(url: URL(string: "http://sso.dku.edu/x")!, examHost: host,
                                             scope: scope(), phase: .quiz)
@@ -498,9 +498,9 @@ import Foundation
     @Test func downloadQueriesAreBlocked() {
         for q in ["?download=1", "?download", "?Download=1", "?DOWNLOAD_FRD=1", "?download_frd=1", "?x=1&download_frd=1",
                   "?x=1&Download=true#frag"] {
-            #expect(decide("/courses/123/files/77" + q, .quiz, openBook: true) == .block, q)
-            #expect(decide("/files/77" + q, .quiz, openBook: true) == .block, q)
-            #expect(decide("/courses/123/quizzes/456" + q, .lobby) == .block, q)
+            #expect(decide("/courses/123/files/77" + q, .quiz, openBook: true) == .block, "\(q)")
+            #expect(decide("/files/77" + q, .quiz, openBook: true) == .block, "\(q)")
+            #expect(decide("/courses/123/quizzes/456" + q, .lobby) == .block, "\(q)")
         }
         #expect(decide("/courses/123/files/77?wrap=1&x=download", .quiz, openBook: true) == .allow)
         #expect(decide("/courses/123/files/77?downloads=1", .quiz, openBook: true) == .allow)
@@ -1215,6 +1215,8 @@ import Foundation
         #expect(restarted == nil)
         #expect(second.armed)
         #expect(second.isFinishPage(submission))
+        second.canvasCommitted(page("/courses/123/quizzes/456"))
+        #expect(second.armed)
         second.canvasCommitted(page("/courses/123/quizzes/456"))
         #expect(!CanvasQuizMarker.isArmed("a1b2c3", in: defaults))
         let third = makeController()
