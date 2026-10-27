@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 MAX_TOKENS = 2
+MIN_TOKEN_LEN = 32
 
 
 def _int(name: str, default: int) -> int:
@@ -53,6 +54,7 @@ class DkuojConfig:
     tokens: list[str] = field(default_factory=list)    # every token a DKU OJ call may be signed with
     sync_seconds: int = 120
     delivery_rps: int = 10
+    auth_retry_hours: int = 6     # 401 / 403 / 404 on a hand-in are retried this long, then dead
     public_url: str = ""          # FairPlay's own address (FAIRPLAY_PUBLIC_URL), for report links
 
     @property
@@ -76,6 +78,7 @@ class DkuojConfig:
                    token=tokens[0] if tokens else "", tokens=tokens,
                    sync_seconds=_int("DKUOJ_SYNC_SECONDS", 120),
                    delivery_rps=_int("DKUOJ_DELIVERY_RPS", 10),
+                   auth_retry_hours=_int("DKUOJ_AUTH_RETRY_HOURS", 6),
                    public_url=public_url)
 
     def check(self, dev: bool = False) -> None:
@@ -83,6 +86,9 @@ class DkuojConfig:
         if len(self.tokens) > MAX_TOKENS:
             raise RuntimeError(f"DKUOJ_TOKEN holds {len(self.tokens)} tokens; at most {MAX_TOKENS} "
                                "(the new one first, the old one second, while DKU OJ is switched over).")
+        if any(len(t) < MIN_TOKEN_LEN for t in self.tokens):
+            raise RuntimeError(f"DKUOJ_TOKEN holds a token under {MIN_TOKEN_LEN} characters; DKU OJ "
+                               "silently ignores it and answers 404. Paste the whole token.")
         if not self.url:
             return
         parts = urlsplit(self.url)

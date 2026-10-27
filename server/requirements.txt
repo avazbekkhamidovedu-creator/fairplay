@@ -26,3 +26,5 @@ cryptography>=42,<51
 # exactly. Bump it now and then to pick up new shared-hosting suffixes.
 publicsuffixlist==1.0.2.20261007
 idna>=3.4,<4
+# Optional error reporting: only used when SENTRY_DSN is set (app/monitoring.py)
+sentry-sdk[fastapi]>=2,<3

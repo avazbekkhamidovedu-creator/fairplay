@@ -4,15 +4,19 @@ A row is written in the same transaction as the hand-in (submit, sealed submit, 
 The worker sends due rows, throttled to DKUOJ_DELIVERY_RPS: 200 -> sent (receipt kept);
 409 / 422 (and other refusals) -> dead + a teacher-visible event; 5xx / 429 / timeout ->
 failed, retried with backoff 30 s, 1, 2, 4, 8 min, then every 15 min, for 14 days. The
-student's hand-in receipt never waits for DKU OJ.
+student's hand-in receipt never waits for DKU OJ. 401 / 403 / 404 (clock skew, token
+rotation mismatch) are retried the same way for DKUOJ_AUTH_RETRY_HOURS (6), then dead. Every
+worker process runs the loop, so a row is claimed first with a lease (claimed_by, locked_until);
+a crashed worker's lease runs out and the row is picked up again.
 """
 from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
@@ -30,6 +34,7 @@ BACKOFF_FIRST = timedelta(seconds=30)
 BACKOFF_MAX = timedelta(minutes=15)
 GIVE_UP_AFTER = timedelta(days=14)
 BATCH = 50
+LEASE = timedelta(minutes=5)
 
 
 def backoff(tries: int) -> timedelta:
@@ -110,30 +115,62 @@ def _z(dt) -> str | None:
     return dt.replace(microsecond=0).isoformat() + "Z" if dt is not None else None
 
 
+def _due(now):
+    return (OjDelivery.source == "dkuoj", or_(OjDelivery.status == "pending", OjDelivery.status == "failed"),
+            OjDelivery.next_at <= now,
+            or_(OjDelivery.locked_until.is_(None), OjDelivery.locked_until <= now))
+
+
+async def claim_due(sessionmaker, now, limit: int = BATCH, worker: str | None = None,
+                    lease: timedelta = LEASE) -> list[int]:
+    """Lease up to `limit` due rows to `worker`; no row is handed to two claimers."""
+    worker = worker or uuid.uuid4().hex[:16]
+    until = now + lease
+    async with sessionmaker() as session:
+        if session.bind.dialect.name == "postgresql":
+            ids = (await session.execute(
+                select(OjDelivery.id).where(*_due(now)).order_by(OjDelivery.next_at, OjDelivery.id)
+                .limit(limit).with_for_update(skip_locked=True))).scalars().all()
+            if ids:
+                await session.execute(update(OjDelivery).where(OjDelivery.id.in_(ids))
+                                      .values(locked_until=until, claimed_by=worker))
+            await session.commit()
+            return list(ids)
+        cand = (await session.execute(
+            select(OjDelivery.id).where(*_due(now)).order_by(OjDelivery.next_at, OjDelivery.id)
+            .limit(limit))).scalars().all()
+        got = []
+        for did in cand:
+            res = await session.execute(update(OjDelivery).where(OjDelivery.id == did, *_due(now))
+                                        .values(locked_until=until, claimed_by=worker))
+            await session.commit()
+            if res.rowcount == 1:
+                got.append(did)
+        return got
+
+
 async def deliver_due(sessionmaker, client: DkuojClient, cfg, now=None, limit: int = BATCH,
                       throttle: Throttle | None = None) -> dict:
     """Send every due DKU OJ row (pending / failed with next_at <= now). Returns counts."""
     now = now or utcnow()
     throttle = throttle or Throttle(cfg.delivery_rps)
     counts = {"sent": 0, "failed": 0, "dead": 0}
-    async with sessionmaker() as session:
-        ids = (await session.execute(
-            select(OjDelivery.id).where(OjDelivery.source == "dkuoj",
-                                        or_(OjDelivery.status == "pending", OjDelivery.status == "failed"),
-                                        OjDelivery.next_at <= now)
-            .order_by(OjDelivery.next_at, OjDelivery.id).limit(limit))).scalars().all()
+    worker = uuid.uuid4().hex[:16]
+    ids = await claim_due(sessionmaker, now, limit, worker)
     for did in ids:
         async with sessionmaker() as session:
-            outcome = await _deliver_one(session, client, throttle, cfg, did, now)
+            outcome = await _deliver_one(session, client, throttle, cfg, did, now, worker)
         if outcome:
             counts[outcome] += 1
     return counts
 
 
 async def _deliver_one(session: AsyncSession, client: DkuojClient, throttle: Throttle, cfg,
-                       did: int, now) -> str | None:
+                       did: int, now, worker: str | None = None) -> str | None:
     d = await session.get(OjDelivery, did)
     if d is None or d.status not in ("pending", "failed"):
+        return None
+    if worker is not None and (d.claimed_by != worker or d.locked_until is None or d.locked_until <= now):
         return None
     a = await session.get(Attempt, d.attempt_id)
     e = await session.get(Exam, d.exam_id)
@@ -141,26 +178,37 @@ async def _deliver_one(session: AsyncSession, client: DkuojClient, throttle: Thr
         return await _dead(session, d, "the attempt or exam is gone", now)
     # DKU OJ knows the student by NetID (v2 §4); the FairPlay username is their own choice
     row = (await session.execute(select(User.netid, User.username).where(User.id == a.student_id))).first()
-    username = (row.netid or row.username) if row is not None else None
+    if row is None or not row.netid:
+        return await _dead(session, d, "the student's account has no NetID, so DKU OJ cannot match the hand-in "
+                                       "(link the account to its NetID, then resend)", now)
     try:
-        body = await _payload(session, client, throttle, cfg, d, a, e, username or "")
+        body = await _payload(session, client, throttle, cfg, d, a, e, row.netid)
         await throttle.wait()
         resp = await client.submit(e.external_key, body, attempts=1)
     except OjError as err:
         detail = _err_text(err)
-        if err.retryable:
+        d.last_status = err.status
+        if err.retryable or err.auth_class:
             d.tries = int(d.tries or 0) + 1
             if now - d.created_at > GIVE_UP_AFTER:
                 return await _dead(session, d, f"gave up after 14 days: {detail}", now)
+            if err.auth_class:
+                if d.auth_failed_at is None:
+                    d.auth_failed_at = now
+                hours = max(1, int(getattr(cfg, "auth_retry_hours", 6) or 6))
+                if now - d.auth_failed_at > timedelta(hours=hours):
+                    return await _dead(session, d, f"refused for {hours} hours: {detail}", now)
             d.status, d.last_error = "failed", detail
             d.next_at = now + backoff(d.tries)
+            d.locked_until = d.claimed_by = None
             await session.commit()
             log.warning("DKU OJ delivery of %s failed (try %d): %s", d.attempt_id, d.tries, detail)
             return "failed"
         d.tries = int(d.tries or 0) + 1
         return await _dead(session, d, detail, now)
     d.tries = int(d.tries or 0) + 1
-    d.status, d.sent_at, d.last_error = "sent", now, None
+    d.status, d.sent_at, d.last_error, d.last_status = "sent", now, None, 200
+    d.locked_until = d.claimed_by = None
     d.receipt = str(resp.get("receipt") or "")[:200] or None
     await session.commit()
     return "sent"
@@ -177,6 +225,7 @@ async def _dead(session: AsyncSession, d: OjDelivery, detail: str, now) -> str:
     """Admin alert: logged as an error and shown to the exam's teachers as an event of the
     attempt (it stays open in their review list until looked at)."""
     d.status, d.last_error, d.next_at = "dead", detail[:500], now
+    d.locked_until = d.claimed_by = None
     await session.commit()
     log.error("DKU OJ delivery of attempt %s is dead: %s", d.attempt_id, detail)
     try:

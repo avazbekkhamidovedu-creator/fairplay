@@ -71,6 +71,11 @@ class OjError(Exception):
     def retryable(self) -> bool:
         return self.status is None or self.status == 429 or self.status >= 500 or self.status == 408
 
+    @property
+    def auth_class(self) -> bool:
+        """Refusals that clock skew or a token rotation mismatch cause and a fix on either side clears."""
+        return self.status in (401, 403, 404)
+
 
 def _retry_after(resp: httpx.Response) -> float | None:
     ra = resp.headers.get("retry-after")

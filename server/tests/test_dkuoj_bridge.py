@@ -918,7 +918,7 @@ def test_dkuoj_refusals_are_dead_not_retried(tmp_path, static_dir, monkeypatch):
             assert oj_exam(c, teacher)["question_count"] == 5
             e = oj_exam(c, teacher)
             e = c.post(f"/api/exams/{e['id']}/open", headers=teacher).json()
-            for status, who in ((413, "alice"), (401, "carol")):
+            for status, who in ((413, "alice"), (400, "carol")):
                 real.submit_status = status
                 h = login(c, who)
                 a = start(c, h, e["id"], e["start_code"]).json()

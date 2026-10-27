@@ -14,7 +14,8 @@ BigIntPK = BigInteger().with_variant(Integer(), "sqlite")
 
 class ExternalDelivery(Base):
     """Outbox: one row per handed-in attempt of an exam from an external system, written in
-    the same transaction as the hand-in. status pending | sent | failed | dead. `payload`
+    the same transaction as the hand-in. status pending | sent | failed | dead. A worker claims
+    a row with a lease (claimed_by, locked_until) before sending. `payload`
     is the body built once (every retry sends the same bytes); `uploads` maps answer file
     id -> the external system's upload id. Sent by the integration's worker."""
     __tablename__ = "external_deliveries"
@@ -32,6 +33,10 @@ class ExternalDelivery(Base):
     uploads: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auth_failed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # Each integration's own tables (registered with Base for create_all)

@@ -24,7 +24,7 @@ async def enqueue(session: AsyncSession, source: str, aid: str, exam_id: str, no
 
 def delivery_out(d: ExternalDelivery) -> dict:
     return {"status": d.status, "tries": int(d.tries or 0), "last_error": d.last_error,
-            "receipt": d.receipt, "next_at": iso(d.next_at) if d.status in ("pending", "failed") else None,
+            "last_status": d.last_status, "receipt": d.receipt, "next_at": iso(d.next_at) if d.status in ("pending", "failed") else None,
             "sent_at": iso(d.sent_at)}
 
 

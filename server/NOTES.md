@@ -133,3 +133,20 @@ are kept for one release, so exam pages opened before the 0.6.2 deploy still laz
 asset pack is now served at `/app-assets/v/<version>/` (immutable). A fresh `npm run build`
 copied into `server/static` drops them; restore them with
 `git checkout v0.6.1 -- server/static/pyodide server/static/pdfjs server/static/assets` until 0.6.3.
+
+## Monitoring
+- **Sentry**: set `SENTRY_DSN` (optional `FAIRPLAY_RELEASE`). Off and import-free when unset or when `sentry-sdk` is not installed. No PII, no request bodies, no local variables; Authorization and cookie headers, bearer tokens, query strings and start/exit codes are scrubbed (`app/monitoring.py`).
+- **`/metrics`** (Prometheus text): set `METRICS_TOKEN`, scrape with `Authorization: Bearer <token>`. Unset = 404, wrong token = 401. Keep it off the public internet as well (nginx `allow`/`deny`).
+  - `fairplay_http_requests_total{method,route,status}`, `fairplay_http_request_duration_seconds` (histogram, buckets 25 ms to 10 s), `fairplay_http_5xx_total{route}`; `route` is the route template, never the raw path.
+  - `fairplay_admission_rejected_total`: 503/408 answers with Retry-After (the `FAIRPLAY_MAX_INFLIGHT` gate), counted from outside the gate.
+  - `fairplay_db_pool_checked_out` / `fairplay_db_pool_capacity` (Postgres only; per worker). Pool waits are not exposed, SQLAlchemy has no cheap counter for them.
+  - `fairplay_outbox_deliveries{status=pending|failed|dead}` and `fairplay_outbox_oldest_pending_age_seconds` (pending or failed = still being retried) from `external_deliveries`, one read-only query cached 15 s. The DKU OJ bridge's own `OjDelivery` table is not covered.
+  - `fairplay_lms_last_sync_age_seconds`: latest `lms_connections.last_sync_at` (LMS roster sync only, `lms` feature). No other integration records a last successful sync, so there is no metric for it.
+  - Counters are per worker process (`WEB_CONCURRENCY`): a scrape reaches one worker. Use `rate()` over several scrapes, or scrape each worker through its own port if exact totals matter.
+- **`/api/health`** is unchanged (cheap, not counted by the in-flight gate): alert on it from outside.
+- **Suggested alerts**
+  - `/api/health` failing for 2 minutes.
+  - 5xx above 2 % of requests for 5 minutes while an exam is live (`sum(rate(fairplay_http_5xx_total[5m])) / sum(rate(fairplay_http_requests_total[5m])) > 0.02`; silence outside exam windows or gate it on the exam schedule).
+  - Any `fairplay_outbox_deliveries{status="dead"} > 0`, or `fairplay_outbox_oldest_pending_age_seconds > 1800`.
+  - Sync failing 15 minutes: `fairplay_lms_last_sync_age_seconds > 900` where syncs are scheduled; the DKU OJ bridge needs its own signal.
+  - `fairplay_db_pool_checked_out / fairplay_db_pool_capacity > 0.8`; also watch Postgres `max_connections` usage on the database itself.
