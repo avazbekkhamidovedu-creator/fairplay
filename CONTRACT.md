@@ -517,6 +517,25 @@ Binding for `server/`, `web/` and `mac/`. Background: `project-notes/lockdown-au
 
 Start codes have **6 digits**. Each live exam also has a 6-digit `invigilator_code` (teacher views only: exam, live room).
 
+### Browser gate
+
+The student side (`/student/*` pages, `/api/student/*`, `/api/setup/*` endpoints) is for the FairPlay apps only. Any request to these routes from a browser gets the same `404 {"detail": "Not Found"}` as an unknown API path — no FairPlay text, no login page, nothing that identifies the endpoint. A student login attempt from a browser counts as a failed attempt (401, then 429 once the sign-in limits are reached) exactly like a wrong password, with no way to distinguish.
+
+**FAIRPLAY_BROWSER_GATE** env var (default `headers`):
+- `off`: no gating, all requests allowed (dev only; requires `FAIRPLAY_REQUIRE_APP=0` together).
+- `headers`: allows User-Agent with `FairPlay/<version>`, or `X-FairPlay-Platform` (mac|windows|ipad) + `X-FairPlay-Version` headers, or empty user agent, or Edge/WebView2 on Windows (for 0.7.x), or `X-FairPlay-Session` header on POST `/api/student/attempts/{aid}/events` only (Mac watchdog).
+- `strict`: only allows `FairPlay/` user agent, `X-FairPlay-Platform` + `X-FairPlay-Version`, or `X-FairPlay-Session` for the watchdog endpoint; rejects empty user agent and Windows Edge until the app sends `FairPlay-Windows` marker.
+
+What released apps send: Mac and iPad set `User-Agent` to include `FairPlay/<version>` on every page load and fetch; on their own API calls they send `X-FairPlay-Platform` + `X-FairPlay-Version`. Windows 0.7.x sends neither (stock Edge user agent on the web view, no headers on API calls); A later Windows build will send the `FairPlay/<version> FairPlay-Windows` user agent and the platform and version headers.
+
+Production recommendation: deploy with `headers` now (accepts Windows 0.7.x). Move to `strict` once the first Windows build that sends these markers is the minimum Windows version (`MIN_APP_VERSION_WINDOWS`).
+
+Exempt routes (no gating): `/api/health`, `/api/app/version`, `/` and `/teacher/*` pages, `/api` teacher endpoints, `/assets/*`, signed DKU OJ routes (`/api/integrations/dkuoj/v1/exams/{id}`), `/api/student/attempts/*/sealed-submit`.
+
+**Limits:** headers can be copied by anyone with network tools; they stop a browser and curl, not a determined user. Real proof (Apple App Attest or a signed-build check) is a later step. The student JavaScript is planned to be split into chunks under `/student/assets`, so the same gate covers it.
+
+For a local browser-test setup (e2e, demo, or Vite dev), set both `FAIRPLAY_BROWSER_GATE=off` and `FAIRPLAY_REQUIRE_APP=0`. Never use this on any real server.
+
 ### Start (app proof)
 
 1. `GET /api/student/exams/{id}/challenge` → `{"nonce", "expires_in": 120}` (single use, bound to student + exam).

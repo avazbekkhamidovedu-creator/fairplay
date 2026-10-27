@@ -16,6 +16,7 @@ from .admission import AdmissionLimit
 from .app_version import UpgradeRequired, upgrade_required_handler
 from .config import Settings
 from .db import Database, set_db
+from . import monitoring
 from .routes_auth import router as auth_router
 from .routes_gradebook import gradebook_router, grading_router
 from .routes_insights import router as insights_router  # slice 6 F/G
@@ -27,7 +28,7 @@ from .routes_teacher import router as teacher_router
 from .trial import refresh_trial_cache, router as trial_router
 from .seed import refuse_public_demo_logins, seed, seed_demo_class
 from .routes_classes import student_router as classes_student_router, teacher_router as classes_teacher_router
-from .static_files import ASSET_DIRS, StaticCache, serve as serve_static, versioned_asset
+from .static_files import StaticCache, is_asset_path, serve as serve_static, versioned_asset
 from .store import make_store, set_store
 from .timeutil import iso, utcnow
 
@@ -41,6 +42,7 @@ for _name in ("httpx", "httpcore"):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    monitoring.init_sentry()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -106,6 +108,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"detail": detail}, status_code=422)
     app.state.settings = settings
     app.add_exception_handler(UpgradeRequired, upgrade_required_handler)   # S2: 426
+    from .browser_gate import BrowserGate
+    app.add_middleware(BrowserGate, mode=settings.browser_gate)   # innermost: answers carry the usual headers
     app.add_middleware(SignPrivateUploads)     # audit L-18: expiring links to scan images
     app.add_middleware(GuardMiddleware)        # audit L-04 / S-16: size limits + headers
     # Audit #12: no wildcard CORS. The UI is served by this server (same origin); other
@@ -168,6 +172,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)
         app.include_router(scan_router)
 
+    monitoring.install(app)
+
     @app.get("/api/health")
     async def health():
         # demo_logins: the login page may show the demo passwords (dev / demo servers only).
@@ -208,7 +214,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await serve_static(request, candidate, os.path.relpath(candidate, static_root),
                                       static_cache, is_index=candidate == os.path.join(static_root, "index.html"),
                                       cache_override=cache_override)
-        if path.split("/", 1)[0] in ASSET_DIRS:
+        if is_asset_path(path):
             # a missing script or pack file is a 404, never the app's HTML page
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         index = os.path.join(static_root, "index.html")

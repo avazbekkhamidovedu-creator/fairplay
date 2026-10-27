@@ -56,14 +56,20 @@ def media_type(path: str) -> str:
 
 # Folders of scripts and data: a missing file there is a 404, not the app's page.
 ASSET_DIRS = {"assets", "app-assets", "pyodide", "pdfjs"}
+# The student screens are built into chunks under student/assets (hashed names, like /assets).
+STUDENT_ASSETS = "student/assets/"
+
+
+def is_asset_path(rel_path: str) -> bool:
+    return rel_path.split("/", 1)[0] in ASSET_DIRS or rel_path.startswith(STUDENT_ASSETS)
 
 
 def cache_control(rel_path: str, is_index: bool) -> str:
     if is_index:
         return REVALIDATE
-    if rel_path.startswith("assets/"):
+    if rel_path.startswith(("assets/", STUDENT_ASSETS)):
         return IMMUTABLE
-    if rel_path.split("/", 1)[0] in ASSET_DIRS:
+    if is_asset_path(rel_path):
         return REVALIDATE
     return HOURLY
 

@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .browser_gate import request_from_app
 from .db import get_session
 from .models import User
 from .schemas import LoginIn
@@ -88,13 +90,13 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
         ok = await verify_password_async(body.password, stored,
                                          getattr(s, "login_hash_slots", MAX_PARALLEL_HASHES))
     if class_login is not None:
-        if ok:
+        if ok and request_from_app(request):
             from .integrations.dkuoj.setup import class_login_answer
             return class_login_answer(s, class_login)
         if await store.incr(fails_cl, FAIL_WINDOW) > CLASS_LOGIN_IP_FAILS:
             raise HTTPException(429, TOO_MANY)
         raise HTTPException(401, "Invalid username or password")
-    if row is None or not ok:
+    if row is None or not ok or (row.role == "student" and not request_from_app(request)):
         await store.incr(fails_ui, FAIL_WINDOW)
         await store.incr(fails_u, FAIL_WINDOW)
         raise HTTPException(401, "Invalid username or password")
@@ -127,9 +129,11 @@ async def bump_token_version(session: AsyncSession, user_id: int) -> None:
 
 
 @router.get("/me")
-async def me(p: Principal = Depends(current_principal),
+async def me(request: Request, p: Principal = Depends(current_principal),
              session: AsyncSession = Depends(get_session)):
     u = await session.get(User, p.user_id)
     if u is None:
         raise HTTPException(401, "Invalid or expired token")
+    if u.role == "student" and not request_from_app(request):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     return {"username": u.username, "name": u.name, "role": u.role}

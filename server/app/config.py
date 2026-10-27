@@ -86,6 +86,10 @@ class Settings:
     # Audit #1-#3: exams can only be started from the FairPlay app (signed proof) and every
     # attempt is bound to one app session. Off only for local tests / browser demos.
     require_app: bool = field(default_factory=lambda: _flag("FAIRPLAY_REQUIRE_APP", True))
+    # Student pages and student API answer a bare 404 to anything that is not a FairPlay app
+    # (app/browser_gate.py): strict | headers | off.
+    browser_gate: str = field(default_factory=lambda: (
+        os.environ.get("FAIRPLAY_BROWSER_GATE", "headers").strip().lower() or "headers"))
     # HMAC keys compiled into the Mac app (comma-separated; several = key rotation).
     app_keys: list[str] = field(default_factory=lambda: _list("FAIRPLAY_APP_KEY"))
     # Extra browser origins allowed to call the API (the UI itself is same-origin).
