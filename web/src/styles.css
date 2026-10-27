@@ -126,6 +126,18 @@ p {
 .header-spacer {
   flex: 1;
 }
+.header-who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.25;
+}
+.app-version {
+  color: var(--text-2);
+  font-size: 0.72rem;
+  opacity: 0.8;
+  white-space: nowrap;
+}
 .header-user {
   color: var(--text-2);
   font-size: 0.9rem;

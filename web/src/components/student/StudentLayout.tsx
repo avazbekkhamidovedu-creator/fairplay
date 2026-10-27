@@ -5,6 +5,7 @@ import * as bridge from "../../lib/bridge";
 import { clearExamDataOnSignOut } from "../../lib/offline";
 import { useFeatures } from "../../lib/features";
 import { useMe } from "../../lib/useMe";
+import { AppVersion } from "../AppVersion";
 import { LogoMark, Wordmark } from "../ui/Icon";
 import "../../styles/student.css";
 import "../../styles/stu-shell.css";
@@ -99,6 +100,7 @@ export function StudentLayout({ children, white }: { children: ReactNode; white?
               {features.has("practice") && <NavLink to="/student/practice">Practice</NavLink>}
             </nav>
             <div className="stu-user">
+              <AppVersion />
               <span className="stu-avatar" title={me?.name} aria-label={me ? `Signed in as ${me.name}` : "Signed in"} role="img">
                 {initial}
               </span>

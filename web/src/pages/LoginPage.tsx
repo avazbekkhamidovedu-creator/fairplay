@@ -1,27 +1,27 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { ApiError, auth, setToken } from "../api/client";
 import { isClassLoginSetup, type ClassLoginSetupResponse, type Role } from "../api/types";
-import ClassLoginSetup from "./ClassLoginSetup";
-import { isNative } from "../lib/bridge";
+const ClassLoginSetup = lazy(() => import("./ClassLoginSetup"));
 import { Icon, LogoMark, Wordmark } from "../components/ui/Icon";
 import "../styles/teacher.css";
 
-const COPY: Record<Role, { title: string; sub: string; hint: string; pitch: string; points: string[] }> = {
-  teacher: {
-    title: "Teacher sign in",
-    sub: "Create exams, run them live and grade in one place.",
-    hint: "teacher / teacher123",
-    pitch: "Calm, fair exams on every student laptop.",
-    points: ["Full-screen lockdown on every laptop", "Start codes you read aloud in the room", "Grade essays with rubrics, release when ready"],
-  },
-  student: {
-    title: "Student sign in",
-    sub: "Sign in to write your exam and see your grades.",
-    hint: "alice / alice123",
-    pitch: "Your answers are saved as you type.",
-    points: ["Answers sync even if the Wi-Fi drops", "Your teacher reads the start code aloud", "See feedback once grades are released"],
-  },
+export interface LoginCopy {
+  title: string;
+  sub: string;
+  hint: string;
+  pitch: string;
+  points: string[];
+  /** shown under the form (the student page's note about the class login) */
+  note?: string;
+}
+
+const TEACHER_COPY: LoginCopy = {
+  title: "Teacher sign in",
+  sub: "Create exams, run them live and grade in one place.",
+  hint: "teacher / teacher123",
+  pitch: "Calm, fair exams on every student laptop.",
+  points: ["Full-screen lockdown on every laptop", "Start codes you read aloud in the room", "Grade essays with rubrics, release when ready"],
 };
 
 /** Audit S-01 / W-04: the demo passwords exist (and are shown) only on a dev or demo
@@ -44,7 +44,7 @@ export function useDemoLogins(): boolean {
   return demo;
 }
 
-export default function LoginPage({ role }: { role: Role }) {
+export default function LoginPage({ role, copy = TEACHER_COPY }: { role: Role; copy?: LoginCopy }) {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -52,9 +52,7 @@ export default function LoginPage({ role }: { role: Role }) {
   const [busy, setBusy] = useState(false);
   /** Bridge v2: a class login's set-up (the setup token lives only here, never in storage). */
   const [setup, setSetup] = useState<ClassLoginSetupResponse | null>(null);
-  const copy = COPY[role];
   const demo = useDemoLogins();
-  const other: Role = role === "teacher" ? "student" : "teacher";
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -116,15 +114,17 @@ export default function LoginPage({ role }: { role: Role }) {
       <main className="t-login-main">
         <div className="t-login-card">
           {setup ? (
-            <ClassLoginSetup
-              setup={setup}
-              onExpired={(message) => {
-                setSetup(null);
-                setPassword("");
-                setError(message);
-              }}
-              onDone={() => navigate(`/${role}`, { replace: true })}
-            />
+            <Suspense fallback={null}>
+              <ClassLoginSetup
+                setup={setup}
+                onExpired={(message) => {
+                  setSetup(null);
+                  setPassword("");
+                  setError(message);
+                }}
+                onDone={() => navigate(`/${role}`, { replace: true })}
+              />
+            </Suspense>
           ) : (
             <>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -168,21 +168,14 @@ export default function LoginPage({ role }: { role: Role }) {
                 {busy ? "Signing in…" : "Sign in"}
               </button>
             </form>
-            {role === "student" && (
+            {copy.note && (
               <p className="t-login-switch" style={{ margin: 0 }}>
-                First time? Use the class login your professor gave you.
+                {copy.note}
               </p>
             )}
             {demo && (
               <p className="t-demo" style={{ margin: 0 }}>
                 Demo account: <span className="mono">{copy.hint}</span>
-              </p>
-            )}
-            {/* The FairPlay app is for students only and refuses teacher pages (audit M-15). */}
-            {!(isNative() && other === "teacher") && (
-              <p className="t-login-switch" style={{ margin: 0 }}>
-                {role === "teacher" ? "Writing an exam? " : "Teaching? "}
-                <Link to={`/${other}/login`}>{other === "teacher" ? "Teacher sign in" : "Student sign in"}</Link>
               </p>
             )}
             </>

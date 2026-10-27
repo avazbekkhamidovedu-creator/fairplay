@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import LoginPage from "../pages/LoginPage";
+import StudentLogin from "../pages/student/StudentLogin";
 import { checkNewLogin } from "../pages/ClassLoginSetup";
 
 /** Bridge v2 §4: first sign-in with a temporary class login. */
@@ -50,7 +50,7 @@ function renderLogin() {
   render(
     <MemoryRouter initialEntries={["/student/login"]}>
       <Routes>
-        <Route path="/student/login" element={<LoginPage role="student" />} />
+        <Route path="/student/login" element={<StudentLogin />} />
         <Route path="/student" element={<p>Student home</p>} />
       </Routes>
     </MemoryRouter>,

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LoginPage from "../pages/LoginPage";
+import StudentLogin from "../pages/student/StudentLogin";
 
 /** Audit S-01 / W-04: demo passwords only when the server says it is a demo server. */
 describe("login page demo hint", () => {
@@ -31,7 +32,7 @@ describe("login page demo hint", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
     render(
       <MemoryRouter>
-        <LoginPage role="student" />
+        <StudentLogin />
       </MemoryRouter>,
     );
     await waitFor(() => expect(fetch).toHaveBeenCalled());

@@ -1,9 +1,5 @@
 import type { AllowedAppOption,
-  AnswerMap,
-  DeviceCheckInput,
   ReadinessRow,
-  AttemptView,
-  EventsResponse,
   Exam,
   ExamStudent,
   OpenTo,
@@ -14,21 +10,11 @@ import type { AllowedAppOption,
   Gradebook,
   GradingQueue,
   GradingSummary,
-  StudentFeedback,
-  StudentGradeSummary,
-  TrialInfo,
-  HeartbeatResponse,
-  IntegrityEvent,
   LiveRoom,
-  LoginResponse,
   LoginResult,
-  SetupIdentifyResponse,
   Me,
   Results,
   Role,
-  SaveAnswersResponse,
-  StudentExamSummary,
-  SubmitResponse,
 } from "./types";
 import type {
   LmsConnection,
@@ -41,7 +27,6 @@ import type {
 } from "./types"; // slice 5
 
 import * as bridge from "../lib/bridge";
-import { attemptIdOfPath, getAttemptSession, setAttemptSession } from "../lib/appSession";
 
 // ---------- token storage (one token per role) ----------
 
@@ -140,7 +125,7 @@ export class SwapNeededError extends ApiError {
 /** S2: an app older than the server's minimum (426). App.tsx shows the update screen. */
 export const UPGRADE_EVENT = "fairplay-upgrade-required";
 
-function errorOf(status: number, body: unknown, fallback: string): ApiError {
+export function errorOf(status: number, body: unknown, fallback: string): ApiError {
   const b = body && typeof body === "object" ? (body as { detail?: unknown; min_app_version?: unknown }) : {};
   const d = b.detail;
   const code = d && typeof d === "object" && !Array.isArray(d) && typeof (d as { code?: unknown }).code === "string"
@@ -152,9 +137,16 @@ function errorOf(status: number, body: unknown, fallback: string): ApiError {
   return new ApiError(status, detailOf(body, fallback), code, min, retryAfter);
 }
 
-/** Every /api request carries the app's version and platform once the bridge knows them. */
-function withAppHeaders(headers: Record<string, string>): Record<string, string> {
-  return { ...headers, ...bridge.appHeaders() };
+let headerProvider: (path: string) => Record<string, string> = () => ({});
+
+/** The student side registers its extra request headers (app version, platform, attempt
+ *  session) when it loads. */
+export function setHeaderProvider(fn: (path: string) => Record<string, string>): void {
+  headerProvider = fn;
+}
+
+export function withAppHeaders(headers: Record<string, string>, path: string): Record<string, string> {
+  return { ...headers, ...headerProvider(path) };
 }
 
 /** Network failure (offline, server down). Callers treat it as "try again later". */
@@ -182,6 +174,10 @@ type UnauthorizedHandler = (role: Role) => void;
 let onUnauthorized: UnauthorizedHandler = (role) => {
   window.location.assign(`/${role}/login`);
 };
+
+export function handleUnauthorized(role: Role): void {
+  onUnauthorized(role);
+}
 
 /** Override the 401 behaviour (the app uses router navigation; tests use a spy). */
 export function setUnauthorizedHandler(handler: UnauthorizedHandler): void {
@@ -219,18 +215,12 @@ export async function request<T>(
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const token = role ? getToken(role) : null;
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (role === "student") {
-    // Audit #3: the attempt's app session goes along with every request for it.
-    const aid = attemptIdOfPath(path);
-    const sess = aid ? getAttemptSession(aid) : null;
-    if (sess) headers["X-FairPlay-Session"] = sess;
-  }
 
   let res: Response;
   try {
     res = await fetch(path, {
       method,
-      headers: withAppHeaders(headers),
+      headers: withAppHeaders(headers, path),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -266,7 +256,7 @@ export async function request<T>(
   return data as T;
 }
 
-function announceUpgrade(minVersion: string | null): void {
+export function announceUpgrade(minVersion: string | null): void {
   try {
     window.dispatchEvent(new CustomEvent(UPGRADE_EVENT, { detail: { min_app_version: minVersion } }));
   } catch {
@@ -289,49 +279,19 @@ export const auth = {
   },
 };
 
-// ---------- class-login set-up (bridge v2 §4) ----------
+// ---------- student side (separate chunk: the calls load src/api/student.ts on first use) ----------
 
-/**
- * A call made with a one-off set-up token. The token is passed in and never stored (no
- * setToken, no localStorage/sessionStorage); every status, 401 and 503 included, comes back
- * as an ApiError so the set-up screens can say what happened (no sign-in redirect).
- */
-async function setupRequest<T>(bearer: string, path: string, body: unknown): Promise<T> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${bearer}`,
-  };
-  let res: Response;
-  try {
-    res = await fetch(path, { method: "POST", headers: withAppHeaders(headers), body: JSON.stringify(body) });
-  } catch {
-    throw new NetworkError();
-  }
-  let data: unknown = null;
-  const text = await res.text();
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-  }
-  if (!res.ok) {
-    const err = errorOf(res.status, data, res.statusText || `Error ${res.status}`);
-    if (res.status === 426) announceUpgrade(err.minAppVersion);
-    throw err;
-  }
-  return data as T;
+type Fn = (...args: never[]) => Promise<unknown>;
+type StudentModule = typeof import("./student");
+
+function lazy<F extends Fn>(pick: (m: StudentModule) => F): F {
+  return ((...args: unknown[]) =>
+    import("./student").then((m) => (pick(m) as unknown as (...a: unknown[]) => unknown)(...args))) as unknown as F;
 }
 
 export const setupApi = {
-  /** Step 1: who the student is, checked against the class list (setup token). */
-  identify: (setupToken: string, input: { first_name: string; last_name: string; netid: string }) =>
-    setupRequest<SetupIdentifyResponse>(setupToken, "/api/setup/identify", input),
-  /** Step 2: the student's own login (identity token, single use) → the normal login response. */
-  account: (identityToken: string, input: { username: string; password: string; password2: string }) =>
-    setupRequest<LoginResponse>(identityToken, "/api/setup/account", input),
+  identify: lazy((m) => m.setupApi.identify),
+  account: lazy((m) => m.setupApi.account),
 };
 
 // ---------- teacher ----------
@@ -418,92 +378,22 @@ export const teacherApi = {
   },
 };
 
-// ---------- student ----------
-
-/**
- * POST start (audit #1): inside the FairPlay app it first gets a single-use challenge and
- * has the app sign it; in a browser it sends no proof (the server refuses unless
- * FAIRPLAY_REQUIRE_APP=0). Stores the returned app session for the attempt.
- */
-async function startAttempt(
-  examId: string,
-  startCode: string,
-  offlineStartedAt?: string,
-  trial = false,
-): Promise<AttemptView> {
-  // 2026-10-22: the sample exam has its own challenge/start (no class, no start code) but
-  // the same app proof, session and lock as a real exam.
-  const base = trial ? "/api/student/trial" : `/api/student/exams/${enc(examId)}`;
-  const body: Record<string, unknown> = trial ? {} : { start_code: startCode };
-  if (offlineStartedAt) body.offline_started_at = offlineStartedAt;
-  let deviceId: string | null = null;
-  if (bridge.isNative()) {
-    const ch = await request<{ nonce: string }>("student", "GET", `${base}/challenge`);
-    const proof = await bridge.attest(ch.nonce);
-    if (proof) {
-      body.client = proof;
-      deviceId = proof.device_id;
-    }
-  }
-  let view: AttemptView;
-  try {
-    view = await request<AttemptView>("student", "POST", `${base}/start`, body);
-  } catch (e) {
-    // S4: bound to another computer; this one can ask to take over (swap-request).
-    if (e instanceof ApiError && e.code === "swap_needed") throw new SwapNeededError(e.detail, deviceId);
-    throw e;
-  }
-  if (view.session) {
-    setAttemptSession(view.attempt_id, view.session);
-    const token = getToken("student");
-    if (token) bridge.setExamSession({ attempt_id: view.attempt_id, token, session: view.session });
-  }
-  return view;
-}
-
 export const studentApi = {
-  listExams: () => request<StudentExamSummary[]>("student", "GET", "/api/student/exams"),
-  start: (examId: string, startCode: string) => startAttempt(examId, startCode),
-  getAttempt: (aid: string) => request<AttemptView>("student", "GET", `/api/student/attempts/${enc(aid)}`),
-  saveAnswers: (aid: string, answers: AnswerMap, clientSeq: number) =>
-    request<SaveAnswersResponse>("student", "PUT", `/api/student/attempts/${enc(aid)}/answers`, {
-      answers,
-      client_seq: clientSeq,
-    }),
-  /** `locked` is informational only: the server takes lock state from the app's signed beats. */
-  heartbeat: (aid: string, currentQuestion: number, locked: boolean, battery?: { level: number; charging: boolean } | null) =>
-    request<HeartbeatResponse>("student", "POST", `/api/student/attempts/${enc(aid)}/heartbeat`, {
-      current_question: currentQuestion,
-      locked,
-      // 2026-10-23: only when known (the server shows low batteries to the invigilator)
-      ...(battery && battery.level >= 0 && battery.level <= 1
-        ? { battery: Math.round(battery.level * 100) / 100, charging: battery.charging }
-        : {}),
-    }),
-  events: (aid: string, events: IntegrityEvent[]) =>
-    request<EventsResponse>("student", "POST", `/api/student/attempts/${enc(aid)}/events`, { events }),
-  submit: (aid: string, answers: AnswerMap, clientSeq: number) =>
-    request<SubmitResponse>("student", "POST", `/api/student/attempts/${enc(aid)}/submit`, {
-      answers,
-      client_seq: clientSeq,
-    }),
-  grades: () => request<StudentGradeSummary[]>("student", "GET", "/api/student/grades"),
-  /** 2026-10-22: the sample exam ("Try a sample exam"). */
-  trialInfo: () => request<TrialInfo>("student", "GET", "/api/student/trial"),
-  startTrial: () => startAttempt("", "", undefined, true),
-  /** "Stop practice": ends the sample attempt (refused for real exams); then unlock. */
-  trialStop: (aid: string) =>
-    request<{ status: string; submitted_at: string | null }>("student", "POST", `/api/student/attempts/${enc(aid)}/trial-stop`),
-  /** Sample exam only: its offline exit key, kept in memory for an exit without the server. */
-  trialKey: (aid: string) => request<{ key: string }>("student", "GET", `/api/student/attempts/${enc(aid)}/trial-key`),
-  /** S4: ask the teacher to move the attempt to this computer (202). */
-  swapRequest: (aid: string, deviceId: string) =>
-    request<{ ok: boolean }>("student", "POST", `/api/student/attempts/${enc(aid)}/swap-request`, { device_id: deviceId }),
-  /** S1: store this computer's device check so the teacher sees it before the exam. */
-  deviceCheck: (body: DeviceCheckInput) =>
-    request<{ ok: boolean; saved_at: string }>("student", "POST", "/api/student/device-check", body),
-  feedback: (examId: string) =>
-    request<StudentFeedback>("student", "GET", `/api/student/grades/${enc(examId)}`),
+  listExams: lazy((m) => m.studentApi.listExams),
+  start: lazy((m) => m.studentApi.start),
+  getAttempt: lazy((m) => m.studentApi.getAttempt),
+  saveAnswers: lazy((m) => m.studentApi.saveAnswers),
+  heartbeat: lazy((m) => m.studentApi.heartbeat),
+  events: lazy((m) => m.studentApi.events),
+  submit: lazy((m) => m.studentApi.submit),
+  grades: lazy((m) => m.studentApi.grades),
+  trialInfo: lazy((m) => m.studentApi.trialInfo),
+  startTrial: lazy((m) => m.studentApi.startTrial),
+  trialStop: lazy((m) => m.studentApi.trialStop),
+  trialKey: lazy((m) => m.studentApi.trialKey),
+  swapRequest: lazy((m) => m.studentApi.swapRequest),
+  deviceCheck: lazy((m) => m.studentApi.deviceCheck),
+  feedback: lazy((m) => m.studentApi.feedback),
 };
 
 // ---------- teacher: LMS sync (slice 5) ----------
@@ -529,7 +419,7 @@ export const lmsApi = {
 
 // ---------- slice 6: uploads, topics, offline packages ----------
 
-import type { OfflinePackage, TopicCount, UploadResult } from "./types";
+import type { TopicCount, UploadResult } from "./types";
 
 export const slice6Api = {
   /** POST /api/uploads (multipart). PNG/JPEG/GIF/WebP up to 5 MB. */
@@ -563,14 +453,9 @@ export const slice6Api = {
     return data as UploadResult;
   },
   topics: () => request<TopicCount[]>("teacher", "GET", "/api/topics"),
-  examPackage: (examId: string) =>
-    request<OfflinePackage>("student", "GET", `/api/student/exams/${enc(examId)}/package`),
-  /** Audit S-03: second half of the package key, only while the exam is live (class members only). */
-  packageKey: (examId: string) =>
-    request<{ exam_id: string; key: string }>("student", "GET", `/api/student/exams/${enc(examId)}/package-key`),
-  /** Start (or resume) after working offline: the server sets the deadline from offline_started_at. */
-  startAfterOffline: (examId: string, startCode: string, offlineStartedAt: string) =>
-    startAttempt(examId, startCode, offlineStartedAt),
+  examPackage: lazy((m) => m.offlineApi.examPackage),
+  packageKey: lazy((m) => m.offlineApi.packageKey),
+  startAfterOffline: lazy((m) => m.offlineApi.startAfterOffline),
 };
 
 // ---------- slice 6 F/G: class insights + student profiles ----------
@@ -595,7 +480,6 @@ export const insightsApi = {
 // ---------- slice 6 H: practice assignments ----------
 
 import type {
-  PracticeAnswerResponse,
   PracticeBankQuestion,
   PracticeGenerateInput,
   PracticeGenerateResult,
@@ -603,8 +487,6 @@ import type {
   PracticeSet,
   PracticeSetSummary,
   PracticeStudents,
-  StudentPracticeSet,
-  StudentPracticeSummary,
 } from "./types";
 
 export const practiceApi = {
@@ -622,16 +504,14 @@ export const practiceApi = {
     request<PracticeSet>("teacher", "POST", `/api/practice/sets/${enc(id)}/items`, { exam_id: examId, question_id: questionId }),
   approve: (id: string) => request<PracticeSet>("teacher", "POST", `/api/practice/sets/${enc(id)}/approve`),
   send: (id: string) => request<PracticeSet>("teacher", "POST", `/api/practice/sets/${enc(id)}/send`),
-  // student
-  mySets: () => request<StudentPracticeSummary[]>("student", "GET", "/api/student/practice"),
-  mySet: (id: string) => request<StudentPracticeSet>("student", "GET", `/api/student/practice/${enc(id)}`),
-  answer: (id: string, itemId: string, answer: unknown) =>
-    request<PracticeAnswerResponse>("student", "POST", `/api/student/practice/${enc(id)}/items/${enc(itemId)}/answer`, { answer }),
+  mySets: lazy((m) => m.studentPracticeApi.mySets),
+  mySet: lazy((m) => m.studentPracticeApi.mySet),
+  answer: lazy((m) => m.studentPracticeApi.answer),
 };
 
 // ---------- audit 2026-10-12 S-03: classes ----------
 
-import type { AddMembersResult, ClassDetail, SchoolClass, StudentClass } from "./types";
+import type { AddMembersResult, ClassDetail, SchoolClass } from "./types";
 
 export const classesApi = {
   list: () => request<SchoolClass[]>("teacher", "GET", "/api/classes"),
@@ -652,28 +532,23 @@ export const classesApi = {
 };
 
 export const studentClassesApi = {
-  list: () => request<StudentClass[]>("student", "GET", "/api/student/classes"),
-  join: (code: string) => request<StudentClass>("student", "POST", "/api/student/classes/join", { code }),
-  leave: (id: number | string) => request<void>("student", "DELETE", `/api/student/classes/${encodeURIComponent(String(id))}`),
+  list: lazy((m) => m.studentClassesApi.list),
+  join: lazy((m) => m.studentClassesApi.join),
+  leave: lazy((m) => m.studentClassesApi.leave),
 };
 
 // ---------- 2026-10-23 (exam tools): open-book materials ----------
 
-import type { MaterialFile, MaterialsInfo, StudentMaterials } from "./types";
+import type { MaterialFile, StudentMaterials } from "./types";
 
 /** GET a file's bytes (the student's attempt session goes along, like request()). */
-async function fetchBlob(role: Role, path: string): Promise<Blob> {
+export async function fetchBlob(role: Role, path: string): Promise<Blob> {
   const headers: Record<string, string> = {};
   const token = getToken(role);
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (role === "student") {
-    const aid = attemptIdOfPath(path);
-    const sess = aid ? getAttemptSession(aid) : null;
-    if (sess) headers["X-FairPlay-Session"] = sess;
-  }
   let res: Response;
   try {
-    res = await fetch(path, { headers: withAppHeaders(headers) });
+    res = await fetch(path, { headers: withAppHeaders(headers, path) });
   } catch {
     throw new NetworkError();
   }
@@ -694,44 +569,11 @@ async function fetchBlob(role: Role, path: string): Promise<Blob> {
 }
 
 export const materialsApi = {
-  /** Own files + limits for an exam (before it starts). */
-  list: (examId: string) => request<MaterialsInfo>("student", "GET", `/api/student/exams/${enc(examId)}/materials`),
-  /** POST multipart "file". PDF / PNG / JPEG / TXT / MD, checked by the server from the bytes. */
-  async upload(examId: string, file: File): Promise<MaterialFile> {
-    const token = getToken("student");
-    const form = new FormData();
-    form.append("file", file, file.name);
-    let res: Response;
-    try {
-      res = await fetch(`/api/student/exams/${enc(examId)}/materials`, {
-        method: "POST",
-        headers: withAppHeaders(token ? { Authorization: `Bearer ${token}`, Accept: "application/json" } : { Accept: "application/json" }),
-        body: form,
-      });
-    } catch {
-      throw new NetworkError();
-    }
-    let data: unknown = null;
-    try {
-      data = await res.json();
-    } catch {
-      data = null;
-    }
-    if (!res.ok) {
-      if (res.status === 401) {
-        clearToken("student");
-        onUnauthorized("student");
-      }
-      throw errorOf(res.status, data, res.statusText || `Error ${res.status}`);
-    }
-    return data as MaterialFile;
-  },
-  remove: (examId: string, id: string) =>
-    request<void>("student", "DELETE", `/api/student/exams/${enc(examId)}/materials/${enc(id)}`),
-  /** During the attempt. */
-  attemptFiles: (aid: string) =>
-    request<{ files: MaterialFile[] }>("student", "GET", `/api/student/attempts/${enc(aid)}/materials`),
-  attemptFile: (aid: string, id: string) => fetchBlob("student", `/api/student/attempts/${enc(aid)}/materials/${enc(id)}`),
+  list: lazy((m) => m.studentMaterialsApi.list),
+  upload: lazy((m) => m.studentMaterialsApi.upload),
+  remove: lazy((m) => m.studentMaterialsApi.remove),
+  attemptFiles: lazy((m) => m.studentMaterialsApi.attemptFiles),
+  attemptFile: lazy((m) => m.studentMaterialsApi.attemptFile),
   // teacher (read only)
   examMaterials: (examId: string) => request<StudentMaterials[]>("teacher", "GET", `/api/exams/${enc(examId)}/materials`),
   submissionFiles: (examId: string, aid: string) =>
@@ -756,64 +598,11 @@ export const toolsApi = {
 
 // ---------- question content, answer files ----------
 
-import type { AnswerUpload } from "./types";
-
-/** Server answers for an uploaded file, read leniently (id / upload_id, name / filename, size / bytes). */
-function toAnswerUpload(data: unknown, file: File): AnswerUpload {
-  const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
-  const id = typeof d.id === "string" ? d.id : typeof d.upload_id === "string" ? d.upload_id : "";
-  if (!id) throw new ApiError(502, "The server did not return the uploaded file.");
-  const name = typeof d.name === "string" ? d.name : typeof d.filename === "string" ? d.filename : file.name;
-  const size = typeof d.size === "number" ? d.size : typeof d.bytes === "number" ? d.bytes : file.size;
-  const out: AnswerUpload = { id, name, size };
-  if (typeof d.question_id === "string") out.question_id = d.question_id;
-  if (typeof d.sha256 === "string") out.sha256 = d.sha256;
-  if (typeof d.created_at === "string") out.created_at = d.created_at;
-  return out;
-}
-
 export const contentApi = {
-  /** A file the student handed in (bytes). */
-  answerFile: (aid: string, id: string) => fetchBlob("student", `/api/student/attempts/${enc(aid)}/files/${enc(id)}`),
-  /** A picture (fp-asset:) of a question during the attempt (attempt owner, exam live). */
-  attemptAsset: (aid: string, name: string) =>
-    fetchBlob("student", `/api/student/attempts/${enc(aid)}/assets/${enc(name)}`),
-  /** A picture of a released grade page (after the exam: sign-in only). */
-  gradeAsset: (examId: string, name: string) =>
-    fetchBlob("student", `/api/student/grades/${enc(examId)}/assets/${enc(name)}`),
+  answerFile: lazy((m) => m.studentContentApi.answerFile),
+  attemptAsset: lazy((m) => m.studentContentApi.attemptAsset),
+  gradeAsset: lazy((m) => m.studentContentApi.gradeAsset),
   /** The same picture for the teacher. */
   teacherAsset: (examId: string, name: string) => fetchBlob("teacher", `/api/exams/${enc(examId)}/assets/${enc(name)}`),
-  /** POST multipart "file" to .../files?question_id=: a file for a file_upload question
-   *  (extension / size checked by the server too). The answer keeps the returned id; the
-   *  server passes it on to an external source after the hand-in when there is one. */
-  async uploadAnswerFile(aid: string, questionId: string, file: File): Promise<AnswerUpload> {
-    const path = `/api/student/attempts/${enc(aid)}/files?question_id=${enc(questionId)}`;
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const token = getToken("student");
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const sess = getAttemptSession(aid);
-    if (sess) headers["X-FairPlay-Session"] = sess;
-    const form = new FormData();
-    form.append("file", file, file.name);
-    let res: Response;
-    try {
-      res = await fetch(path, { method: "POST", headers: withAppHeaders(headers), body: form });
-    } catch {
-      throw new NetworkError();
-    }
-    let data: unknown = null;
-    try {
-      data = await res.json();
-    } catch {
-      data = null;
-    }
-    if (!res.ok) {
-      if (res.status === 401) {
-        clearToken("student");
-        onUnauthorized("student");
-      }
-      throw errorOf(res.status, data, res.statusText || `Error ${res.status}`);
-    }
-    return toAnswerUpload(data, file);
-  },
+  uploadAnswerFile: lazy((m) => m.studentContentApi.uploadAnswerFile),
 };

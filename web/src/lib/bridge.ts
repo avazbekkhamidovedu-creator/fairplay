@@ -305,14 +305,6 @@ export function getNativeState(): NativeState | null {
   return isNative() ? nativeState : null;
 }
 
-/** S2: X-FairPlay-Version / X-FairPlay-Platform for every /api request, once the app has
- *  reported both in its "state" message ({} in a browser or before that). */
-export function appHeaders(): Record<string, string> {
-  const st = getNativeState();
-  if (!st?.app_version || !st.platform) return {};
-  return { "X-FairPlay-Version": st.app_version, "X-FairPlay-Platform": st.platform };
-}
-
 export function hello(): void {
   install();
   post({ action: "hello" });

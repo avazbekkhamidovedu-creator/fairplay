@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { clearToken } from "../../api/client";
 import { useFeatures, type Feature } from "../../lib/features";
 import { useMe } from "../../lib/useMe";
+import { AppVersion } from "../AppVersion";
 import { Icon, LogoMark, Wordmark, type IconName } from "../ui/Icon";
 import "../../styles/teacher.css";
 
@@ -73,6 +74,7 @@ export function TeacherLayout() {
           {me && (
             <>
               <span className="t-nav-user-name">{me.name}</span>
+              <AppVersion />
               <span className="muted">Teacher · {me.username}</span>
             </>
           )}

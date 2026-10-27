@@ -1,9 +1,10 @@
 // Student routes (owned by the student UI). Mounted at /student/* in App.tsx.
+import "../../api/student";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "../../components/RequireAuth";
 import { FeatureGate } from "../../components/FeatureGate";
 import JoinLinkPage from "./JoinLinkPage";
-import LoginPage from "../LoginPage";
+import StudentLogin from "./StudentLogin";
 import StudentHome from "./StudentHome";
 import ExamsPage from "./ExamsPage";
 import CoursePage from "./CoursePage";
@@ -21,7 +22,7 @@ import ExternalDonePage from "./ExternalDonePage";
 export default function StudentRoutes() {
   return (
     <Routes>
-      <Route path="login" element={<LoginPage role="student" />} />
+      <Route path="login" element={<StudentLogin />} />
       <Route index element={<RequireAuth role="student"><StudentHome /></RequireAuth>} />
       {/* 2026-10-24: a course's own page (course cards on the home page) */}
       <Route path="courses/:classId" element={<RequireAuth role="student"><CoursePage /></RequireAuth>} />

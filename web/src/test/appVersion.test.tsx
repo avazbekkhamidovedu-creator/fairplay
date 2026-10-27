@@ -1,4 +1,5 @@
 // S2 (2026-10-20): app version/platform headers from the bridge state, 426 update screen.
+import { appHeaders } from "../api/student";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, UPGRADE_EVENT, setUnauthorizedHandler, studentApi } from "../api/client";
@@ -31,14 +32,14 @@ describe("app version headers (S2)", () => {
     const f = mockFetch(200, []);
     await studentApi.listExams();
     expect(headersOf(f)["X-FairPlay-Version"]).toBeUndefined();
-    expect(bridge.appHeaders()).toEqual({});
+    expect(appHeaders()).toEqual({});
   });
 
   it("adds version and platform once the app's state reported both", async () => {
     native();
     bridge.hello();
     send({ type: "state", locked: false, trusted: true, version: "0.5 (12)" });
-    expect(bridge.appHeaders()).toEqual({});     // older app: no app_version / platform yet
+    expect(appHeaders()).toEqual({});     // older app: no app_version / platform yet
     send({ type: "state", locked: false, trusted: true, version: "0.5", app_version: "0.5", platform: "mac" });
     expect(bridge.getNativeState()).toMatchObject({ app_version: "0.5", platform: "mac" });
     const f = mockFetch(200, []);

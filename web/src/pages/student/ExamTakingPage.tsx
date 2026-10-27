@@ -17,6 +17,7 @@ import { attemptAssetContext, forgetAssets, prefetchAssets } from "../../lib/que
 import { forgetAnswerNotes, rememberUpload } from "../../lib/answerTypes";
 import { assetNames, isRichFormat } from "../../lib/markdown";
 import { isCodeLanguage } from "../../lib/code/languages";
+import { AppVersion } from "../../components/AppVersion";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
 import { CodeQuestion, forgetCodeResults } from "../../components/student/CodeQuestion";
@@ -1495,6 +1496,7 @@ function ExamTakingInner() {
                 {me && (
                   <>
                     <b>{me.name}</b>
+                    <AppVersion />
                     <span className="netid">{me.netId}</span>
                   </>
                 )}

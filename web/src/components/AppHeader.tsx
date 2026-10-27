@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { clearToken } from "../api/client";
 import type { Role } from "../api/types";
 import { useMe } from "../lib/useMe";
+import { AppVersion } from "./AppVersion";
 import { LogoMark, Wordmark } from "./ui/Icon";
 
 export function Brand({ to }: { to?: string }) {
@@ -32,7 +33,12 @@ export function AppHeader({ role, dark, children }: { role: Role; dark?: boolean
         <Brand to={`/${role}`} />
         {children}
         <span className="header-spacer" />
-        {me && <span className="header-user">{me.name}</span>}
+        {me && (
+          <div className="header-who">
+            <span className="header-user">{me.name}</span>
+            <AppVersion />
+          </div>
+        )}
         <button type="button" className="btn btn-secondary" onClick={logout}>
           Log out
         </button>
