@@ -55,7 +55,7 @@ from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status, task_status_url
 from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_visible_problems
 from judge.utils.fairplay_editor import FAIRPLAY_EDITOR_FIELDS, apply_fairplay_editor, fairplay_check_edit, \
-    fairplay_contest_context, fairplay_edit_lock, fairplay_editor_context, parse_fairplay_payload
+    fairplay_edit_lock, fairplay_editor_context, parse_fairplay_payload
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -1149,7 +1149,10 @@ class ContestCreate(LoginRequiredMixin, View):
         if isinstance(exception, ValidationError):
             # Django's ValidationError can carry dicts / lists of messages
             # (e.g. from full_clean()); flatten them into one readable line.
-            return JsonResponse({'error': ' '.join(exception.messages)}, status=400)
+            body = {'error': ' '.join(exception.messages)}
+            if getattr(exception, 'code', None) == 'fairplay_lock':
+                body['field'] = 'exam_lock'
+            return JsonResponse(body, status=400)
         if isinstance(exception, IntegrityError):
             logger.exception('Contest save integrity error: %s', exception)
             return JsonResponse({
@@ -1971,7 +1974,6 @@ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
                 )
         context['contest_solved_problem_ids'] = solved
         context['contest_attempted_problem_ids'] = attempted
-        context.update(fairplay_contest_context(self.request, self.object))
         context['enable_comments'] = settings.DMOJ_ENABLE_COMMENTS
         context['enable_social'] = settings.DMOJ_ENABLE_SOCIAL
         return context

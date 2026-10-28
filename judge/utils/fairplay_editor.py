@@ -2,19 +2,15 @@
 import logging
 
 from django.core.exceptions import ValidationError
-from django.urls import reverse
-from django.utils import timezone
-from django.utils.formats import date_format
 from django.utils.translation import gettext as _
 
-from judge.utils.fairplay import DELIVERY_WINDOW, FAIRPLAY_CALCULATOR_CHOICES, FAIRPLAY_LEAD, \
-    FAIRPLAY_REVIEW_CHOICES, FAIRPLAY_REVIEW_HELP, fairplay_check_contest, fairplay_edit_locked, fairplay_enabled, \
-    fairplay_shared_problems, fairplay_window_start, is_fairplay_exam, set_fairplay_exam
+from judge.utils.fairplay import FAIRPLAY_CALCULATOR_CHOICES, FAIRPLAY_REVIEW_CHOICES, fairplay_check_contest, \
+    fairplay_edit_locked, fairplay_enabled, is_fairplay_exam, set_fairplay_exam
 
 __all__ = [
     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
-    'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit', 'fairplay_contest_context',
-    'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings', 'fairplay_shared_warning',
+    'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
+    'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
     'parse_fairplay_payload', 'pop_unsaved_settings', 'push_settings', 'stash_unsaved_settings', 'websites_text',
 ]
 
@@ -182,10 +178,6 @@ def apply_fairplay_editor(contest, plan):
     fairplay_check_contest(contest)
 
 
-def _lead_hours():
-    return int(FAIRPLAY_LEAD.total_seconds() // 3600)
-
-
 def fairplay_edit_lock(contest):
     """Taken before an edit; None when nothing is locked."""
     return FairPlayEditLock.take(contest)
@@ -202,7 +194,6 @@ class FairPlayEditLock:
     def __init__(self, contest):
         self.key = contest.key
         self.problem_ids = set(contest.contest_problems.values_list('problem_id', flat=True))
-        self.until = contest.end_time
 
     @classmethod
     def take(cls, contest, now=None):
@@ -211,66 +202,17 @@ class FairPlayEditLock:
         return cls(contest)
 
     def check(self, contest, plan):
-        if self.until is not None:
-            until = _('until %(time)s (the end time + %(days)d days, while hand-ins can still arrive)') % {
-                'time': date_format(timezone.localtime(self.until + DELIVERY_WINDOW), 'DATETIME_FORMAT'),
-                'days': DELIVERY_WINDOW.days}
-        else:
-            until = _('until its results are finalized')
-        reason = _('FairPlay holds the exam under its ID with these questions from %(hours)d hours before the '
-                   'start %(until)s.') % {'hours': _lead_hours(), 'until': until}
         if contest.key != self.key:
-            raise ValidationError(_("The assignment ID of a FairPlay exam can't be changed now. %s") % reason)
+            raise ValidationError(_("The assignment ID can't be changed now."))
         if plan is not None and plan.want is False:
-            raise ValidationError(_("The lock of a FairPlay exam can't be switched away from FairPlay now. %s")
-                                  % reason)
+            raise ValidationError(_("The lock can't be changed now."), code='fairplay_lock')
         if set(contest.contest_problems.values_list('problem_id', flat=True)) != self.problem_ids:
-            raise ValidationError(_("Problems can't be added to, removed from or replaced in a FairPlay exam now. "
-                                    '%s') % reason)
-
-
-def fairplay_shared_warning(contest, problems=None):
-    if not is_fairplay_exam(contest):
-        return None
-    shared = list(fairplay_shared_problems(contest, problems).values_list('code', flat=True)[:21])
-    if not shared:
-        return None
-    names = ', '.join(shared[:20]) + (', ...' if len(shared) > 20 else '')
-    start = date_format(timezone.localtime(fairplay_window_start(contest)), 'DATETIME_FORMAT')
-    return _('These problems are also used elsewhere and will be hidden everywhere on DKU OJ from %(start)s '
-             'until results are released: %(problems)s') % {'start': start, 'problems': names}
+            raise ValidationError(_("The problems can't be changed now."))
 
 
 def fairplay_editor_context(request, contest, restricted):
-    from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
     on = is_fairplay_exam(contest) if contest is not None else False
-    context = {
-        'fairplay_offered': fairplay_enabled() or on,
-        'fairplay_calculator_choices': FAIRPLAY_CALCULATOR_CHOICES,
-        'fairplay_review_choices': FAIRPLAY_REVIEW_CHOICES,
-        'fairplay_review_help': FAIRPLAY_REVIEW_HELP,
-        'fairplay_on': on,
-        'fairplay_settings': dict(DEFAULT_SETTINGS, websites='', websites_blocked=[]),
-        'fairplay_settings_error': None,
-        'fairplay_shared_warning': None,
-        'fairplay_edit_locked': False,
-        'fairplay_lead_hours': _lead_hours(),
-        'fairplay_delivery_days': DELIVERY_WINDOW.days,
-    }
-    if contest is not None and on:
-        context['fairplay_shared_warning'] = fairplay_shared_warning(contest)
-        context['fairplay_edit_locked'] = fairplay_edit_locked(contest)
-    if 'fairplay_required' in restricted or not fairplay_enabled() or contest is None or not on:
-        return context
-    try:
-        view = FairPlayClient(acting_user=request.user.username).exam(contest.key, read_timeout=QUICK_READ_TIMEOUT)
-    except FairPlayError as e:
-        # None tells the template FairPlay could not be reached.
-        context['fairplay_settings'] = None
-        context['fairplay_settings_error'] = e.detail
-        return context
-    context['fairplay_settings'] = editor_settings(view.get('settings'))
-    return context
+    return {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on}
 
 
 class FairPlaySaveResult:
@@ -307,22 +249,3 @@ def fairplay_save_settings(acting_user, contest, plan, old_key=None):
         return FairPlaySaveResult()
     return FairPlaySaveResult(warnings=[_('FairPlay will not open these websites: %s.') % ', '.join(
         '%s (%s)' % (item['site'], item['reason']) if item['reason'] else item['site'] for item in blocked[:10])])
-
-
-def fairplay_contest_context(request, contest):
-    if not is_fairplay_exam(contest) or not contest.is_editable_by(request.user):
-        return {'fairplay_box': None}
-    from judge.utils.fairplay_delivery import hand_ins, delivery_warnings
-    enabled = fairplay_enabled()
-    rows = []
-    for hand_in in hand_ins(contest):
-        rows.append(dict(hand_in, student_url=(
-            reverse('contest_fairplay_report', args=[contest.key, hand_in['profile'].user.username])
-            if enabled else None)))
-    return {'fairplay_box': {
-        'tab_url': reverse('contest_fairplay', args=[contest.key]) if enabled else None,
-        'receipts': rows,
-        'warnings': delivery_warnings(contest),
-        'lead_hours': _lead_hours(),
-        'delivery_days': DELIVERY_WINDOW.days,
-    }}

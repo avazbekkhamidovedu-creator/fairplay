@@ -132,8 +132,6 @@
 {% block body %}
 <div class="fairplay-page" id="fairplay-root" data-status="{{ fp_status or '' }}" data-poll-url="{{ url('contest_fairplay_status', contest.key) }}">
     {% if fp_error %}
-        <div class="fairplay-unreachable" id="fairplay-unreachable"><i class="fa fa-exclamation-triangle"></i> {{ fp_error }}.
-            {{ _('FairPlay not reachable: the exam\'s settings can\'t be shown or changed right now.') }}</div>
     {% elif not fp.synced %}
         <div class="fairplay-unreachable" id="fairplay-not-synced">{{ _('FairPlay has not received this assignment yet. It picks up changes every few minutes; reload this page later.') }}</div>
     {% endif %}
@@ -283,7 +281,6 @@
     <div class="fairplay-section" id="fairplay-settings">
         <h3>{{ _('Exam settings') }}</h3>
         {% if settings_form is none %}
-            <p class="fairplay-unreachable" id="fairplay-settings-unreachable">{{ _('FairPlay not reachable: the settings can\'t be shown or changed right now.') }}</p>
         {% else %}
             <form method="post" action="{{ url('contest_fairplay_action', contest.key, 'settings') }}" id="fairplay-settings-form">
                 {% csrf_token %}
@@ -327,7 +324,6 @@
     <div class="fairplay-section" id="fairplay-review">
         <h3>{{ _('Student review after hand-in') }}</h3>
         {% if fp_error %}
-            <p class="fairplay-unreachable" id="fairplay-review-unreachable">{{ _('FairPlay not reachable: this setting can\'t be shown or changed right now.') }}</p>
         {% else %}
         <form method="post" action="{{ url('contest_fairplay_action', contest.key, 'review') }}" id="fairplay-review-form">
             {% csrf_token %}
