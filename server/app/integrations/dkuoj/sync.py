@@ -29,6 +29,7 @@ from ...store import get_store
 from ...timeutil import iso, parse_iso, utcnow
 from .adapter import AdapterError, asset_names, questions_from_package
 from .client import DkuojClient, OjError
+from .guard import exam_guard
 from .models import OjAsset, OjEditor, OjRosterEntry, OjState
 
 log = logging.getLogger("proctora.dkuoj")
@@ -535,7 +536,22 @@ async def mark_removed(sessionmaker, active: set[str], since: datetime | None) -
     return changed
 
 
-async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> int:
+async def apply_item(sessionmaker, item: dict, cfg, now: datetime) -> bool:
+    """Apply one listing entry and commit; drops the exam's cached view. True when applied."""
+    async with sessionmaker() as session:
+        e = await apply_listing(session, item, cfg, now)
+        await session.commit()
+        if e is None:
+            return False
+        await invalidate_exam(get_store(), e.id)
+        moved = getattr(e, "moved_attempts", None)
+        if moved:      # the end time moved later: heartbeats re-read the deadline
+            from ...services import attempt_key
+            await get_store().delete(*[attempt_key(a) for a in moved])
+        return True
+
+
+async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime, guard: bool = True) -> int:
     """Page through changed exams since the stored cursor. Returns how many were applied."""
     async with sessionmaker() as session:
         cursor = await get_state(session, CURSOR)
@@ -553,16 +569,11 @@ async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime) -> i
         for item in data.get("exams") or []:
             if not isinstance(item, dict):
                 continue
-            async with sessionmaker() as session:
-                e = await apply_listing(session, item, cfg, now)
-                await session.commit()
-                if e is not None:
-                    n += 1
-                    await invalidate_exam(get_store(), e.id)
-                    moved = getattr(e, "moved_attempts", None)
-                    if moved:      # the end time moved later: heartbeats re-read the deadline
-                        from ...services import attempt_key
-                        await get_store().delete(*[attempt_key(a) for a in moved])
+            if guard and isinstance(item.get("key"), str) and item["key"]:
+                async with exam_guard(item["key"]):
+                    n += await apply_item(sessionmaker, item, cfg, now)
+            else:
+                n += await apply_item(sessionmaker, item, cfg, now)
             up = item.get("updated_at")
             if isinstance(up, str) and (newest is None or _time(up) and _time(up) > (_time(newest) or datetime.min)):
                 newest = up
@@ -595,15 +606,20 @@ def package_due(e: Exam, now: datetime) -> bool:
     return meta.get("package_version") != e.external_version or not e.questions
 
 
-async def fetch_packages(sessionmaker, client: DkuojClient, now: datetime) -> int:
+async def fetch_packages(sessionmaker, client: DkuojClient, now: datetime, only: str | None = None,
+                         guard: bool = True) -> int:
     async with sessionmaker() as session:
         exams = (await session.execute(select(Exam).where(Exam.source == "dkuoj", Exam.external_removed == false(),
                                                           Exam.external_frozen_version.is_(None)))).scalars().all()
-        due = [(e.id, e.external_key, e.external_version if e.questions else None) for e in exams if package_due(e, now)]
+        due = [(e.id, e.external_key, e.external_version if e.questions else None) for e in exams
+               if package_due(e, now) and (only is None or e.external_key == only)]
     applied = 0
     for exam_id, key, have in due:
         try:
-            if await _fetch_package(sessionmaker, client, exam_id, key, have, now):
+            if guard and key:
+                async with exam_guard(key):
+                    applied += bool(await _fetch_package(sessionmaker, client, exam_id, key, have, now))
+            elif await _fetch_package(sessionmaker, client, exam_id, key, have, now):
                 applied += 1
         except (OjError, AdapterError) as err:
             msg = getattr(err, "message", None) or str(err)
