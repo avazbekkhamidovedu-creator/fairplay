@@ -661,8 +661,10 @@ otherwise). The codes are made for the students on the exam's synced list.
   same sheet); students without a NetID are skipped. Header: exam title, course, generated time
   (UTC) and "Do not share. One code per student."; slips sorted by last name, then first name,
   each with last name, first name, NetID and the code in large monospace; 8 slips per A4 page
-  (2 x 4) with cut lines. Names are split from the account name at its first space; characters
-  outside Latin-1 print as `?`. Unknown exam → 404; no student with a NetID on the list → 409
+  (2 x 4) with cut lines. Names are the roster's `first_name` / `last_name` (kept on the roster row at each
+  sync, refreshed on every download; an entry with neither falls back to the account name split at
+  its first space); a text with characters outside Latin-1 (Chinese names) is printed in the
+  built-in CJK font. Unknown exam → 404; no student with a NetID on the list → 409
   `{"detail": "..."}`. Each download is an event `access_codes_downloaded` (acting user, number of
   codes, never a code) in the class's `recent` list.
 - **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "ep530"}` → `{"ok": true}`. The

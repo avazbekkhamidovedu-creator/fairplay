@@ -374,6 +374,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     editors = [u for u in [await ensure_user(session, p, "teacher") for p in item.get("editors") or []
                            if isinstance(p, dict)] if u is not None]
     students = []
+    roster_names: dict[int, dict] = {}
     for p in item.get("roster") or []:
         if isinstance(p, dict):
             u = await ensure_user(session, p, "student")
@@ -383,6 +384,8 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
                 except (TypeError, ValueError):
                     extra = 0
                 students.append((u, extra))
+                roster_names[u.id] = {"first_name": str(p.get("first_name") or "").strip()[:200] or None,
+                                      "last_name": str(p.get("last_name") or "").strip()[:200] or None}
     await session.flush()
     meta = {k: item.get(k) for k in META_KEYS}
     meta["url"] = f"{cfg.url}/contest/{key}"
@@ -427,7 +430,8 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     if editors and e.teacher_id not in {u.id for u in editors}:
         e.teacher_id = editors[0].id     # the owner is always a current editor
     await _replace(session, OjEditor, e.id, {u.id: {} for u in editors})
-    await _replace(session, OjRosterEntry, e.id, {u.id: {"extra_time_seconds": x} for u, x in students})
+    await _replace(session, OjRosterEntry, e.id, {u.id: {"extra_time_seconds": x, **roster_names.get(u.id, {})}
+                                                       for u, x in students})
     await _classes(session, e, item, [u for u, _ in students])
     new_end = _time(meta.get("end_time"))
     if e.status == "live" and old_end is not None and new_end is not None and new_end > old_end:

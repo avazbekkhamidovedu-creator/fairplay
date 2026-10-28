@@ -44,9 +44,17 @@ class Sheet:
     skipped: list[str] = field(default_factory=list)                          # roster accounts without a NetID
 
 
-async def _roster(session: AsyncSession, exam: Exam) -> list[User]:
-    return list((await session.execute(select(User).join(OjRosterEntry, OjRosterEntry.user_id == User.id)
-                                       .where(OjRosterEntry.exam_id == exam.id).order_by(User.id))).scalars())
+async def _roster(session: AsyncSession, exam: Exam) -> list[tuple[User, str, str]]:
+    """(account, first name, last name): the names DKU OJ sent, else the account name split."""
+    out = []
+    for u, first, last in (await session.execute(
+            select(User, OjRosterEntry.first_name, OjRosterEntry.last_name).join(
+                OjRosterEntry, OjRosterEntry.user_id == User.id)
+            .where(OjRosterEntry.exam_id == exam.id).order_by(User.id))).all():
+        if not first and not last:
+            first, last = split_name(u.name)
+        out.append((u, first or "", last or ""))
+    return out
 
 
 async def _rows(session: AsyncSession, exam: Exam) -> dict[str, ExamAccessCode]:
@@ -65,12 +73,13 @@ def _new_code(secret: str, taken: set[str]) -> tuple[str, str]:
 
 async def ensure_codes(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
     """A code for every roster student who has none; existing codes never change."""
-    for attempt in (0, 1):
+    for attempt in (0, 1, 2):
         try:
             return await _ensure(session, secret, exam)
         except IntegrityError:
             await session.rollback()
-            if attempt:
+            await session.refresh(exam)
+            if attempt == 2:
                 raise
     raise AssertionError("unreachable")
 
@@ -80,11 +89,10 @@ async def _ensure(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
     have = await _rows(session, exam)
     taken = {r.code_hmac for r in have.values()}
     sheet = Sheet()
-    for u in users:
+    for u, first, last in users:
         if not u.netid:
             sheet.skipped.append(u.username)
             continue
-        first, last = split_name(u.name)
         row = have.get(u.netid)
         if row is None:
             code, h = _new_code(secret, taken)
@@ -102,7 +110,7 @@ async def _ensure(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
 async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) -> bool:
     """Replace the student's code (the old one stops matching); False when the NetID is not
     on the exam's list."""
-    if netid not in {u.netid for u in await _roster(session, exam) if u.netid}:
+    if netid not in {u.netid for u, _, _ in await _roster(session, exam) if u.netid}:
         return False
     await ensure_codes(session, secret, exam)
     row = (await session.execute(select(ExamAccessCode).where(

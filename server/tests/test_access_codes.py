@@ -135,3 +135,78 @@ def test_empty_roster_is_409(oj):
     db(oj, empty)
     r = call(oj, "GET", PDF)
     assert r.status_code == 409 and "no student list" in r.json()["detail"]
+
+
+def set_names(c, netid, first, last):
+    async def go(s):
+        from sqlalchemy import update
+        from app.models import User
+        uid = (await s.execute(select(User.id).where(User.netid == netid))).scalar_one()
+        await s.execute(update(OjRosterEntry).where(OjRosterEntry.user_id == uid)
+                        .values(first_name=first, last_name=last))
+        await s.commit()
+    db(c, go)
+
+
+def stored(c):
+    async def q(s):
+        return {r.netid: (r.first_name, r.last_name) for r in (await s.execute(select(ExamAccessCode))).scalars()}
+    return db(c, q)
+
+
+def test_names_come_from_the_roster_and_refresh(fake, oj):
+    fake.roster[0].update(first_name="Mary Ann", last_name="Li")
+    run(oj)
+    codes_of(oj)
+    assert stored(oj)["alice"] == ("Mary Ann", "Li")
+    assert stored(oj)["carol"] == ("Carol", "Wang")
+    set_names(oj, "carol", "Caroline", "Wong")
+    set_names(oj, "ax19", None, None)
+    assert codes_of(oj) == codes_of(oj)
+    assert stored(oj)["carol"] == ("Caroline", "Wong")
+    assert stored(oj)["ax19"][0] and stored(oj)["ax19"] != (None, None)
+    text = pdf_text(call(oj, "GET", PDF).content)[1]
+    assert "Mary Ann" in text and "Caroline" in text
+
+
+def test_chinese_names_build(oj):
+    run(oj)
+    set_names(oj, "alice", "小明", "王")
+    r = call(oj, "GET", PDF)
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
+    doc, text = pdf_text(r.content)
+    assert len(doc) == 1 and "ax19" in text
+
+
+def test_concurrent_creation_and_collision(oj, monkeypatch):
+    run(oj)
+    first = codes_of(oj)
+    assert codes_of(oj) == first
+
+    async def wipe(s):
+        await s.execute(delete(ExamAccessCode))
+        await s.commit()
+    db(oj, wipe)
+
+    real_rows = access_codes._rows
+    calls = {"n": 0}
+
+    async def stale_rows(s, exam):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            from app.db import get_database
+            async with get_database().sessionmaker() as other:
+                await access_codes._ensure(other, secret(oj), exam)
+            return {}
+        return await real_rows(s, exam)
+    monkeypatch.setattr(access_codes, "_rows", stale_rows)
+    made = codes_of(oj)
+    monkeypatch.undo()
+    assert set(made) == {"alice", "carol", "ax19", "bl642"} and calls["n"] >= 3
+    assert codes_of(oj) == made
+
+    db(oj, wipe)
+    queue = iter(["AAAAAA", "AAAAAA", "BBBBBB", "CCCCCC", "DDDDDD", "EEEEEE"])
+    monkeypatch.setattr(access_codes, "generate_code", lambda: next(queue))
+    got = codes_of(oj)
+    assert sorted(got.values()) == ["AAAAAA", "BBBBBB", "CCCCCC", "DDDDDD"]

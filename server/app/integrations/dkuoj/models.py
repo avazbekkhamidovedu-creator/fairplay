@@ -30,6 +30,8 @@ class OjRosterEntry(Base):
     exam_id: Mapped[str] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), index=True, nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     extra_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    first_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class OjAsset(Base):

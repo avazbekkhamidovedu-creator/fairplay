@@ -6,6 +6,8 @@ import unicodedata
 from datetime import datetime
 
 from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
@@ -15,32 +17,47 @@ MARGIN_X, TOP, BOTTOM = 28, 100, 28
 NOTE = "Do not share. One code per student."
 
 
+CJK_FONT = "STSong-Light"
+
+
 def clean(text: str, limit: int = 200) -> str:
-    """Printable Latin-1 only (the built-in fonts have nothing else); anything else prints as '?'."""
-    out = []
-    for ch in unicodedata.normalize("NFC", str(text or "")):
-        if unicodedata.category(ch)[0] == "C":
-            ch = " "
-        out.append(ch if ord(ch) < 256 else "?")
+    out = [" " if unicodedata.category(ch)[0] == "C" else ch
+           for ch in unicodedata.normalize("NFC", str(text or ""))]
     return " ".join("".join(out).split())[:limit]
 
 
-def fit(text: str, font: str, size: float, width: float) -> str:
+def font_for(text: str, latin: str) -> str:
+    """The Latin font, or the built-in CJK font for a text with characters outside Latin-1."""
+    if all(ord(ch) < 256 for ch in text):
+        return latin
+    if CJK_FONT not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(UnicodeCIDFont(CJK_FONT))
+    return CJK_FONT
+
+
+def fit(text: str, font: str, size: float, width: float) -> tuple[str, str]:
+    """(text, font) shortened with "..." until it fits the width."""
     text = clean(text)
+    font = font_for(text, font)
     if stringWidth(text, font, size) <= width:
-        return text
+        return text, font
     while text and stringWidth(text + "...", font, size) > width:
         text = text[:-1]
-    return text.rstrip() + "..."
+    return text.rstrip() + "...", font
+
+
+def _draw(c: canvas.Canvas, x: float, y: float, text: str, font: str, size: float, width: float) -> None:
+    text, font = fit(text, font, size, width)
+    c.setFont(font, size)
+    c.drawString(x, y, text)
 
 
 def _header(c: canvas.Canvas, title: str, course: str, stamp: str, width: float, height: float) -> None:
     w = width - 2 * MARGIN_X
     c.setFillGray(0)
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(MARGIN_X, height - 40, fit(title, "Helvetica-Bold", 16, w))
+    _draw(c, MARGIN_X, height - 40, title, "Helvetica-Bold", 16, w)
+    _draw(c, MARGIN_X, height - 56, course, "Helvetica", 10, w)
     c.setFont("Helvetica", 10)
-    c.drawString(MARGIN_X, height - 56, fit(course, "Helvetica", 10, w))
     c.drawString(MARGIN_X, height - 70, f"Generated {stamp} UTC")
     c.setFont("Helvetica-Bold", 10)
     c.drawString(MARGIN_X, height - 84, NOTE)
@@ -55,9 +72,8 @@ def _slip(c: canvas.Canvas, x: float, y: float, w: float, h: float, last: str, f
     for label, dy in (("Last name", 22), ("First name", 54), ("NetID", 86)):
         c.drawString(x + pad, y + h - dy, label)
     c.setFillGray(0)
-    c.setFont("Helvetica-Bold", 12)
     for value, dy in ((last, 35), (first, 67), (netid, 99)):
-        c.drawString(x + pad, y + h - dy, fit(value, "Helvetica-Bold", 12, inner))
+        _draw(c, x + pad, y + h - dy, value, "Helvetica-Bold", 12, inner)
     c.setFillGray(0.35)
     c.setFont("Helvetica", 8)
     c.drawString(x + pad, y + h - 124, "Access code")
@@ -71,7 +87,7 @@ def render(title: str, course: str, generated: datetime, students: list[dict]) -
     buf = io.BytesIO()
     width, height = A4
     c = canvas.Canvas(buf, pagesize=A4, pageCompression=1)
-    c.setTitle(clean(title, 100) or "Access codes")
+    c.setTitle(clean(title, 100).encode("latin-1", "replace").decode("latin-1") or "Access codes")
     stamp = generated.strftime("%Y-%m-%d %H:%M")
     cw, ch = (width - 2 * MARGIN_X) / COLS, (height - TOP - BOTTOM) / ROWS
     for start in range(0, len(students), PER_PAGE):
