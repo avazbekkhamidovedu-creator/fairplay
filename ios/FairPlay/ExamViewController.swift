@@ -242,7 +242,8 @@ final class ExamViewController: UIViewController, LockSurface,
         // In-page (pushState) route changes never reach decidePolicyFor: watch the URL too.
         urlWatch = wv.observe(\.url, options: [.new]) { [weak self] view, _ in
             DispatchQueue.main.async {
-                guard let self, let u = view.url, self.isServerURL(u) else { return }
+                guard let self, let u = view.url else { return }
+                guard self.isServerURL(u) else { self.deviceTest.end(.leave); return }
                 if ExamPaths.isTeacherPath(u.path) {
                     EventLog.shared.record("blocked_navigation", "teacher page \(u.path)")
                     view.load(Self.serverRequest(Config.startURL))
@@ -509,8 +510,8 @@ final class ExamViewController: UIViewController, LockSurface,
 
     // MARK: - System chrome while locked
 
-    override var prefersStatusBarHidden: Bool { LockdownController.shared.isLocked }
-    override var prefersHomeIndicatorAutoHidden: Bool { LockdownController.shared.isLocked }
+    override var prefersStatusBarHidden: Bool { LockdownController.shared.isLocked || deviceTestImmersive }
+    override var prefersHomeIndicatorAutoHidden: Bool { LockdownController.shared.isLocked || deviceTestImmersive }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { LockdownController.shared.isLocked ? .all : [] }
 
     override var keyCommands: [UIKeyCommand]? {
@@ -521,6 +522,51 @@ final class ExamViewController: UIViewController, LockSurface,
 
     @objc private func invigilatorKey() { promptEmergencyExit() }
 
+    // MARK: - Device test (preview of the exam screen: no lock, no network, no attempt)
+
+    private var deviceTestImmersive = false
+    private var deviceTestTimer: Timer?
+    private var deviceTestObservers: [NSObjectProtocol] = []
+
+    private lazy var deviceTest = DeviceTest(
+        begin: { [weak self] in self?.deviceTestBegan() },
+        restore: { [weak self] in self?.deviceTestRestored() },
+        emit: { [weak self] m in
+            switch m {
+            case .started(let remaining):
+                self?.send(["type": "deviceTest", "state": "started", "remaining": remaining])
+            case .ended(let reason, let remaining):
+                self?.send(["type": "deviceTest", "state": "ended", "reason": reason.rawValue, "remaining": remaining])
+            }
+        })
+
+    private func deviceTestBegan() {
+        deviceTestImmersive = true
+        UIApplication.shared.isIdleTimerDisabled = true
+        refreshSystemChrome()
+        deviceTestTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.deviceTest.tick() }
+        }
+        let nc = NotificationCenter.default
+        let hooks: [(NSNotification.Name, () -> Void)] = [
+            (UIApplication.willResignActiveNotification, { [weak self] in self?.deviceTest.appBackgrounded() }),
+            (UIApplication.didBecomeActiveNotification, { [weak self] in self?.deviceTest.appForegrounded() }),
+            (UIApplication.willTerminateNotification, { [weak self] in self?.deviceTest.end(.leave) }),
+        ]
+        deviceTestObservers = hooks.map { name, action in
+            nc.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { action() } }
+        }
+    }
+
+    private func deviceTestRestored() {
+        deviceTestTimer?.invalidate(); deviceTestTimer = nil
+        deviceTestObservers.forEach(NotificationCenter.default.removeObserver)
+        deviceTestObservers = []
+        deviceTestImmersive = false
+        UIApplication.shared.isIdleTimerDisabled = LockdownController.shared.isLocked
+        refreshSystemChrome()
+    }
+
     // MARK: - Bridge (JS <-> native)
 
     private func isServerURL(_ url: URL?) -> Bool { ExamPaths.isServerURL(url, server: server) }
@@ -530,15 +576,27 @@ final class ExamViewController: UIViewController, LockSurface,
         let origin = message.frameInfo.securityOrigin
         func defaultPort(_ s: String?) -> Int { s?.lowercased() == "https" ? 443 : 80 }
         let originPort = origin.port == 0 ? defaultPort(origin.protocol) : origin.port
-        guard message.frameInfo.isMainFrame,
-              origin.protocol.lowercased() == server.scheme?.lowercased(),
-              origin.host.lowercased() == server.host?.lowercased(),
-              originPort == (server.port ?? defaultPort(server.scheme)),
-              let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        let fromServer = message.frameInfo.isMainFrame
+            && origin.protocol.lowercased() == server.scheme?.lowercased()
+            && origin.host.lowercased() == server.host?.lowercased()
+            && originPort == (server.port ?? defaultPort(server.scheme))
+        guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        if action == "deviceTestStart" {
+            let lock = LockdownController.shared
+            deviceTest.start(seconds: body["seconds"], context: DeviceTestContext(
+                fromServerPage: fromServer,
+                examActive: lock.isLocked || lock.lockInFlight || AppSession.shared.exam != nil,
+                websiteMode: external.isActive))
+            return
+        }
+        guard fromServer else { return }
         if action == "log" { return }
         DebugLog.log("bridge", "page -> app: \(action)")
+        if ["lock", "session", "prelock", "openExternal"].contains(action) { deviceTest.end(.leave) }
 
         switch action {
+        case "deviceTestLeave":
+            deviceTest.end(.leave)
         case "hello":
             sendState()
         case "flushEvents":
@@ -726,7 +784,8 @@ final class ExamViewController: UIViewController, LockSurface,
     func sendState() {
         send(["type": "state", "locked": LockdownController.shared.isLocked, "trusted": true,
               "version": Config.version, "app_version": Config.version, "platform": "ipad",
-              "sealed_pending": Sealed.hasPending, "prelock": LockdownController.shared.isPreLock])
+              "sealed_pending": Sealed.hasPending, "prelock": LockdownController.shared.isPreLock,
+              "deviceTest": true])
     }
 
     private var eventsReady = false
@@ -955,6 +1014,7 @@ final class ExamViewController: UIViewController, LockSurface,
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        deviceTest.end(.leave)
         committedURL = webView.url
         eventsReady = false                  // the new page asks for them ("flushEvents")
         hideConnecting()
