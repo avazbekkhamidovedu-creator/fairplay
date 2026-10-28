@@ -837,7 +837,7 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
             run(c)
             e = oj_exam(c, teacher)
             assert e["course"] == "" and e["question_count"] == 5 and e["external"]["package_ready"]
-            e = c.post(f"/api/exams/{e['id']}/open", headers=teacher).json()
+            assert e["status"] == "live"     # its start has passed: the sync opened it
             a = start(c, alice, e["id"], e["start_code"]).json()
             qs = {q["title"]: q for q in a["questions"]}
             assert qs["Report"]["max_files"] == 1
@@ -917,7 +917,7 @@ def test_dkuoj_refusals_are_dead_not_retried(tmp_path, static_dir, monkeypatch):
             run(c, now=utcnow() + timedelta(minutes=20))
             assert oj_exam(c, teacher)["question_count"] == 5
             e = oj_exam(c, teacher)
-            e = c.post(f"/api/exams/{e['id']}/open", headers=teacher).json()
+            assert e["status"] == "live"     # the package arrived after the start: opened by the same pass
             for status, who in ((413, "alice"), (400, "carol")):
                 real.submit_status = status
                 h = login(c, who)

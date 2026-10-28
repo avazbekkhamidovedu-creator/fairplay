@@ -703,6 +703,47 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
     return True
 
 
+# ---------------------------------------------------------------- auto-open
+async def open_due(sessionmaker, now: datetime) -> list[str]:
+    """Open every DKU OJ exam whose package is applied once its scheduled start has come.
+    Only exams still in draft: a closed exam is never reopened, an exam whose start moved into
+    the future waits. The teacher's and the bridge's manual open keep working."""
+    from fastapi import HTTPException
+    from ...exam_control import open_exam
+    from .setup import add_event
+    opened: list[str] = []
+    async with sessionmaker() as session:
+        ids = (await session.execute(select(Exam.id).where(
+            Exam.source == "dkuoj", Exam.status == "draft", Exam.external_removed == false(),
+            Exam.scheduled_at.is_not(None), Exam.scheduled_at <= now))).scalars().all()
+    for exam_id in ids:
+        async with sessionmaker() as session:
+            e = await session.get(Exam, exam_id)
+            if e is None or e.status != "draft" or e.scheduled_at is None or e.scheduled_at > now:
+                continue
+            if not e.questions or not e.external_version:
+                continue
+            try:
+                await open_exam(session, e, open_to="all")
+            except HTTPException as err:
+                msg = str(err.detail)[:300]
+                if (e.external_meta or {}).get("auto_open_error") != msg:
+                    log.info("DKU OJ exam %s not opened at its start: %s", e.external_key, msg)
+                    e.external_meta = {**(e.external_meta or {}), "auto_open_error": msg}
+                    await session.commit()
+                continue
+            if (e.external_meta or {}).get("auto_open_error"):
+                e.external_meta = {k: v for k, v in e.external_meta.items() if k != "auto_open_error"}
+            from .routes_v2 import _event_class
+            class_id = _event_class(e)
+            if class_id is not None:
+                await add_event(session, class_id, "auto_opened", detail=f"exam {e.external_key}: scheduled start reached")
+            await session.commit()
+            log.info("DKU OJ exam %s opened at its scheduled start", e.external_key)
+            opened.append(e.id)
+    return opened
+
+
 # ---------------------------------------------------------------- the loop
 async def run_once(sessionmaker, cfg=None, now: datetime | None = None, deliver: bool = True,
                    client: DkuojClient | None = None) -> dict:
@@ -720,6 +761,7 @@ async def run_once(sessionmaker, cfg=None, now: datetime | None = None, deliver:
     try:
         for name, step in (("exams", lambda: sync_exams(sessionmaker, client, cfg, now)),
                            ("packages", lambda: fetch_packages(sessionmaker, client, now)),
+                           ("open", lambda: open_due(sessionmaker, now)),
                            ("results", lambda: sync_results(sessionmaker, client, now)),
                            ("delivery", lambda: deliver_due(sessionmaker, client, cfg, now))):
             if name == "delivery" and not deliver:
@@ -761,6 +803,7 @@ async def run_forever() -> None:
                         last_full = loop.time()
                         await run_once(db.sessionmaker, SOURCE.config)
                     else:
+                        await open_due(db.sessionmaker, utcnow())
                         async with DkuojClient.from_config(SOURCE.config) as client:
                             await deliver_due(db.sessionmaker, client, SOURCE.config)
             except asyncio.CancelledError:
