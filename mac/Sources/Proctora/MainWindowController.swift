@@ -374,7 +374,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         DebugLog.log("bridge", "page -> app: \(action)")
 
-        if ["lock", "prelock", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
+        if ["lock", "prelock", "session", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
 
         switch action {
         case "hello":
