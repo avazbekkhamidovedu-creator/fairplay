@@ -154,6 +154,14 @@ class FairPlayClient:
         """Idempotent; once a student has started only ``review`` may change (409 otherwise)."""
         return self.request('POST', '/exams/%s/settings' % _q(key), settings, read_timeout=read_timeout)
 
+    def sync_ping(self, exam_key=None, class_id=None, read_timeout=None):
+        body = {}
+        if exam_key is not None:
+            body['exam_key'] = exam_key
+        if class_id is not None:
+            body['class_id'] = int(class_id)
+        return self.request('POST', '/sync', body, read_timeout=read_timeout)
+
     def access_codes_pdf(self, exam_key, acting):
         return self.request('GET', '/exams/%s/access-codes.pdf' % _q(exam_key), acting_user=acting, binary=True)
 
