@@ -47,6 +47,15 @@ enum Config {
         #endif
     }
 
+    /// Base64 body of the private CA certificate trusted for the exam server only.
+    static var extraRootPEM: String? {
+        #if FAIRPLAY_DEV
+        return nil
+        #else
+        return (built["ExtraRootPEM"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        #endif
+    }
+
     /// Read once at launch; never changes while the app runs.
     static let serverURL: URL = {
         var raw = (built["ServerURL"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? BuildConfig.serverURL

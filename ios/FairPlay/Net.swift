@@ -1,23 +1,13 @@
 import Foundation
-import CryptoKit
 import Security
 import FairPlayCore
 
 /// TLS for the exam server: normal validation plus, when the build has pins, a pin check
 /// (base64 SHA-256 of one DER certificate in the chain; mac/pin.sh computes them).
 enum Pinning {
-    static var enabled: Bool { !Config.pins.isEmpty }
-
     static func evaluate(_ trust: SecTrust, host: String) -> Bool {
-        var error: CFError?
-        guard SecTrustEvaluateWithError(trust, &error) else { return false }
-        guard enabled, host.lowercased() == Config.serverURL.host?.lowercased() else { return true }
-        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate] else { return false }
-        for cert in chain {
-            let der = SecCertificateCopyData(cert) as Data
-            if Config.pins.contains(Data(SHA256.hash(data: der)).base64EncodedString()) { return true }
-        }
-        return false
+        ServerTrust.evaluate(trust, host: host, serverHost: Config.serverURL.host, pins: Config.pins,
+                             extraRoot: Config.extraRootPEM.flatMap(ServerTrust.certificate(fromPEM:)))
     }
 
     static func handle(_ challenge: URLAuthenticationChallenge,
