@@ -1,5 +1,6 @@
 // Student routes (owned by the student UI). Mounted at /student/* in App.tsx.
 import "../../api/student";
+import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "../../components/RequireAuth";
 import { FeatureGate, GradesGate, LegacyGate } from "../../components/FeatureGate";
@@ -18,6 +19,8 @@ import FeedbackPage from "./FeedbackPage";
 import StudentPracticePage from "./PracticePage";
 import ExternalExamPage from "./ExternalExamPage";
 import ExternalDonePage from "./ExternalDonePage";
+
+const DeviceTestPage = lazy(() => import("./DeviceTestPage"));
 
 export default function StudentRoutes() {
   return (
@@ -41,6 +44,7 @@ export default function StudentRoutes() {
       <Route path="practice/:setId" element={<RequireAuth role="student"><FeatureGate feature="practice" fallback="/student"><StudentPracticePage /></FeatureGate></RequireAuth>} />
       {/* 2026-10-13: the class link a teacher shares (works signed in or not). */}
       <Route path="join/:code" element={<LegacyGate><JoinLinkPage /></LegacyGate>} />
+      <Route path="device-test" element={<Suspense fallback={null}><DeviceTestPage /></Suspense>} />
       <Route path="*" element={<Navigate to="/student" replace />} />
     </Routes>
   );
