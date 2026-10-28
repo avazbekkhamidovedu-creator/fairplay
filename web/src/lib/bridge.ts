@@ -16,6 +16,18 @@ export interface NativeState {
   prelock?: boolean;
   /** 2026-10-22 (Mac): a newer FairPlay the app can install itself (missing = none). */
   update?: AppUpdate;
+  /** 2026-10-29: the app can run the "Try the exam screen" lock preview (missing = no). */
+  deviceTest?: boolean;
+}
+
+export type DeviceTestEnd = "leave" | "timeout" | "refused" | "error";
+
+/** The app's answer to deviceTestStart; "ended" also arrives when the preview is left. */
+export interface DeviceTestMessage {
+  type: "deviceTest";
+  state: "started" | "ended";
+  reason?: DeviceTestEnd;
+  remaining?: number;
 }
 
 /** A newer release the Mac app found and verified it can install ({action:"installUpdate"}). */
@@ -28,6 +40,7 @@ export type NativeMessage =
   | { type: "locked"; prelock?: boolean }
   | { type: "lockFailed"; reason: string }
   | { type: "unlocked" }
+  | DeviceTestMessage
   /** 2026-10-23: "preunlock" refused (an exam is attached to the lock). */
   | { type: "preunlockRefused" }
   /** Audit 2026-10-12: the app unlocks only once the server confirms the hand-in. */
@@ -116,6 +129,8 @@ type OutMessage =
   | { action: "sealedToken"; token: string }
   | { action: "openSettings"; pane: string }
   | { action: "installUpdate" }
+  | { action: "deviceTestStart"; seconds: number }
+  | { action: "deviceTestLeave" }
   | { action: "openDownloadPage" };
 
 /** S5: what the app seals when the submit at time-up failed. answers_json is the exact
@@ -234,6 +249,7 @@ function stateOf(d: NativeState): NativeState {
   if (typeof d.platform === "string" && d.platform) out.platform = d.platform;
   if (typeof d.sealed_pending === "boolean") out.sealed_pending = d.sealed_pending;
   if (typeof d.prelock === "boolean") out.prelock = d.prelock;   // 2026-10-23
+  if (d.deviceTest === true) out.deviceTest = true;
   const update = parseUpdate((d as { update?: unknown }).update);
   if (update) out.update = update;
   return out;
@@ -272,6 +288,26 @@ export function installUpdate(): boolean {
   if (p !== "mac" && p !== "windows") return false;
   post({ action: "installUpdate" });
   return true;
+}
+
+/** Ask the app to show the lock preview for `seconds`. Returns false in a plain browser. */
+export function deviceTestStart(seconds: number): boolean {
+  if (!isNative()) return false;
+  post({ action: "deviceTestStart", seconds });
+  return true;
+}
+
+export function deviceTestLeave(): boolean {
+  if (!isNative()) return false;
+  post({ action: "deviceTestLeave" });
+  return true;
+}
+
+/** Subscribe to the app's deviceTest messages. Returns an unsubscribe function. */
+export function onDeviceTest(listener: (msg: DeviceTestMessage) => void): () => void {
+  return onNative((m) => {
+    if (m.type === "deviceTest") listener(m);
+  });
 }
 
 /** Ask the Mac app to open DOWNLOAD_PAGE in the browser (the exam window only shows the
