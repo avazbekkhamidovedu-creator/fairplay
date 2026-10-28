@@ -200,6 +200,7 @@ async def package(exam_id: str, request: Request, p: Principal = Depends(require
         raise HTTPException(404, "Exam not found")
     if (exam.get("mode") or "questions") == "external":
         raise HTTPException(409, "This exam runs on another website and needs the internet")
+    await _not_code_exam(session, exam_id)
     code = exam.get("start_code")
     scheduled_soon = False
     if exam.get("scheduled_at"):
@@ -252,10 +253,19 @@ async def package_key(exam_id: str, p: Principal = Depends(require_student),
         raise HTTPException(404, "Exam not found")
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
+    await _not_code_exam(session, exam_id)
     await require_member(session, exam, p.user_id)
     await require_open_for(session, exam_id, p.user_id)    # 2026-10-23: selected students
     await _not_handed_in_hidden(session, exam, p.user_id)
     return {"exam_id": exam_id, "key": await _package_secret(session, exam_id)}
+
+
+async def _not_code_exam(session: AsyncSession, exam_id: str) -> None:
+    """Exams students enter with an access code are taken online only: the package key is
+    made from the start code, which those students never get."""
+    from .integrations.dkuoj.access_codes import exam_has_codes
+    if await exam_has_codes(session, exam_id):
+        raise HTTPException(409, "This exam is taken online and has no offline copy")
 
 
 async def _not_handed_in_hidden(session: AsyncSession, exam: dict, user_id: int) -> None:

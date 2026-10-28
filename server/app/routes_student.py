@@ -119,8 +119,17 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
     from .offline import package_id
     await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
     from .materials import upload_window
+    from .integrations.dkuoj.access_codes import WINDOW_LEAD, exams_with_codes
+    from .integrations.dkuoj.models import ExamAccessCode
+    from .models import User
     secret = ac.settings_of(request).secret
     now = utcnow()
+    # access codes: the exam this student signed in for shows up (as "waiting") before it opens
+    waiting_ids = set((await session.execute(
+        select(Exam.id).join(ExamAccessCode, ExamAccessCode.exam_id == Exam.id)
+        .where(Exam.status == "draft", Exam.scheduled_at.is_not(None), Exam.scheduled_at <= now + WINDOW_LEAD,
+               ExamAccessCode.revoked_at.is_(None), ExamAccessCode.bound_device.is_not(None),
+               ExamAccessCode.netid == select(User.netid).where(User.id == p.user_id).scalar_subquery()))).scalars())
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.duration_min, Exam.question_count, Exam.status,
                Attempt.id, Attempt.status, Attempt.submitted_at, Attempt.receipt,
@@ -136,6 +145,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         # Audit S-03: live exams of the student's classes / LMS courses, plus their own attempts.
         # 2026-10-24: + open-book drafts whose early upload window may be open (checked below)
         .where(or_(and_(Exam.status == "live", member_of_exam(p.user_id)), Attempt.id.is_not(None),
+                   Exam.id.in_(waiting_ids) if waiting_ids else false(),
                    and_(Exam.status == "draft", Exam.open_book == true(), Exam.upload_opens_days > 0,
                         Exam.scheduled_at > now, Exam.scheduled_at <= now + UPLOAD_LOOKAHEAD,
                         member_of_exam(p.user_id))))
@@ -143,13 +153,14 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .where(or_(Exam.delivery.is_(None), Exam.delivery != "paper"))
         .where(Exam.is_trial == false())     # the sample exam lives only in its own card
         .order_by(Exam.created_at.desc(), Exam.id))).all()
+    coded = await exams_with_codes(session, [r[0] for r in rows])
     out = []
     for (eid, title, dur, qc, status, aid, astatus, sub, receipt, course, room, sched, released,
          total, score, mode, delivery, code, calc, open_book, websites, source, external_result,
          open_to, review, class_id, external_meta, upload_days, website_links) in rows:
         mode = mode or "questions"
         window = None
-        if status == "draft" and aid is None:
+        if status == "draft" and aid is None and eid not in waiting_ids:
             # 2026-10-24: "Upcoming - upload your files": listed only while the window is
             # open; nothing about the questions (no count, no package, no start)
             window = upload_window({"open_book": open_book, "mode": mode, "scheduled_at": iso(sched),
@@ -176,18 +187,22 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         # 2026-10-23: open to selected students only -> listed, but "not open for you yet"
         # (no package, no start) unless this student already started
         open_for_me = aid is not None or is_open_for(open_to, p.user_id)
-        row = {"id": eid, "title": title, "duration_min": dur, "question_count": None if window else qc,
+        row = {"id": eid, "title": title, "duration_min": dur,
+               "question_count": None if window or eid in waiting_ids else qc,
                     "status": status, "course": course or "", "room": room or "",
                     "open_for_me": open_for_me,
                     "scheduled_at": iso(sched), "mode": mode, "delivery": delivery,
                     "attempt": attempt,
-                    "package_id": package_id(secret, eid, code, dur) if status == "live" and open_for_me else None,
+                    "package_id": (package_id(secret, eid, code, dur)
+                                   if status == "live" and open_for_me and eid not in coded else None),
                     # 2026-10-23: shown on "Before you start"; open_book -> the upload area
                     "tools": student_tools({"mode": mode, "calculator": calc, "open_book": open_book,
                                             "websites": _student_sites(source, websites),
                                             "website_links": website_links}),
                     # 2026-10-24: the early upload window (draft exams only), else null
                     "upload_window": {"opens_at": iso(window[0]), "closes_at": iso(window[1])} if window else None}
+        if eid in coded:
+            row["access_code"] = True      # students enter this exam with a per-student code
         row["class_ids"] = _class_ids(source, class_id, external_meta)
         row.update(_source_fields(source))
         out.append(row)
@@ -285,13 +300,16 @@ async def start(exam_id: str, body: StartIn, request: Request,
     # start code is looked at (not a wrong code), unless they already started (resume).
     await require_open_for(session, exam_id, p.user_id)
     device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
-    lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
-    n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
-                            "Too many wrong codes, wait 60 seconds", WRONG_CODE_LOCK_S)
-    if not same_code(body.start_code, exam["start_code"]):
-        await wrong_code(store, lock_key, count_key, n, MAX_WRONG_CODES, WRONG_CODE_LOCK_S)
-        raise HTTPException(403, "Wrong start code")
-    await store.delete(count_key)
+    # access codes: the student signed in with their code on this device, which is the authorisation
+    from .integrations.dkuoj.access_codes import signed_in_here
+    if not await signed_in_here(session, exam_id, p.user_id, device_id):
+        lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
+        n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
+                                "Too many wrong codes, wait 60 seconds", WRONG_CODE_LOCK_S)
+        if not same_code(body.start_code, exam["start_code"]):
+            await wrong_code(store, lock_key, count_key, n, MAX_WRONG_CODES, WRONG_CODE_LOCK_S)
+            raise HTTPException(403, "Wrong start code")
+        await store.delete(count_key)
 
     now = utcnow()
     a = await find_attempt(session, exam_id, p.user_id)
