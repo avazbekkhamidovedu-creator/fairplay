@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 
 /// What the lock needs from the window that shows the exam.
 protocol LockSurface: AnyObject {
+    func endDeviceTest(_ reason: DeviceTestSession.Reason)
     func enterLockedMode()
     func exitLockedMode()
     func takeFocus()
@@ -70,6 +71,7 @@ final class LockdownController {
     @discardableResult
     func lock() -> Bool {
         guard !isLocked else { return true }
+        surface?.endDeviceTest(.leave)
         guard EventTap.shared.start() else {
             EventLog.shared.record(.tapUnavailable)
             DebugLog.log("lock", "LOCK FAILED: keyboard tap not available (Accessibility off?)")
@@ -163,6 +165,7 @@ final class LockdownController {
     @discardableResult
     func preLock() -> Bool {
         guard !isLocked else { return true }
+        surface?.endDeviceTest(.leave)
         EventLog.shared.setForwarding(false)
         isPreLock = true
         if lock() {

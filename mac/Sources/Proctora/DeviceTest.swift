@@ -24,6 +24,8 @@ final class DeviceTestSession {
         var websiteExam: Bool
     }
 
+    static func restoresScreen(locked: Bool) -> Bool { !locked }
+
     static func clamp(_ raw: Any?) -> Int {
         guard let n = raw as? NSNumber, !(raw is Bool) else { return defaultSeconds }
         let d = n.doubleValue

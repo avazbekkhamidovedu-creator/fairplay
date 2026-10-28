@@ -25,6 +25,11 @@ private func make() -> (DeviceTestSession, FakeEffects, Clock) {
 
 @Suite struct DeviceTestTests {
 
+    @Test func restoreLeavesARealLockAlone() {
+        #expect(DeviceTestSession.restoresScreen(locked: false))
+        #expect(!DeviceTestSession.restoresScreen(locked: true))
+    }
+
     @Test func clampsSeconds() {
         #expect(DeviceTestSession.clamp(nil) == 60)
         #expect(DeviceTestSession.clamp("30") == 60)

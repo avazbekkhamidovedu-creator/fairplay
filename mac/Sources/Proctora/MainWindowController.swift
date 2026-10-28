@@ -1310,8 +1310,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func deviceTestRestore() {
         DebugLog.log("devicetest", "preview ended")
         deviceTestTimer?.invalidate(); deviceTestTimer = nil
-        if deviceTestTapOn { EventTap.shared.stop() }
+        let tapOn = deviceTestTapOn
         deviceTestTapOn = false
+        guard DeviceTestSession.restoresScreen(locked: LockdownController.shared.isLocked) else { return }
+        if tapOn { EventTap.shared.stop() }
         NSApp.presentationOptions = []
         exitLockedMode()
     }
