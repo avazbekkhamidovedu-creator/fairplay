@@ -12,16 +12,36 @@ enum Pinning {
     /// True when the connection may be used. Hosts other than the exam server (exam
     /// websites in website mode) only get normal validation.
     static func evaluate(_ trust: SecTrust, host: String) -> Bool {
+        evaluate(trust, host: host, serverHost: Config.serverURL.host, pins: Config.pins,
+                 extraRoot: Config.extraRootPEM.flatMap(certificate(fromPEM:)))
+    }
+
+    /// A private CA for the exam server (FAIRPLAY_EXTRA_ROOT_PEM) is an extra anchor for that
+    /// host only; the pin check below still has to find a pinned certificate in the chain.
+    static func evaluate(_ trust: SecTrust, host: String, serverHost: String?, pins: [String],
+                         extraRoot: SecCertificate?) -> Bool {
+        let isServer = host.lowercased() == serverHost?.lowercased()
+        if isServer, let extraRoot {
+            SecTrustSetAnchorCertificates(trust, [extraRoot] as CFArray)
+            SecTrustSetAnchorCertificatesOnly(trust, false)
+        }
         var error: CFError?
         guard SecTrustEvaluateWithError(trust, &error) else { return false }
-        guard enabled, host.lowercased() == Config.serverURL.host?.lowercased() else { return true }
+        guard !pins.isEmpty, isServer else { return true }
         guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate] else { return false }
         for cert in chain {
             let der = SecCertificateCopyData(cert) as Data
             let hash = Data(SHA256.hash(data: der)).base64EncodedString()
-            if Config.pins.contains(hash) { return true }
+            if pins.contains(hash) { return true }
         }
         return false
+    }
+
+    static func certificate(fromPEM pem: String) -> SecCertificate? {
+        let body = pem.split(whereSeparator: \.isNewline)
+            .filter { !$0.hasPrefix("-----") }.joined()
+        guard let der = Data(base64Encoded: body) else { return nil }
+        return SecCertificateCreateWithData(nil, der as CFData)
     }
 
     /// Shared handler for URLSession and WKWebView server-trust challenges.

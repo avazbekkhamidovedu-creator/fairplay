@@ -9,6 +9,7 @@
 #   FAIRPLAY_SERVER=https://exam.example.edu \
 #   FAIRPLAY_APP_KEY=<same value as the server's FAIRPLAY_APP_KEY> \
 #   FAIRPLAY_PINS=<base64 sha256 of a CA cert, comma-separated; see pin.sh>   (optional, recommended)
+#   FAIRPLAY_EXTRA_ROOT_PEM=<path to a PEM file: the private CA of the exam server>    (optional)
 #   FAIRPLAY_SIGN_ID="Developer ID Application: Your Uni (TEAMID)"           (optional)
 #   FAIRPLAY_NOTARY_PROFILE=<notarytool keychain profile>                     (optional)
 #   bash build.sh
@@ -17,6 +18,8 @@
 # Release builds: https only, no ATS exceptions, no UserDefaults/env overrides, no
 # safety unlock, hardened runtime; notarized when a profile is given.
 set -euo pipefail
+EXTRA_ROOT_FILE="${FAIRPLAY_EXTRA_ROOT_PEM:-}"
+[[ -z "$EXTRA_ROOT_FILE" || "$EXTRA_ROOT_FILE" == /* ]] || EXTRA_ROOT_FILE="$PWD/$EXTRA_ROOT_FILE"
 cd "$(dirname "$0")"
 APP="Proctora"; BUNDLE="FairPlay.app"   # executable keeps its internal name
 # Audit M-19: one version source (Config.swift).
@@ -60,6 +63,13 @@ for p in "${PIN_ARR[@]:-}"; do
   [[ "$p" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo "bad pin (want base64 SHA-256): $p"; exit 1; }
   PIN_LIST+=("$p")
 done
+
+EXTRA_ROOT=""
+if [ -n "$EXTRA_ROOT_FILE" ]; then
+  [ -f "$EXTRA_ROOT_FILE" ] || { echo "FAIRPLAY_EXTRA_ROOT_PEM: no such file: $FAIRPLAY_EXTRA_ROOT_PEM"; exit 1; }
+  openssl x509 -in "$EXTRA_ROOT_FILE" -noout 2>/dev/null || { echo "FAIRPLAY_EXTRA_ROOT_PEM is not a PEM certificate"; exit 1; }
+  EXTRA_ROOT="$(openssl x509 -in "$EXTRA_ROOT_FILE" | grep -v -- '-----' | tr -d '\n')"
+fi
 
 # Audit M-14: the source tree is never rewritten. Server, app key, pins and the trace path
 # go into Contents/Resources/FairPlayBuild.plist inside the (then signed) app bundle;
@@ -110,6 +120,7 @@ for p in "${PIN_LIST[@]:-}"; do
   [ -n "$p" ] || continue
   plutil -insert "Pins.$i" -string "$p" "$CONF"; i=$((i + 1))
 done
+[ -z "$EXTRA_ROOT" ] || plutil -insert ExtraRootPEM -string "$EXTRA_ROOT" "$CONF"
 chmod 644 "$CONF"   # readable when the app is installed by root (MDM / .pkg); the key is not secret from the student anyway (M-20)
 if [ "$MODE" = dev ]; then
   # Dev: plain http to local addresses only (127.0.0.1, .local, LAN IPs). No arbitrary loads.

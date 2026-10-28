@@ -30,6 +30,7 @@ enum Config {
 
     static var appKey: String { (built["AppKey"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? BuildConfig.appKey }
     static var pins: [String] { (built["Pins"] as? [String]) ?? BuildConfig.pins }
+    static var extraRootPEM: String? { (built["ExtraRootPEM"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
     static var debugLogPath: String { (built["DebugLogPath"] as? String) ?? BuildConfig.debugLogPath }
 
     /// Read once at launch; never changes while the app runs.
