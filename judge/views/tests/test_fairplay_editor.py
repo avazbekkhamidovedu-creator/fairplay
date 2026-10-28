@@ -69,34 +69,20 @@ class FairPlayEditorMixin(FairPlayDataMixin):
 
 @FAIRPLAY_ON
 class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
-    def test_lock_choice_and_panel_from_fairplay(self):
+    def test_only_the_lock_choice(self):
         html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
         self.assertIn('name="exam_lock" value="none"', html)
         self.assertIn('id="id_seb_required"', html)
         self.assertIn('id="id_fairplay_required" checked', html)
-        self.assertIn('id="fairplay-panel"', html)
-        self.assertIn('data-loaded="1"', html)
-        self.assertIn('<option value="graphing" selected>', html)
-        self.assertIn('Box https://duke.app.box.com/folder/0\ndocs.python.org', html)
-        self.assertIn('chatgpt.com (AI assistant)', html)
-        self.assertIn('<option value="breakdown" selected>', html)
-        self.assertIn('<option value="2" selected>', html)
-        self.fp.exam.assert_called_once_with('fpexam', read_timeout=3)
-        self.client_class.assert_called_with(acting_user='fp_teacher')
+        for gone in ('fairplay-panel', 'fairplay_calculator', 'All optional', 'FairPlay holds this exam',
+                     'also used elsewhere', 'not reachable', 'fairplay-edit-locked', 'fairplay-shared-warning'):
+            self.assertNotIn(gone, html)
+        self.fp.exam.assert_not_called()
 
-    def test_typed_websites_shown_as_typed(self):
-        self.fp.exam.return_value = {'synced': True,
-                                     'settings': dict(FP_SETTINGS, websites_input=['My site docs.python.org'])}
-        html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
-        self.assertIn('>My site docs.python.org</textarea>', html)
-
-    def test_fairplay_unreachable(self):
+    def test_no_standing_text_when_fairplay_is_down(self):
         self.fp.exam.side_effect = FairPlayUnreachable()
         html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
-        self.assertIn('id="fairplay-settings-unreachable"', html)
-        self.assertIn('data-loaded="0"', html)
-        self.assertNotIn('name="fairplay_calculator"', html)
-        # The lock itself is DKU OJ's: saving works, no settings are sent.
+        self.assertNotIn('not reachable', html)
         self.assertEqual(self.save().status_code, 200)
         self.fp.set_settings.assert_not_called()
         self.assertTrue(is_fairplay_exam(self.reload_exam()))
@@ -104,8 +90,7 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
     def test_not_a_fairplay_exam_asks_nothing(self):
         set_fairplay(self.exam, False)
         html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
-        self.assertIn('id="fairplay-panel"', html)
-        self.assertIn('data-loaded="1"', html)       # FairPlay's defaults
+        self.assertNotIn('id="fairplay-panel"', html)
         self.fp.exam.assert_not_called()
 
     def test_save_sends_changed_settings(self):
@@ -122,23 +107,14 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         self.assertEqual(self.save().status_code, 200)
         self.fp.set_settings.assert_not_called()
 
-    def test_settings_kept_when_fairplay_does_not_take_them(self):
+    def test_settings_refused_by_fairplay_say_nothing(self):
         self.fp.set_settings.side_effect = FairPlayUnreachable()
         response = self.save(fairplay_settings=EDITOR_SETTINGS)
         self.assertEqual(response.status_code, 200, response.content)
         data = response.json()
         self.assertTrue(data['ok'])
-        self.assertIn('not', data['fairplay_warning'])
-        self.assertEqual(data['redirect'], reverse('contest_fairplay', args=['fpexam']))
-        # The FairPlay tab offers them again, filled in.
-        self.fp.exam.return_value = {'synced': True, 'status': 'draft', 'settings': dict(FP_SETTINGS)}
-        html = self.client.get(reverse('contest_fairplay', args=['fpexam'])).content.decode()
-        self.assertIn('id="fairplay-unsaved"', html)
-        self.assertIn('<option value="scientific" selected>', html)
-        self.assertIn('Docs.Python.org\nCourse https://duke.app.box.com/f/1</textarea>', html)
-        # Only once.
-        html = self.client.get(reverse('contest_fairplay', args=['fpexam'])).content.decode()
-        self.assertNotIn('id="fairplay-unsaved"', html)
+        self.assertNotIn('fairplay_warning', data)
+        self.assertNotEqual(data['redirect'], reverse('contest_fairplay', args=['fpexam']))
 
     def test_new_key_takes_the_settings_along(self):
         self.before_the_window()
@@ -259,15 +235,19 @@ class FairPlayEditorLockTestCase(FairPlayEditorMixin, TestCase):
     def test_locked_changes_refused(self):
         before = self.current_problems()
         for label, overrides, text in (
-                ('key', {'key': 'fpexam2'}, 'assignment ID'),
-                ('lock off', {'fairplay_required': False}, 'switched away'),
-                ('problem removed', {'problems': self.problems(*self.all_problems()[:4])}, 'Problems'),
-                ('problem added', {'problems': self.problems(*self.all_problems(), self.extra)}, 'Problems'),
-                ('problem replaced', {'problems': self.problems(*self.all_problems()[:4], self.extra)}, 'Problems')):
+                ('key', {'key': 'fpexam2'}, "The assignment ID can't be changed now."),
+                ('lock off', {'fairplay_required': False}, "The lock can't be changed now."),
+                ('problem removed', {'problems': self.problems(*self.all_problems()[:4])},
+                 "The problems can't be changed now."),
+                ('problem added', {'problems': self.problems(*self.all_problems(), self.extra)},
+                 "The problems can't be changed now."),
+                ('problem replaced', {'problems': self.problems(*self.all_problems()[:4], self.extra)},
+                 "The problems can't be changed now.")):
             with self.subTest(label):
                 response = self.save(**overrides)
                 self.assertEqual(response.status_code, 400, response.content)
-                self.assertIn(text, response.json()['error'])
+                self.assertEqual(response.json()['error'], text)
+                self.assertEqual(response.json().get('field'), 'exam_lock' if 'lock' in text else None)
                 exam = self.reload_exam()
                 self.assertEqual(exam.key, 'fpexam')
                 self.assertTrue(is_fairplay_exam(exam))
@@ -292,16 +272,14 @@ class FairPlayEditorLockTestCase(FairPlayEditorMixin, TestCase):
         self.assertEqual(self.save(problems=self.problems(self.mcq, self.extra)).status_code, 200)
         self.assertEqual(self.current_problems(), [self.mcq.id, self.extra.id])
 
-    def test_shared_problems_warning(self):
-        # fpcode is public: the editor warns that it will be hidden elsewhere too.
+    def test_no_standing_lock_or_shared_text(self):
         html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
-        self.assertIn('id="fairplay-shared-warning"', html)
-        self.assertIn('fpcode', html)
-        self.assertIn('id="fairplay-edit-locked"', html)
+        self.assertNotIn('also used elsewhere', html)
+        self.assertNotIn('FairPlay holds this exam', html)
         self.client.post(reverse('contest_edit', args=['fpexam']), json.dumps(self.payload()),
                          content_type='application/json')
         page = self.client.get(reverse('contest_view', args=['fpexam'])).content.decode()
-        self.assertIn('These problems are also used elsewhere', page)
+        self.assertNotIn('also used elsewhere', page)
 
     @classmethod
     def setUpTestData(cls):
@@ -323,8 +301,8 @@ class FairPlayCloneAndTabTestCase(FairPlayDataMixin, TestCase):
         self.assertFalse(is_fairplay_exam(clone))
         self.assertTrue(is_fairplay_exam(self.reload_exam()))
 
-    def test_tab_only_for_editors(self):
-        for user, shown in ((self.teacher, True), (self.tester, False), (self.classmate, False)):
+    def test_no_tab_for_anyone(self):
+        for user, shown in ((self.teacher, False), (self.tester, False), (self.classmate, False)):
             client = Client()
             client.force_login(user)
             with self.subTest(user=user.username):
@@ -406,7 +384,7 @@ class FairPlayBoxTestCase(FairPlayDataMixin, TestCase):
         client.force_login(user)
         return client
 
-    def test_box_for_editors(self):
+    def test_no_box_on_the_assignment_page(self):
         now = timezone.now()
         response = deliver_submission(self.reload_exam(), {
             'username': 'fp_student', 'attempt_id': 'a1', 'handed_in_evidence': 'server',
@@ -415,13 +393,9 @@ class FairPlayBoxTestCase(FairPlayDataMixin, TestCase):
             'integrity_report_url': 'https://exam.example.edu/teacher/exams/1/attempts/7'})
         self.assertTrue(response['receipt'])
         html = self.client_for(self.teacher).get(reverse('contest_view', args=['fpexam'])).content.decode()
-        self.assertIn('id="fairplay-box"', html)
-        self.assertIn(reverse('contest_fairplay', args=['fpexam']), html)
-        self.assertIn('https://exam.example.edu/teacher/exams/1/attempts/7', html)
-        self.assertIn('FairPlay report', html)
-        self.assertIn(reverse('contest_fairplay_report', args=['fpexam', 'fp_student']), html)
-        tester_html = self.client_for(self.tester).get(reverse('contest_view', args=['fpexam'])).content.decode()
-        self.assertNotIn('fairplay-box', tester_html)
+        self.assertNotIn('fairplay-box', html)
+        self.assertNotIn(reverse('contest_fairplay', args=['fpexam']), html)
+        self.assertNotIn('FairPlay report', html)
 
     def test_live_room_link_is_retired(self):
         # No signed live-room link, no route.

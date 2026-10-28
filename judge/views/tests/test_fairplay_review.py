@@ -40,12 +40,11 @@ class ReviewTabTestCase(PagesMixin, TestCase):
                     self.assertIn('id="fairplay-review-help-%s"' % value, html)
                     self.assertIn(str(FAIRPLAY_REVIEW_HELP[value]).replace("'", '&#39;'), html)
 
-    def test_fairplay_down_shows_it_cannot_be_changed(self):
+    def test_fairplay_down_hides_the_forms_without_text(self):
         self.fp.exam.side_effect = FairPlayUnreachable()
         html = self.login(self.teacher).get(reverse('contest_fairplay', args=['fpexam'])).content.decode()
         self.assertNotIn('id="fairplay-review-form"', html)
-        self.assertIn('id="fairplay-review-unreachable"', html)
-        self.assertIn('id="fairplay-settings-unreachable"', html)
+        self.assertNotIn('not reachable', html)
 
     def test_save_sends_the_signed_call(self):
         response = self.post(self.teacher, {'review': 'answers'})

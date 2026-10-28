@@ -136,13 +136,10 @@ class ClearHandInTestCase(PagesMixin, TestCase):
         ).status_code, 403)
         self.assertIn('id="fairplay-hand-in"', self.report(self.teacher).content.decode())
 
-    def test_assignment_box_shows_receive_time_and_links(self):
-        html = self.login(self.teacher).get(reverse('contest_view', args=['fpexam'])).content.decode()
-        self.assertIn(reverse('contest_fairplay_report', args=['fpexam', 'fp_student']), html)
-        self.assertIn('https://exam.example.edu/teacher/exams/1/submissions/1', html)
-        self.clear(self.teacher)
+    def test_assignment_page_has_no_receipts_box(self):
         html = self.login(self.teacher).get(reverse('contest_view', args=['fpexam'])).content.decode()
         self.assertNotIn('id="fairplay-receipts"', html)
+        self.assertNotIn(reverse('contest_fairplay_report', args=['fpexam', 'fp_student']), html)
 
     def test_add_time_is_remembered(self):
         for _ in range(2):
@@ -438,8 +435,8 @@ class WebsitesBlockedTestCase(PagesMixin, TestCase):
         self.fp.exam.side_effect = FairPlayUnreachable()
         self.assertNotIn('id="fairplay-websites-blocked"', self.tab())
 
-    def test_editor_help_line(self):
+    def test_editor_has_no_websites_help(self):
         with mock.patch('judge.utils.fairplay_client.FairPlayClient') as client_class:
             client_class.return_value.exam.return_value = exam()
             html = self.login(self.teacher).get(reverse('contest_edit', args=['fpexam'])).content.decode()
-        self.assertIn('AI chat, messaging and file-sharing sites are always blocked by FairPlay', html)
+        self.assertNotIn('always blocked by FairPlay', html)
