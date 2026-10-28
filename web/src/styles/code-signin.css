@@ -57,3 +57,8 @@
   .cs-slip dd.cs-slip-code { font-size: 28px; }
 }
 .cs-dialog:focus { outline: none; }
+.cs-update { margin-bottom: 18px; padding: 12px 14px; border-radius: 12px; background: #eef1fd; border: 1px solid #c9d0f5; }
+.cs-update-warn { background: #fff8e6; border-color: #f0d58a; }
+.cs-update-line { margin: 0; font-size: 14px; font-weight: 600; }
+.cs-update-actions { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+.cs-btn-sm { padding: 8px 14px; font-size: 14px; }
