@@ -129,6 +129,9 @@ class Settings:
     max_inflight: int = field(default_factory=lambda: _int("FAIRPLAY_MAX_INFLIGHT", 128))
     # Students see their grades and past exams only when this is on (FAIRPLAY_STUDENT_GRADES).
     student_grades: bool = field(default_factory=lambda: _flag("FAIRPLAY_STUDENT_GRADES", False))
+    # The earlier student screens (class joining, course cards, grades list) stay in the web build
+    # but are shown only when this is on (listed in /api/health features).
+    legacy_student_ui: bool = field(default_factory=lambda: _flag("FAIRPLAY_LEGACY_STUDENT_UI", False))
     static_dir: str = field(default_factory=lambda: os.environ.get(
         "PROCTORA_STATIC_DIR",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")))

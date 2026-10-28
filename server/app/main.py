@@ -179,7 +179,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # demo_logins: the login page may show the demo passwords (dev / demo servers only).
         # features: optional parts switched on (FAIRPLAY_FEATURES); the UI hides the rest.
         # browser_demo: only with FAIRPLAY_BROWSER_GATE=off; the web then stands in for the app's bridge
-        out = {"ok": True, "demo_logins": settings.demo_logins, "features": list(settings.features),
+        out = {"ok": True, "demo_logins": settings.demo_logins, "features": list(settings.features) + (["legacy_student_ui"] if settings.legacy_student_ui else []),
                "student_grades": settings.student_grades}
         if settings.browser_gate == "off":
             out["browser_demo"] = True

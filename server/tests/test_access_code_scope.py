@@ -135,3 +135,18 @@ def test_the_default_is_off(monkeypatch):
     assert Settings().student_grades is False
     monkeypatch.setenv("FAIRPLAY_STUDENT_GRADES", "1")
     assert Settings().student_grades is True
+
+
+def test_legacy_student_ui_is_a_health_feature_only_when_asked(oj, monkeypatch):
+    settings = oj.app.state.settings
+    assert "legacy_student_ui" not in oj.get("/api/health").json()["features"]
+    settings.legacy_student_ui = True
+    try:
+        assert "legacy_student_ui" in oj.get("/api/health").json()["features"]
+    finally:
+        settings.legacy_student_ui = False
+    monkeypatch.delenv("FAIRPLAY_LEGACY_STUDENT_UI", raising=False)
+    from app.config import Settings
+    assert Settings().legacy_student_ui is False
+    monkeypatch.setenv("FAIRPLAY_LEGACY_STUDENT_UI", "1")
+    assert Settings().legacy_student_ui is True
