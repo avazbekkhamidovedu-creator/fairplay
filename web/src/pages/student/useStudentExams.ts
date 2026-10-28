@@ -17,6 +17,7 @@ export function useStudentExams(pollMs = STUDENT_LIST_POLL_MS) {
       const list = await studentApi.listExams();
       setExams(list);
       setError(null);
+      if (list.some((x) => x.preview)) return;
       // Audit S-03: packages on this computer get their key while we are online.
       void unlockStoredPackages(list.filter((x) => x.status === "live" && x.open_for_me !== false).map((x) => x.id));
       // Audit W-03: data of handed-in / closed exams leaves this computer.

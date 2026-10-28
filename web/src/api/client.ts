@@ -88,6 +88,8 @@ export function tokenScope(token: string | null): string | null {
   }
 }
 
+export const ADMIN_SCOPE = "admin_test";
+
 let onScopedEnd: (() => void) | null = null;
 
 /** Registered by lib/studentSession: wipes the student's local state when a code sign-in ends. */

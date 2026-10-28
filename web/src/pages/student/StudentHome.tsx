@@ -11,6 +11,8 @@ import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import { TrialCard } from "../../components/student/TrialCard";
 import { useLegacyStudentUi } from "../../lib/features";
+import { ADMIN_SCOPE, getToken, tokenScope } from "../../api/client";
+import { AdminPreview } from "../../components/student/AdminPreview";
 import Dashboard from "./Dashboard";
 import { useMe } from "../../lib/useMe";
 import { NOT_OPEN_FOR_YOU, isWaiting, pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
@@ -292,5 +294,7 @@ function ExamHero({
 }
 
 export default function StudentHome() {
-  return useLegacyStudentUi() ? <FullHome /> : <Dashboard />;
+  const legacy = useLegacyStudentUi();
+  if (tokenScope(getToken("student")) === ADMIN_SCOPE) return <AdminPreview />;
+  return legacy ? <FullHome /> : <Dashboard />;
 }

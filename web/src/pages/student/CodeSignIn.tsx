@@ -128,18 +128,24 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
         {prompt ? (
           <section className="cs-card" aria-labelledby="cs-title">
             <h1 id="cs-title" className="cs-title cs-title-sm">
-              Is this your slip?
+              {prompt.netid ? "Is this your slip?" : "Admin tester"}
             </h1>
-            <dl className="cs-slip" data-testid="code-who">
-              <dt>Last name</dt>
-              <dd>{prompt.last_name}</dd>
-              <dt>First name</dt>
-              <dd>{prompt.first_name}</dd>
-              <dt>NetID</dt>
-              <dd>{prompt.netid}</dd>
-              <dt>Access code</dt>
-              <dd className="cs-slip-code">{typedCode}</dd>
-            </dl>
+            {prompt.netid ? (
+              <dl className="cs-slip" data-testid="code-who">
+                <dt>Last name</dt>
+                <dd>{prompt.last_name}</dd>
+                <dt>First name</dt>
+                <dd>{prompt.first_name}</dd>
+                <dt>NetID</dt>
+                <dd>{prompt.netid}</dd>
+                <dt>Access code</dt>
+                <dd className="cs-slip-code">{typedCode}</dd>
+              </dl>
+            ) : (
+              <p className="cs-sub" data-testid="code-admin">
+                You can look at every exam. Nothing can be started.
+              </p>
+            )}
             <p className="cs-exam">Exam: {prompt.exam_title}</p>
             {error && (
               <p className="cs-error" role="alert">
@@ -148,7 +154,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
             )}
             <div className="cs-actions">
               <button type="button" className="cs-btn cs-btn-primary" onClick={() => void confirm()} disabled={busy}>
-                {busy ? "Signing in…" : "Confirm and continue"}
+                {busy ? "Signing in…" : prompt.netid ? "Confirm and continue" : "Continue"}
               </button>
               <button type="button" className="cs-btn cs-btn-secondary" onClick={notMe} disabled={busy}>
                 Not me

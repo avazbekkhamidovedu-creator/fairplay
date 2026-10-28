@@ -757,6 +757,8 @@ export interface ExamInput {
   delivery?: Delivery;
 }
 export interface StudentExamSummary {
+  /** operator preview sign-in: listed for viewing only, never started */
+  preview?: boolean;
   delivery?: Delivery;
   /** Audit W-02: id of the current offline package (live exams). */
   package_id?: string | null;

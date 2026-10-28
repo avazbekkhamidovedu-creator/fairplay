@@ -21,7 +21,14 @@ export function UpcomingExamCard({
   const notForMe = !inProgress && exam.open_for_me === false;
   const waiting = isWaiting(exam);
   const md = monthDay(exam.scheduled_at);
-  const when = inProgress
+  const preview = exam.preview === true;
+  const when = preview
+    ? exam.status === "live"
+      ? "Open now"
+      : exam.status === "closed"
+        ? "Closed"
+        : "Upcoming"
+    : inProgress
     ? "In progress"
     : notForMe
       ? NOT_OPEN_FOR_YOU
@@ -54,7 +61,11 @@ export function UpcomingExamCard({
         </H>
         <span className="stu-exam-item-meta">{meta}</span>
       </div>
-      {waiting ? (
+      {preview ? (
+        <span className="stu-muted" data-testid="preview-only">
+          Preview only
+        </span>
+      ) : waiting ? (
         <span className="stu-muted" data-testid="waiting-to-open" role="status">
           This page updates by itself
         </span>
