@@ -1,6 +1,8 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { AppVersion } from "../components/AppVersion";
+import CodeSignIn from "../pages/student/CodeSignIn";
 import * as bridge from "../lib/bridge";
 
 const send = (detail: unknown) => act(() => void window.dispatchEvent(new CustomEvent("proctora-native", { detail })));
@@ -35,5 +37,21 @@ describe("AppVersion", () => {
     expect(screen.getByTestId("app-version")).toHaveTextContent("FairPlay 0.7.2 · Mac");
     send({ type: "state", locked: false, trusted: true, version: "0.7", app_version: "0.7.3", platform: "windows" });
     expect(screen.getByTestId("app-version")).toHaveTextContent("FairPlay 0.7.3 · Windows");
+  });
+
+  it("code sign-in shows a short version under the logo, once the state arrives, and nothing without one", () => {
+    render(
+      <MemoryRouter>
+        <CodeSignIn onUseAccount={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByTestId("app-version")).toBeNull();
+    native();
+    send({ type: "state", locked: false, trusted: true, version: "0.7" });
+    expect(screen.queryByTestId("app-version")).toBeNull();
+    send({ type: "state", locked: false, trusted: true, version: "0.7", app_version: "0.7.6", platform: "mac" });
+    const label = screen.getByTestId("app-version");
+    expect(label).toHaveTextContent("v0.7.6 · Mac");
+    expect(label.closest(".cs-brand-col")).not.toBeNull();
   });
 });

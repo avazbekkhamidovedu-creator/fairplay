@@ -4,6 +4,7 @@ import { ApiError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
 import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
 import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
+import { AppVersion } from "../../components/AppVersion";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import * as bridge from "../../lib/bridge";
 import { keepDeviceCheck, sendPendingDeviceCheck } from "../../lib/pendingDeviceCheck";
@@ -112,9 +113,12 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
   return (
     <div className="cs-page">
       <header className="cs-top">
-        <span className="cs-brand">
-          <LogoMark />
-          <Wordmark />
+        <span className="cs-brand-col">
+          <span className="cs-brand">
+            <LogoMark />
+            <Wordmark />
+          </span>
+          <AppVersion short className="cs-version" />
         </span>
         <button type="button" className="cs-test-btn" onClick={openPanel}>
           Test my device
