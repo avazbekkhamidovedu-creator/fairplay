@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -790,3 +791,62 @@ async def exam_report(key: str, netid: str, call: BridgeCall = Depends(signed_ca
             "started_at": iso(a.started_at) if a else None,
             "handed_in_at": iso(a.submitted_at) if a else None, "events": events}
 
+
+
+NO_ROSTER = "This exam has no student list in FairPlay yet, so there are no access codes to print."
+
+
+def _event_class(e: Exam) -> int | None:
+    for c in (e.external_meta or {}).get("classes") or []:
+        if isinstance(c, dict) and isinstance(c.get("id"), int) and not isinstance(c.get("id"), bool):
+            return c["id"]
+    return None
+
+
+@router.get("/exams/{key}/access-codes.pdf")
+async def exam_access_codes_pdf(key: str, request: Request, call: BridgeCall = Depends(signed_call),
+                                session: AsyncSession = Depends(get_session)):
+    from . import access_codes, access_codes_pdf
+    e = await _editor_exam(session, key, call, required=False)
+    if e is None:
+        raise HTTPException(404, "Unknown exam")
+    sheet = await access_codes.ensure_codes(session, request.app.state.settings.secret, e)
+    if not sheet.rows:
+        raise HTTPException(409, NO_ROSTER)
+    students = sorted(({"last": r.last_name, "first": r.first_name, "netid": r.netid, "code": code}
+                       for r, code in sheet.rows),
+                      key=lambda s: (s["last"].casefold(), s["first"].casefold(), s["netid"]))
+    pdf = access_codes_pdf.render(e.title, e.course, utcnow(), students)
+    class_id = _event_class(e)
+    if class_id is not None:
+        await add_event(session, class_id, "access_codes_downloaded", actor=call.acting_user,
+                        detail=f"exam {key}: {len(students)} codes"[:300])
+        await session.commit()
+    log.info("DKU OJ exam %s: access codes downloaded by %s (%d students, %d without a NetID)", key,
+             call.acting_user, len(students), len(sheet.skipped))
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", key)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="access-codes-{name}.pdf"',
+                             "Cache-Control": "no-store"})
+
+
+@router.post("/exams/{key}/access-codes/reissue")
+async def exam_access_code_reissue(key: str, request: Request, call: BridgeCall = Depends(signed_call),
+                                   session: AsyncSession = Depends(get_session)):
+    from . import access_codes
+    netid = call.data.get("netid")
+    if not isinstance(netid, str) or not netid.strip():
+        raise HTTPException(400, "netid is required")
+    netid = netid.strip()[:64]
+    e = await _editor_exam(session, key, call, required=False)
+    if e is None:
+        raise HTTPException(404, "Unknown exam")
+    if not await access_codes.reissue(session, request.app.state.settings.secret, e, netid):
+        raise HTTPException(404, "This student is not on this exam's list")
+    class_id = _event_class(e)
+    if class_id is not None:
+        await add_event(session, class_id, "access_code_reissued", netid=netid, actor=call.acting_user,
+                        detail=f"exam {key}")
+        await session.commit()
+    log.info("DKU OJ exam %s: access code reissued by %s", key, call.acting_user)
+    return {"ok": True}

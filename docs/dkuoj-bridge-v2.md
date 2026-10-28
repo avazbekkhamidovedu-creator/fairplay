@@ -649,3 +649,28 @@ FairPlay side:
   one listed again is no longer removed. A list without `active_keys` changes nothing.
 - The hand-in body (v1 submissions) gains `"exam_closes_at": "<iso Z>"` (FairPlay's close: DKU OJ's
   end time + the minutes added).
+
+## 12. Per-student access codes (2026-10-28)
+
+Signed oj->fp (§1) like the exam endpoints of §3, for an acting editor of the exam (403
+otherwise). The codes are made for the students on the exam's synced list.
+
+- **`GET /exams/<key>/access-codes.pdf`** → `200 application/pdf`, `Content-Disposition:
+  attachment; filename="access-codes-<key>.pdf"`, `Cache-Control: no-store`. A code is made for
+  every student on the list who has none (existing codes never change, so a second download is the
+  same sheet); students without a NetID are skipped. Header: exam title, course, generated time
+  (UTC) and "Do not share. One code per student."; slips sorted by last name, then first name,
+  each with last name, first name, NetID and the code in large monospace; 8 slips per A4 page
+  (2 x 4) with cut lines. Names are split from the account name at its first space; characters
+  outside Latin-1 print as `?`. Unknown exam → 404; no student with a NetID on the list → 409
+  `{"detail": "..."}`. Each download is an event `access_codes_downloaded` (acting user, number of
+  codes, never a code) in the class's `recent` list.
+- **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "ep530"}` → `{"ok": true}`. The
+  student's old code stops matching and a new one is made (event `access_code_reissued`). NetID
+  missing → 400; not on the exam's list → 404.
+
+Codes: 6 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, random, unique within the exam,
+matched ignoring case, spaces and dashes. Stored as an HMAC-SHA256 (key derived from the server
+secret) and sealed (`app.lms.secretbox`) so the same sheet can be printed again; table
+`exam_access_codes` (unique `(exam_id, netid)` and `(exam_id, code_hmac)`). Student sign-in with
+a code is not part of this version. No new signing vectors: the format is unchanged.
