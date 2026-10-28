@@ -35,7 +35,7 @@ every worker, and the hand-in records live there), `FAIRPLAY_URL` is set (`judge
 `https://` (`judge.E102`; plain `http://` only to the loopback, with `DEBUG`, or with
 `FAIRPLAY_ALLOW_INSECURE = True` for a local test kit). If FairPlay shows report links under another address than `FAIRPLAY_URL`, set
 `FAIRPLAY_PUBLIC_URL` to it. Leave `FAIRPLAY_TOKEN` empty (the default) and the bridge is off: the API
-answers 404, the FAIRPLAY menu and tab are gone and teachers are not offered the FairPlay lock. No
+answers 404 and teachers are not offered the FairPlay lock. No
 migration is needed either way.
 
 Turning the token off does not reveal FairPlay exams in their hiding window; switch those off in the
@@ -46,16 +46,11 @@ editor before the editor lock (the option stays visible on them), or let them be
 * In the assignment editor, under **Anti-cheating**, the lock is one choice: **No lock**, **Safe Exam
   Browser** or **FairPlay** (same permission as the SEB option). FairPlay marks the assignment with the
   contest tag `fairplay` (made on first use; the tag picker does not offer it, and "Add new" refuses the
-  name). Choosing FairPlay shows a panel with the exam's settings, read from FairPlay when the page
-  opens: calculator, allowed websites (host names or full links, optionally after a title, e.g.
-  `Course folder https://duke.app.box.com/folder/0`; FairPlay lists the ones it refuses), open book,
-  early upload (0 to 7 days before the start, open book only), strongest lock only, approval to resume
-  after a crash, and what students can see after handing in. Changed settings are sent to FairPlay after
-  Save. A new assignment's settings are kept by FairPlay until it first fetches the assignment.
-* **When FairPlay can't be reached** the panel and the FairPlay tab say "FairPlay not reachable: the
-  settings can't be shown or changed right now". The lock itself still saves. Settings FairPlay did not
-  take are never dropped silently: the editor says so and opens the FairPlay tab, which offers them
-  again (filled in, marked "NOT saved") until they are saved.
+  name). That radio is the only FairPlay control in the editor: it shows no explanation, status or
+  warning, and DKU OJ does not read or send the exam's settings from there (FairPlay keeps its own;
+  a settings payload sent to the editor's save endpoint is still accepted and forwarded). When a save is
+  refused because FairPlay holds the exam, the editor shows one short line at the lock choice ("The
+  lock can't be changed now."), only after Save.
 * A FairPlay assignment must be limited to a course, classes or selected students: that audience is the
   exam roster. It leaves out the same people as a class roster: admins and instructors of its courses,
   instructors of classes in them, authors, curators and testers of any FairPlay exam, site staff, and
@@ -71,24 +66,18 @@ editor before the editor lock (the option stays visible on them), or let them be
   DKU OJ: not the pages, PDFs and Word exports, submission lists, the `/api/v2` API, user pages, test data
   or tester downloads, attachments (also those referenced from file-upload instructions, translations,
   options, editorials and clarifications), or practice submits. A problem the exam shares with another
-  assignment, or a public one, is hidden there too during the window; the editor warns about such
-  problems ("These problems are also used elsewhere and will be hidden everywhere on DKU OJ from ...
-  until results are released"). Outside the window a FairPlay assignment and its problems behave like
+  assignment, or a public one, is hidden there too during the window. Outside the window a FairPlay assignment and its problems behave like
   any other. Points are not affected: a user's points still count every public problem they solved.
 * **Editor lock.** From the start of the hiding window until 14 days after the end, the editor refuses
   to change the assignment ID, to switch the lock away from FairPlay, and to add, remove or replace
-  problems (a form error says why). Everything else (times, points, order, texts) can still change.
-* **FAIRPLAY** in the top menu (staff, and anyone who teaches a course): course cards, and per course the
-  FairPlay exams, the students (set up in FairPlay or not, with Reset) and the **class login** for the
-  students' first sign-in (Show / Copy, Create new, Stop, History).
-* The assignment's **FairPlay** tab (editors): before the exam the settings form, who may start and
-  **Open exam**; during it the start code (New code), the invigilator code, the close time with **Add 10
-  min** and **Close**, approvals after a crash and a live student table; afterwards each student's
-  integrity report. "Student review after hand-in" can be changed at any time.
-* On the assignment page, once answers arrive, editors see the students with the time DKU OJ received
-  the hand-in, a *late* mark, the answers that were not filed (see below), a **Hand-in** link (the
-  student's report page, with **Clear FairPlay hand-in**) and a **FairPlay report** link. The FairPlay
-  tab is shown only to users who may edit the assignment.
+  problems (a one-line form error, e.g. "The lock can't be changed now."). Everything else (times, points, order, texts) can still change.
+* There is no FAIRPLAY item in the top menu and no FairPlay tab or box on assignment pages. The old
+  pages (`/fairplay/`, `/contest/<key>/fairplay`, the student report) are not linked from anywhere and
+  stay reachable by address only for the people they were for; they print no "not reachable" text.
+* On the assignment's **Participation** page, editors of a FairPlay assignment (bridge on) get one
+  button, **Download access codes (PDF)**, which saves `access-codes-<assignment ID>.pdf` (the request
+  is below). If FairPlay does not have the codes yet (404 or 409), or can't be reached, the page shows
+  one short line ("The access codes are not ready yet." / "The access codes could not be downloaded.").
 * Answers arrive as normal submissions of each student (file answers as normal file submissions) and are
   graded as usual. Results go back to FairPlay only as students would see them here (released grades,
   finalized exam results).
@@ -140,7 +129,7 @@ the permission first and FairPlay checks again that the professor edits the exam
 (`POST/DELETE classes/<id>/login`, `GET classes/<id>/status`), student reset
 (`POST students/<netid>/reset`), the exam (`GET exams/<key>`: state, codes, counts, students and its
 `settings`) and its actions (`POST exams/<key>/open|close|add-time|new-code|approve`, a student's report
-`GET exams/<key>/students/<netid>/report`) and its settings (`POST exams/<key>/settings`: any of
+`GET exams/<key>/students/<netid>/report`), the access codes (`GET exams/<key>/access-codes.pdf`, below) and its settings (`POST exams/<key>/settings`: any of
 `calculator`, `open_book`, `websites`, `strong_lock`, `resume_needs_approval`, `upload_opens_days`,
 `review`; kept by FairPlay also for an assignment it has not fetched yet; after the first student started
 only `review` may change).
@@ -170,7 +159,7 @@ only `review` may change).
   waited is still caught), DKU OJ checks whether the student already has submissions in the exam (newer
   than a professor's clear). If so, the hand-in is
   refused with 409 instead of being filed twice, FairPlay shows it to the teacher as not delivered, and
-  DKU OJ warns on the assignment page and the FairPlay tab. The student's report page then shows the
+  the FairPlay tab shows a warning. The student's report page then shows the
   submissions on file; **Clear FairPlay hand-in** lets FairPlay deliver again. A replay of the same
   attempt whose response was lost and whose record the cache lost is refused the same way (its answers
   are already filed).
@@ -187,8 +176,13 @@ only `review` may change).
 * Renaming an assignment's key in the editor (before the editor lock) takes its FairPlay settings along
   (DKU OJ reads them under the old key and saves them under the new one; values it does not know become
   FairPlay's defaults).
-* The editor waits at most 3 s for FairPlay when it saves settings; settings FairPlay did not take are
-  kept for the FairPlay tab.
+* `GET exams/<key>/access-codes.pdf` is signed like the other calls (`X-FP-Acting-User` is the professor who
+  clicked; DKU OJ checks that they edit the assignment and that it is a FairPlay assignment first), sends
+  `Accept: application/pdf` and answers `200 application/pdf`. `404` or `409` with `{"detail": ...}` means
+  the exam is not ready; DKU OJ then shows its own short line, never FairPlay's text. DKU OJ streams the
+  bytes to the browser as `access-codes-<key>.pdf` (attachment, `Cache-Control: no-store`), at most 2 MB.
+* The editor waits at most 3 s for FairPlay when it saves settings it was given; if FairPlay does not take
+  them, only the `judge.fairplay` log says so.
 * Everything the bridge logs goes to the `judge.fairplay` logger.
 * Changing an assignment while FairPlay runs it does not change the running exam; FairPlay picks up
   edits until the first student starts.
@@ -199,9 +193,9 @@ only `review` may change).
 `judge/utils/fairplay_signals.py` (keeps the "any FairPlay exam" flag current), `judge/utils/fairplay_signing.py`,
 `judge/utils/fairplay_client.py` (calls to FairPlay), `judge/utils/fairplay_package.py` (exam list and
 package), `judge/utils/fairplay_delivery.py` (uploads, hand-ins, results), `judge/utils/fairplay_editor.py`
-(editor panel, settings, editor lock, the assignment-page box), `judge/utils/fairplay_teaching.py` (who
+(editor lock and the settings forwarded on save), `judge/utils/fairplay_teaching.py` (who
 teaches what, rosters), `judge/views/api/fairplay.py` (the API), `judge/views/fairplay.py` (FAIRPLAY pages
-and the FairPlay tab), `judge/views/fairplay_editor.py` (the editor's messages after a save) and
+and the FairPlay tab), `judge/views/fairplay_editor.py` (forwards settings after an editor save) and
 `judge/checks.py`; the rest of the code base only calls into these modules (`fairplay_hidden_for`,
 `fairplay_hidden_q`, `fairplay_visible_problems`, `fairplay_public_problems`, ...) at the places that serve
 an assignment or a problem. Tests: `judge/views/tests/test_fairplay_*.py`,
