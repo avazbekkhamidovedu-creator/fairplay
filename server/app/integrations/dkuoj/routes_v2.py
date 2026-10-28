@@ -123,6 +123,17 @@ async def _user_by_netid(session: AsyncSession, netid: str, role: str = "student
     return u
 
 
+@router.post("/sync")
+async def sync_ping(call: BridgeCall = Depends(signed_call)):
+    """DKU OJ saved an assignment: sync it now instead of at the next loop pass. Any acting
+    user: it only triggers a refresh. Answers at once, the work runs in the background."""
+    from . import guard, ping
+    body = ping.parse(call.data)
+    await ping.check_rate(body.exam_key)
+    queued = await ping.start(body.exam_key or guard.ALL)
+    return {"ok": True, "queued": queued}
+
+
 # ---------------------------------------------------------------- class logins / students
 @router.post("/classes/{class_id}/login")
 async def class_login_create(class_id: int, request: Request, call: BridgeCall = Depends(signed_call),
