@@ -100,14 +100,43 @@ function renderLogin() {
 
 const called = (url: string) => calls.filter((c) => c.url === url);
 
+const boxes = () => screen.getAllByLabelText(/^Character \d of 6$/) as HTMLInputElement[];
+const codeText = () => boxes().map((b) => b.value).join("");
+
+async function enter(user: ReturnType<typeof userEvent.setup>, code: string) {
+  await user.keyboard(code);
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+}
+
+async function openPanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Test my device" }));
+  return screen.findByRole("dialog", { name: "Test my device" });
+}
+
 describe("student sign-in with an access code", () => {
-  it("first screen is the code box and Test my device; the account form is one click away", async () => {
+  it("first screen is six code boxes and a yellow Test my device button", () => {
+    renderLogin();
+    expect(screen.getByRole("heading", { name: "Enter your exam code" })).toBeTruthy();
+    expect(screen.getByText("The 6-character code on the sheet your professor gave you.")).toBeTruthy();
+    expect(boxes()).toHaveLength(6);
+    expect(document.activeElement).toBe(boxes()[0]);
+    for (const b of boxes()) {
+      expect(b.getAttribute("autocomplete")).toBe("off");
+      expect(b.getAttribute("autocapitalize")).toBe("characters");
+      expect(b.getAttribute("inputmode")).toBe("text");
+    }
+    const test = screen.getByRole("button", { name: "Test my device" });
+    expect(test.className).toContain("cs-test-btn");
+    expect(screen.queryByRole("button", { name: "Use a username and password instead" })).toBeNull();
+  });
+
+  it("the old username link shows only when the server lists legacy_student_ui", async () => {
+    const base = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) =>
+      url === "/api/health" ? new Response(JSON.stringify({ features: ["legacy_student_ui"] }), { status: 200 }) : base(url, init)));
     const user = userEvent.setup();
     renderLogin();
-    expect(screen.getByLabelText("Your code")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Test my device" })).toBeTruthy();
-    expect(screen.queryByLabelText("Password")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Use a username and password instead" }));
+    await user.click(await screen.findByRole("button", { name: "Use a username and password instead" }));
     expect(screen.getByLabelText("Username")).toBeTruthy();
     expect(screen.getByLabelText("Password")).toBeTruthy();
   });
@@ -115,66 +144,101 @@ describe("student sign-in with an access code", () => {
   it("outside the app there is no code screen and no device test", () => {
     delete (window as unknown as { webkit?: unknown }).webkit;
     renderLogin();
-    expect(screen.queryByLabelText("Your code")).toBeNull();
+    expect(screen.queryAllByLabelText(/^Character \d of 6$/)).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "Test my device" })).toBeNull();
   });
 
-  it("a wrong code shows the same generic message and stores nothing", async () => {
+  it("typing upper-cases, advances, and Continue waits for six characters", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    const go = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
+    await user.keyboard("k7m2q");
+    expect(codeText()).toBe("K7M2Q");
+    expect(document.activeElement).toBe(boxes()[5]);
+    expect(go.disabled).toBe(true);
+    await user.keyboard("x");
+    expect(codeText()).toBe("K7M2QX");
+    expect(go.disabled).toBe(false);
+  });
+
+  it("backspace clears and steps back; arrow keys move", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    await user.keyboard("K7M");
+    expect(document.activeElement).toBe(boxes()[3]);
+    await user.keyboard("{Backspace}");
+    expect(codeText()).toBe("K7");
+    expect(document.activeElement).toBe(boxes()[2]);
+    await user.keyboard("{ArrowLeft}");
+    expect(document.activeElement).toBe(boxes()[1]);
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(document.activeElement).toBe(boxes()[3]);
+  });
+
+  it("pasting the whole code, with spaces or dashes, fills the boxes", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    await user.paste("k7m-2qx");
+    expect(codeText()).toBe("K7M2QX");
+    await user.click(boxes()[0]!);
+    await user.paste(" ab c 123 ");
+    expect(codeText()).toBe("ABC123");
+  });
+
+  it("a wrong code shows the same generic message in an alert, marks the boxes and stores nothing", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", NOT_VALID);
     renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "k7m-2qx{Enter}");
+    await enter(user, "K7M2QX");
     expect((await screen.findByRole("alert")).textContent).toBe("That code is not valid.");
+    expect(boxes()[0]!.getAttribute("aria-invalid")).toBe("true");
     expect(getToken("student")).toBeNull();
-    expect(screen.getByLabelText("Your code")).toBeTruthy();
-  });
-
-  it("a code that is too short is not sent", async () => {
-    const user = userEvent.setup();
-    renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "K7M{Enter}");
-    expect((await screen.findByRole("alert")).textContent).toMatch(/6 letters and digits/);
-    expect(called("/api/student/code-login")).toHaveLength(0);
+    expect(boxes()).toHaveLength(6);
   });
 
   it("sends the cleaned-up code with the app's signed proof", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", { status: 200, body: PROMPT });
     renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "k7m-2qx{Enter}");
+    await user.paste("k7m-2qx");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
     await screen.findByTestId("code-who");
     const sent = called("/api/student/code-login")[0]!.body as { code: string; client: Record<string, string> };
     expect(sent.code).toBe("K7M2QX");
     expect(sent.client).toMatchObject({ device_id: "DEVICE-AAAA-0001", nonce: "NONCE-12345678" });
   });
 
-  it("asks 'This is me' / 'Not me'; Not me goes back to the code box and keeps nothing", async () => {
+  it("Is this your slip? shows the names, the typed code and the exam; Not me returns to empty boxes", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", { status: 200, body: PROMPT });
     renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "K7M2QX{Enter}");
-    const who = await screen.findByTestId("code-who");
-    expect(who.textContent).toBe("You are Avazbek Khamidov (ax19) — Exam: CS 101 Midterm");
+    await enter(user, "K7M2QX");
+    expect(await screen.findByRole("heading", { name: "Is this your slip?" })).toBeTruthy();
+    const slip = screen.getByTestId("code-who");
+    expect(slip.textContent).toBe("Last nameKhamidovFirst nameAvazbekNetIDax19Access codeK7M2QX");
+    expect(screen.getByText("Exam: CS 101 Midterm")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Not me" }));
-    expect((screen.getByLabelText("Your code") as HTMLInputElement).value).toBe("");
+    expect(codeText()).toBe("");
+    expect(boxes()).toHaveLength(6);
     expect(getToken("student")).toBeNull();
     expect(called("/api/student/code-login/confirm")).toHaveLength(0);
   });
 
-  it("This is me confirms, stores the token like a normal login and opens the student home", async () => {
+  it("Confirm and continue confirms, stores the token like a normal login and opens the student home", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", { status: 200, body: PROMPT });
     reply("/api/student/code-login/confirm", { status: 200, body: SESSION });
     renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "K7M2QX{Enter}");
+    await enter(user, "K7M2QX");
     await screen.findByTestId("code-who");
-    await user.click(screen.getByRole("button", { name: "This is me" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and continue" }));
     await screen.findByText("Student home");
     expect(called("/api/student/code-login/confirm")[0]!.body).toEqual({ confirm_token: "CONFIRM-TOK" });
     expect(getToken("student")).toBe("SESSION-TOK");
   });
 
-  it("an expired confirmation sends the student back to the code box with the reason", async () => {
+  it("an expired confirmation sends the student back to the code boxes with the reason", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", { status: 200, body: PROMPT });
     reply("/api/student/code-login/confirm", {
@@ -182,11 +246,11 @@ describe("student sign-in with an access code", () => {
       body: { detail: "This confirmation has expired. Enter your code again." },
     });
     renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "K7M2QX{Enter}");
+    await enter(user, "K7M2QX");
     await screen.findByTestId("code-who");
-    await user.click(screen.getByRole("button", { name: "This is me" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and continue" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/expired/);
-    expect(screen.getByLabelText("Your code")).toBeTruthy();
+    expect(boxes()).toHaveLength(6);
     expect(getToken("student")).toBeNull();
   });
 
@@ -198,25 +262,35 @@ describe("student sign-in with an access code", () => {
       headers: { "Retry-After": "42" },
     });
     renderLogin();
-    await user.type(screen.getByLabelText("Your code"), "K7M2QX{Enter}");
+    await enter(user, "K7M2QX");
     expect((await screen.findByRole("alert")).textContent).toMatch(/42 seconds/);
   });
 
-  it("Test my device runs the preflight, shows the rows and sends them only after sign-in", async () => {
+  it("Test my device opens a panel with OK and Problem rows; Esc closes it; the result is sent only after sign-in", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", { status: 200, body: PROMPT });
     reply("/api/student/code-login/confirm", { status: 200, body: SESSION });
     renderLogin();
-    await user.click(screen.getByRole("button", { name: "Test my device" }));
-    const rows = await screen.findByRole("list", { name: "Device check results" });
+    const dialog = await openPanel(user);
+    const rows = await within(dialog).findByRole("list", { name: "Device check results" });
     expect(within(rows).getByText("macOS 15.1")).toBeTruthy();
     expect(within(rows).getByText("Unplug the second display")).toBeTruthy();
-    expect(screen.getByText("Your teacher sees this check after you sign in.")).toBeTruthy();
+    expect(within(rows).getByText("OK")).toBeTruthy();
+    expect(within(rows).getByText("Problem")).toBeTruthy();
+    expect(within(dialog).getByText("Your teacher sees this check after you sign in.")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Test again" })).toBeTruthy();
     expect(called("/api/student/device-check")).toHaveLength(0);
 
-    await user.type(screen.getByLabelText("Your code"), "K7M2QX{Enter}");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Test my device" }));
+    await user.click(await screen.findByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(boxes()[0]!);
+    await enter(user, "K7M2QX");
     await screen.findByTestId("code-who");
-    await user.click(screen.getByRole("button", { name: "This is me" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and continue" }));
     await screen.findByText("Student home");
     const sent = called("/api/student/device-check");
     expect(sent).toHaveLength(1);
@@ -228,6 +302,19 @@ describe("student sign-in with an access code", () => {
       exam_id: null,
       checks: PREFLIGHT.checks,
     });
+  });
+
+  it("an info row is labelled Info and Test again runs the check again", async () => {
+    const user = userEvent.setup();
+    renderLogin();
+    const dialog = await openPanel(user);
+    await within(dialog).findByRole("list", { name: "Device check results" });
+    const post = (window as unknown as { webkit: { messageHandlers: { proctora: { postMessage: ReturnType<typeof vi.fn> } } } })
+      .webkit.messageHandlers.proctora.postMessage;
+    const before = post.mock.calls.filter((c) => c[0].action === "preflight").length;
+    await user.click(within(dialog).getByRole("button", { name: "Test again" }));
+    await within(dialog).findByRole("list", { name: "Device check results" });
+    expect(post.mock.calls.filter((c) => c[0].action === "preflight").length).toBe(before + 1);
   });
 
   it("an app that does not answer the check says so", async () => {

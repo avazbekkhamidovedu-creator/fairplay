@@ -2,19 +2,20 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
-import { DeviceCheckRows } from "../../components/student/Readiness";
-import { Icon, LogoMark, Wordmark } from "../../components/ui/Icon";
+import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
+import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
+import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import * as bridge from "../../lib/bridge";
 import { keepDeviceCheck, sendPendingDeviceCheck } from "../../lib/pendingDeviceCheck";
-import "../../styles/student.css";
-import "../../styles/teacher.css";
+import { useLegacyStudentUi } from "../../lib/legacyStudentUi";
+import "../../styles/code-signin.css";
 
 /** The code as the server reads it: letters and digits, upper case; spaces and dashes dropped. */
 export function normalizeCode(raw: string): string {
   return raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-export const CODE_CHARS = 6;
+export const CODE_CHARS = CODE_LENGTH;
 export const NOT_VALID = "That code is not valid.";
 
 function errorText(err: unknown): string {
@@ -26,39 +27,53 @@ function errorText(err: unknown): string {
   return "Cannot reach the server. Check your connection and try again.";
 }
 
-type Check = { kind: "idle" } | { kind: "running" } | { kind: "none" } | { kind: "done"; report: bridge.PreflightReport };
-
 /** First screen of the student page: the student's access code, and a device test that works
  *  before anyone is signed in. */
 export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void }) {
   const navigate = useNavigate();
-  const [code, setCode] = useState("");
+  const legacy = useLegacyStudentUi();
+  const [chars, setChars] = useState<string[]>(() => Array(CODE_CHARS).fill(""));
+  const [typedCode, setTypedCode] = useState("");
   const [prompt, setPrompt] = useState<CodeLoginPrompt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shake, setShake] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [check, setCheck] = useState<Check>({ kind: "idle" });
+  const [check, setCheck] = useState<DeviceCheckState>({ kind: "idle" });
+  const [panel, setPanel] = useState(false);
+
+  const code = chars.join("");
+  const complete = code.length === CODE_CHARS;
+
+  function fail(text: string) {
+    setError(text);
+    if (text === NOT_VALID) setShake((n) => n + 1);
+  }
+
+  function clearCode() {
+    setChars(Array(CODE_CHARS).fill(""));
+    setTypedCode("");
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!complete || busy) return;
     setError(null);
     const typed = normalizeCode(code);
-    if (typed.length !== CODE_CHARS) {
-      setError(`Your code has ${CODE_CHARS} letters and digits.`);
-      return;
-    }
     setBusy(true);
     try {
       const ch = await codeLoginApi.challenge();
       const proof = await bridge.attest(ch.nonce);
-      setPrompt(await codeLoginApi.enter(typed, proof));
+      const res = await codeLoginApi.enter(typed, proof);
+      setTypedCode(typed);
+      setPrompt(res);
     } catch (err) {
-      setError(errorText(err));
+      fail(errorText(err));
     } finally {
       setBusy(false);
     }
   }
 
-  async function itsMe() {
+  async function confirm() {
     if (!prompt) return;
     setBusy(true);
     setError(null);
@@ -69,7 +84,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
       navigate("/student", { replace: true });
     } catch (err) {
       setPrompt(null);
-      setCode("");
+      clearCode();
       setError(err instanceof ApiError && err.status === 400 ? err.detail : errorText(err));
     } finally {
       setBusy(false);
@@ -78,116 +93,102 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
 
   function notMe() {
     setPrompt(null);
-    setCode("");
+    clearCode();
     setError(null);
   }
 
-  async function testDevice() {
+  async function runCheck() {
     setCheck({ kind: "running" });
     const report = await bridge.preflightReport();
     keepDeviceCheck(report);
     setCheck(report ? { kind: "done", report } : { kind: "none" });
   }
 
+  function openPanel() {
+    setPanel(true);
+    if (check.kind === "idle" || check.kind === "none") void runCheck();
+  }
+
   return (
-    <div className="t-login">
-      <aside className="t-login-side" aria-label="About FairPlay">
-        <span className="t-brand">
+    <div className="cs-page">
+      <header className="cs-top">
+        <span className="cs-brand">
           <LogoMark />
           <Wordmark />
         </span>
-        <h2>Your answers are saved as you type.</h2>
-        <ul className="t-login-points">
-          {["Answers sync even if the Wi-Fi drops", "No account or password needed on exam day", "Test this device before the exam"].map((p) => (
-            <li key={p}>
-              <Icon name="check" size={18} />
-              {p}
-            </li>
-          ))}
-        </ul>
-      </aside>
-      <main className="t-login-main">
-        <div className="t-login-card">
-          {prompt ? (
-            <>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <h1>Is this you?</h1>
-              </div>
-              <p data-testid="code-who" style={{ margin: 0, fontSize: 17 }}>
-                You are{" "}
-                <b>
-                  {prompt.first_name} {prompt.last_name}
-                </b>{" "}
-                ({prompt.netid}) — Exam: <b>{prompt.exam_title}</b>
+        <button type="button" className="cs-test-btn" onClick={openPanel}>
+          Test my device
+        </button>
+      </header>
+      <main className="cs-main">
+        {prompt ? (
+          <section className="cs-card" aria-labelledby="cs-title">
+            <h1 id="cs-title" className="cs-title cs-title-sm">
+              Is this your slip?
+            </h1>
+            <dl className="cs-slip" data-testid="code-who">
+              <dt>Last name</dt>
+              <dd>{prompt.last_name}</dd>
+              <dt>First name</dt>
+              <dd>{prompt.first_name}</dd>
+              <dt>NetID</dt>
+              <dd>{prompt.netid}</dd>
+              <dt>Access code</dt>
+              <dd className="cs-slip-code">{typedCode}</dd>
+            </dl>
+            <p className="cs-exam">Exam: {prompt.exam_title}</p>
+            {error && (
+              <p className="cs-error" role="alert">
+                {error}
               </p>
+            )}
+            <div className="cs-actions">
+              <button type="button" className="cs-btn cs-btn-primary" onClick={() => void confirm()} disabled={busy}>
+                {busy ? "Signing in…" : "Confirm and continue"}
+              </button>
+              <button type="button" className="cs-btn cs-btn-secondary" onClick={notMe} disabled={busy}>
+                Not me
+              </button>
+            </div>
+          </section>
+        ) : (
+          <section className="cs-card" aria-labelledby="cs-title">
+            <h1 id="cs-title" className="cs-title">
+              Enter your exam code
+            </h1>
+            <p className="cs-sub">The 6-character code on the sheet your professor gave you.</p>
+            <form onSubmit={submit} noValidate>
+              <CodeBoxes
+                chars={chars}
+                onChange={(next) => {
+                  setChars(next);
+                  if (error) setError(null);
+                }}
+                invalid={error === NOT_VALID}
+                shakeKey={shake}
+                disabled={busy}
+                describedBy={error ? "cs-error" : undefined}
+              />
               {error && (
-                <div className="alert alert-error" role="alert">
+                <p id="cs-error" className="cs-error" role="alert">
                   {error}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 10 }}>
-                <button type="button" className="btn btn-primary btn-lg" onClick={() => void itsMe()} disabled={busy}>
-                  {busy ? "Signing in…" : "This is me"}
-                </button>
-                <button type="button" className="btn btn-lg" onClick={notMe} disabled={busy}>
-                  Not me
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <h1>Student sign in</h1>
-                <p className="t-muted" style={{ margin: 0, fontSize: 15 }}>
-                  Type the code from the sheet your professor gave you.
                 </p>
-              </div>
-              <form onSubmit={submit} noValidate>
-                <div className="t-field">
-                  <label htmlFor="access-code">Your code</label>
-                  <input
-                    id="access-code"
-                    className="input mono"
-                    autoComplete="off"
-                    autoCapitalize="characters"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    maxLength={16}
-                    inputMode="text"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value.toUpperCase())}
-                    autoFocus
-                  />
-                </div>
-                {error && (
-                  <div className="alert alert-error" role="alert">
-                    {error}
-                  </div>
-                )}
-                <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>
-                  {busy ? "Checking…" : "Continue"}
-                </button>
-              </form>
-              <div className="stu-device-check" data-testid="test-device">
-                <button type="button" className="btn btn-lg btn-block" onClick={() => void testDevice()} disabled={check.kind === "running"}>
-                  {check.kind === "running" ? "Checking…" : check.kind === "done" ? "Test again" : "Test my device"}
-                </button>
-                {check.kind === "none" && (
-                  <p className="stu-hint" role="status">
-                    This version of FairPlay cannot run the full check. The exam still checks before it locks.
-                  </p>
-                )}
-                {check.kind === "done" && <DeviceCheckRows report={check.report} saved={false} pending />}
-              </div>
-              <p className="t-login-switch" style={{ margin: 0 }}>
-                <button type="button" className="stu-linkbtn" onClick={onUseAccount}>
+              )}
+              <button type="submit" className="cs-btn cs-btn-primary cs-block" disabled={!complete || busy}>
+                {busy ? "Checking…" : "Continue"}
+              </button>
+            </form>
+            {legacy && (
+              <p className="cs-legacy">
+                <button type="button" className="cs-link" onClick={onUseAccount}>
                   Use a username and password instead
                 </button>
               </p>
-            </>
-          )}
-        </div>
+            )}
+          </section>
+        )}
       </main>
+      {panel && <DeviceCheckDialog state={check} onAgain={() => void runCheck()} onClose={() => setPanel(false)} />}
     </div>
   );
 }
