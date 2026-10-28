@@ -178,7 +178,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health():
         # demo_logins: the login page may show the demo passwords (dev / demo servers only).
         # features: optional parts switched on (FAIRPLAY_FEATURES); the UI hides the rest.
-        return {"ok": True, "demo_logins": settings.demo_logins, "features": list(settings.features)}
+        # browser_demo: only with FAIRPLAY_BROWSER_GATE=off; the web then stands in for the app's bridge
+        out = {"ok": True, "demo_logins": settings.demo_logins, "features": list(settings.features)}
+        if settings.browser_gate == "off":
+            out["browser_demo"] = True
+        return out
 
     @app.get("/api/app/version")
     async def app_version():

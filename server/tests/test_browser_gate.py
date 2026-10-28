@@ -217,3 +217,13 @@ def test_student_chunks_are_assets_not_the_app_page(tmp_path, static_dir):
         missing = c.get("/student/assets/nope.js", headers=MAC_WEB)
         assert missing.status_code == 404 and missing.json() == {"detail": "Not Found"}
         assert c.get("/student/assets/routes-abc123.js", headers=CHROME).json() == {"detail": "Not Found"}
+
+
+def test_health_flags_browser_demo_only_with_the_gate_off(tmp_path, static_dir):
+    for mode in ("headers", "strict", "off"):
+        (tmp_path / mode).mkdir()
+    for mode in ("headers", "strict"):
+        with make(tmp_path / mode, static_dir, mode) as c:
+            assert "browser_demo" not in c.get("/api/health", headers=CHROME).json()
+    with make(tmp_path / "off", static_dir, "off") as c:
+        assert c.get("/api/health", headers=CHROME).json()["browser_demo"] is True
