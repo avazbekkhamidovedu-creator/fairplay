@@ -76,13 +76,14 @@ describe("device test button", () => {
     expect(screen.getByText("Preview page")).toBeInTheDocument();
   });
 
-  it("opens the page after 1.5 s when no answer comes", async () => {
+  it("shows the line and stays when no answer comes in 1.5 s", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await userEvent.click(screen.getByRole("button", { name: BUTTON }));
     await act(async () => void vi.advanceTimersByTime(1600));
-    expect(screen.getByText("Preview page")).toBeInTheDocument();
+    expect(screen.getByText("The test can't start right now.")).toBeInTheDocument();
+    expect(screen.queryByText("Preview page")).toBeNull();
   });
 
   it("shows one line and stays when refused", async () => {
@@ -146,9 +147,9 @@ describe("device test page", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("renders nothing without a bridge", () => {
+  it("goes to the login screen without a bridge", () => {
     delete (window as unknown as { webkit?: unknown }).webkit;
-    const { container } = page({ remaining: 30 });
-    expect(container).toBeEmptyDOMElement();
+    page({ remaining: 30 });
+    expect(screen.getByText("Login screen")).toBeInTheDocument();
   });
 });

@@ -69,7 +69,12 @@ export function DeviceCheckDialog({
       off();
       window.clearTimeout(timer);
     };
-    timer = window.setTimeout(() => finish(), 1500);
+    timer = window.setTimeout(() => {
+      stop.current?.();
+      stop.current = null;
+      setTrying(false);
+      setRefused(true);
+    }, 1500);
     deviceTestStart(60);
   }
 

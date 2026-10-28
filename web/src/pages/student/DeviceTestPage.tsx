@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import type { AnswerMap, AnswerValue, StudentQuestion } from "../../api/types";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import { AnswerInput } from "../../components/student/AnswerInput";
@@ -28,7 +28,7 @@ function startRemaining(state: unknown): number {
 }
 
 export default function DeviceTestPage() {
-  if (!bridge.isNative()) return null;
+  if (!bridge.isNative()) return <Navigate to="/student/login" replace />;
   return <DeviceTest />;
 }
 
