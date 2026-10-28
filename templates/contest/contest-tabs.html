@@ -8,9 +8,6 @@
     {% if can_edit %}
         {{ make_tab('grade', 'fa-check-square-o', url('contest_grade', contest.key), _('Grade')) }}
         {{ make_tab('analytics', 'fa-line-chart', url('contest_analytics', contest.key), _('Analytics')) }}
-        {% if fairplay_enabled() and is_fairplay_exam(contest) and contest.is_editable_by(request.user) %}
-            {{ make_tab('fairplay', 'fa-lock', url('contest_fairplay', contest.key), _('FairPlay')) }}
-        {% endif %}
     {% endif %}
 
     {% if contest.start_time <= now or perms.judge.see_private_contest %}

@@ -203,13 +203,7 @@
                         {% if children %}<ul>{{ loop(children) }}</ul>{% endif %}
                     {% endwith %}
                 </li>
-                {% if node.key == 'submit' and node.is_root_node() and show_fairplay_menu %}
-                    <li><a href="{{ url('fairplay_home') }}" class="nav-fairplay{% if request.path.startswith('/fairplay/') %} active{% endif %}">{{ _('FairPlay') }}</a></li>
-                {% endif %}
             {% endfor %}
-            {% if show_fairplay_menu and not (nav_bar|selectattr('key', 'equalto', 'submit')|selectattr('level', 'equalto', 0)|list) %}
-                <li><a href="{{ url('fairplay_home') }}" class="nav-fairplay{% if request.path.startswith('/fairplay/') %} active{% endif %}">{{ _('FairPlay') }}</a></li>
-            {% endif %}
         </ul>
 
         <span id="user-links">

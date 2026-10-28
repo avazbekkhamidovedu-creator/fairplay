@@ -56,15 +56,9 @@ def __nav_tab(path):
     return result[0].get_ancestors(include_self=True).values_list('key', flat=True) if result else []
 
 
-def __show_fairplay_menu(user):
-    from judge.utils.fairplay_teaching import show_fairplay_menu
-    return show_fairplay_menu(user)
-
-
 def general_info(request):
     path = request.get_full_path()
     return {
-        'show_fairplay_menu': FixedSimpleLazyObject(partial(__show_fairplay_menu, request.user)),
         'nav_tab': FixedSimpleLazyObject(partial(__nav_tab, request.path)),
         'nav_bar': NavigationBar.objects.all(),
         'LOGIN_RETURN_PATH': '' if path.startswith('/accounts/') else path,
