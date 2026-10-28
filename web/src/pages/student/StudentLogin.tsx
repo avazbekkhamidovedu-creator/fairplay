@@ -1,4 +1,7 @@
+import { useState } from "react";
+import { isNative } from "../../lib/bridge";
 import LoginPage, { type LoginCopy } from "../LoginPage";
+import CodeSignIn from "./CodeSignIn";
 
 const COPY: LoginCopy = {
   title: "Student sign in",
@@ -10,5 +13,7 @@ const COPY: LoginCopy = {
 };
 
 export default function StudentLogin() {
+  const [account, setAccount] = useState(false);
+  if (isNative() && !account) return <CodeSignIn onUseAccount={() => setAccount(true)} />;
   return <LoginPage role="student" copy={COPY} />;
 }

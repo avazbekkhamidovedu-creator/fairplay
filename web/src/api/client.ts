@@ -289,6 +289,12 @@ function lazy<F extends Fn>(pick: (m: StudentModule) => F): F {
     import("./student").then((m) => (pick(m) as unknown as (...a: unknown[]) => unknown)(...args))) as unknown as F;
 }
 
+export const codeLoginApi = {
+  challenge: lazy((m) => m.codeLoginApi.challenge),
+  enter: lazy((m) => m.codeLoginApi.enter),
+  confirm: lazy((m) => m.codeLoginApi.confirm),
+};
+
 export const setupApi = {
   identify: lazy((m) => m.setupApi.identify),
   account: lazy((m) => m.setupApi.account),

@@ -1496,3 +1496,18 @@ export interface MaterialsInfo {
   upload_opens_at?: string | null;
   upload_closes_at?: string | null;
 }
+
+// ---------- 2026-10-28: sign-in with a per-student access code ----------
+
+/** POST /api/student/code-login: who the code belongs to; nothing is stored until confirmed. */
+export interface CodeLoginPrompt {
+  first_name: string;
+  last_name: string;
+  netid: string;
+  exam_title: string;
+  confirm_token: string;
+}
+export interface StudentExamSummary {
+  /** true: students enter this exam with a per-student code (no start code; online only). */
+  access_code?: boolean;
+}

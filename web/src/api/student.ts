@@ -2,6 +2,7 @@ import type {
   AnswerMap,
   AnswerUpload,
   AttemptView,
+  CodeLoginPrompt,
   DeviceCheckInput,
   EventsResponse,
   HeartbeatResponse,
@@ -63,15 +64,16 @@ setHeaderProvider(requestHeaders);
  * setToken, no localStorage/sessionStorage); every status, 401 and 503 included, comes back
  * as an ApiError so the set-up screens can say what happened (no sign-in redirect).
  */
-async function setupRequest<T>(bearer: string, path: string, body: unknown): Promise<T> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${bearer}`,
-  };
+async function setupRequest<T>(bearer: string | null, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json", "Content-Type": "application/json" };
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
   let res: Response;
   try {
-    res = await fetch(path, { method: "POST", headers: withAppHeaders(headers, path), body: JSON.stringify(body) });
+    res = await fetch(path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: withAppHeaders(headers, path),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
   } catch {
     throw new NetworkError();
   }
@@ -99,6 +101,16 @@ export const setupApi = {
   /** Step 2: the student's own login (identity token, single use) → the normal login response. */
   account: (identityToken: string, input: { username: string; password: string; password2: string }) =>
     setupRequest<LoginResponse>(identityToken, "/api/setup/account", input),
+};
+
+/** Sign-in with a per-student access code (no account, no password). Nothing here is stored:
+ *  the caller keeps the token only after the student confirmed who they are. */
+export const codeLoginApi = {
+  challenge: () => setupRequest<{ nonce: string; expires_in: number }>(null, "/api/student/code-login/challenge"),
+  enter: (code: string, client: bridge.ClientProof | null) =>
+    setupRequest<CodeLoginPrompt>(null, "/api/student/code-login", client ? { code, client } : { code }),
+  confirm: (confirmToken: string) =>
+    setupRequest<LoginResponse>(null, "/api/student/code-login/confirm", { confirm_token: confirmToken }),
 };
 
 /**

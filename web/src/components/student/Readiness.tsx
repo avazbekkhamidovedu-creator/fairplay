@@ -219,7 +219,16 @@ export function DeviceCheckRun({ examId = null }: { examId?: string | null }) {
   );
 }
 
-export function DeviceCheckRows({ report, saved }: { report: bridge.PreflightReport; saved: boolean }) {
+export function DeviceCheckRows({
+  report,
+  saved,
+  pending = false,
+}: {
+  report: bridge.PreflightReport;
+  saved: boolean;
+  /** before sign-in: the result is kept and sent to the teacher after the student signs in */
+  pending?: boolean;
+}) {
   // Older apps and Windows builds send only `problems`: show those as rows.
   const rows = report.checks.length
     ? report.checks
@@ -238,7 +247,11 @@ export function DeviceCheckRows({ report, saved }: { report: bridge.PreflightRep
         ))}
       </ul>
       <p className="stu-hint" role="status">
-        {saved ? "Your teacher can see this check." : "Could not send this check to your teacher. Try again when online."}
+        {pending
+          ? "Your teacher sees this check after you sign in."
+          : saved
+            ? "Your teacher can see this check."
+            : "Could not send this check to your teacher. Try again when online."}
       </p>
     </>
   );
