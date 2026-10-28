@@ -4,6 +4,7 @@ import { ApiError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
 import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
 import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
+import { UpdateCard, useSignInUpdate } from "../../components/code-signin/UpdatePrompt";
 import { AppVersion } from "../../components/AppVersion";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import * as bridge from "../../lib/bridge";
@@ -41,6 +42,8 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
   const [busy, setBusy] = useState(false);
   const [check, setCheck] = useState<DeviceCheckState>({ kind: "idle" });
   const [panel, setPanel] = useState(false);
+  const update = useSignInUpdate();
+  const installing = update?.phase.kind === "installing";
 
   const code = chars.join("");
   const complete = code.length === CODE_CHARS;
@@ -163,6 +166,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
           </section>
         ) : (
           <section className="cs-card" aria-labelledby="cs-title">
+            {update && !update.hidden && <UpdateCard update={update} countdown />}
             <h1 id="cs-title" className="cs-title">
               Enter your exam code
             </h1>
@@ -176,7 +180,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
                 }}
                 invalid={error === NOT_VALID}
                 shakeKey={shake}
-                disabled={busy}
+                disabled={busy || installing}
                 describedBy={error ? "cs-error" : undefined}
               />
               {error && (
@@ -184,7 +188,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
                   {error}
                 </p>
               )}
-              <button type="submit" className="cs-btn cs-btn-primary cs-block" disabled={!complete || busy}>
+              <button type="submit" className="cs-btn cs-btn-primary cs-block" disabled={!complete || busy || installing}>
                 {busy ? "Checking…" : "Continue"}
               </button>
             </form>
@@ -198,7 +202,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
           </section>
         )}
       </main>
-      {panel && <DeviceCheckDialog state={check} onAgain={() => void runCheck()} onClose={() => setPanel(false)} />}
+      {panel && <DeviceCheckDialog state={check} onAgain={() => void runCheck()} onClose={() => setPanel(false)} update={update} />}
     </div>
   );
 }

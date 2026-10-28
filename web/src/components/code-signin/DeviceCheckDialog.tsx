@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { PreflightReport } from "../../lib/bridge";
+import { UpdateCard, type SignInUpdate } from "./UpdatePrompt";
 
 export type DeviceCheckState =
   | { kind: "idle" }
@@ -30,10 +31,12 @@ export function DeviceCheckDialog({
   state,
   onAgain,
   onClose,
+  update,
 }: {
   state: DeviceCheckState;
   onAgain: () => void;
   onClose: () => void;
+  update?: SignInUpdate | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
 
@@ -70,6 +73,7 @@ export function DeviceCheckDialog({
     <div className="cs-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={box} className="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dev-title" tabIndex={-1} onKeyDown={keyDown}>
         <h2 id="cs-dev-title">Test my device</h2>
+        {update && <UpdateCard update={update} countdown={false} />}
         {running && <p className="cs-muted" role="status">Checking…</p>}
         {state.kind === "none" && (
           <p className="cs-muted" role="status">
