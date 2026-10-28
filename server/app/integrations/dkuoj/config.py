@@ -52,7 +52,7 @@ class DkuojConfig:
     url: str = ""
     token: str = ""               # the token FairPlay signs with (the first of `tokens`)
     tokens: list[str] = field(default_factory=list)    # every token a DKU OJ call may be signed with
-    sync_seconds: int = 120
+    sync_seconds: int = 30
     delivery_rps: int = 10
     auth_retry_hours: int = 6     # 401 / 403 / 404 on a hand-in are retried this long, then dead
     public_url: str = ""          # FairPlay's own address (FAIRPLAY_PUBLIC_URL), for report links
@@ -76,7 +76,7 @@ class DkuojConfig:
         tokens = parse_tokens(os.environ.get("DKUOJ_TOKEN", ""))
         return cls(url=os.environ.get("DKUOJ_URL", "").strip().rstrip("/"),
                    token=tokens[0] if tokens else "", tokens=tokens,
-                   sync_seconds=_int("DKUOJ_SYNC_SECONDS", 120),
+                   sync_seconds=_int("DKUOJ_SYNC_SECONDS", 30),
                    delivery_rps=_int("DKUOJ_DELIVERY_RPS", 10),
                    auth_retry_hours=_int("DKUOJ_AUTH_RETRY_HOURS", 6),
                    public_url=public_url)
