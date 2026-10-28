@@ -5,7 +5,7 @@ from time import monotonic
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
-from django.http import Http404, HttpResponseRedirect, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
@@ -374,6 +374,23 @@ class ContestFairPlay(LoginRequiredMixin, ContestMixin, TitleMixin, DetailView):
 
     def render_to_response(self, context, **kwargs):
         return _no_store(super().render_to_response(context, **kwargs))
+
+
+class ContestAccessCodesPdf(LoginRequiredMixin, View):
+    def get(self, request, contest):
+        contest = _fairplay_contest(request, contest)
+        back = HttpResponseRedirect(reverse('contest_participation_own', args=[contest.key]))
+        try:
+            pdf = _client(request).access_codes_pdf(contest.key, request.user.username)
+        except FairPlayError as e:
+            if e.status in (404, 409):
+                messages.error(request, _('The access codes are not ready yet.'))
+            else:
+                messages.error(request, _('The access codes could not be downloaded.'))
+            return back
+        response = HttpResponse(pdf, content_type='application/pdf')
+        response['Content-Disposition'] = 'attachment; filename="access-codes-%s.pdf"' % contest.key
+        return _no_store(response)
 
 
 class ContestFairPlayStatus(LoginRequiredMixin, View):

@@ -51,7 +51,7 @@ class FairPlayClient:
     def __init__(self, acting_user=None):
         self.acting_user = acting_user or ''
 
-    def request(self, method, path, body=None, read_timeout=None):
+    def request(self, method, path, body=None, read_timeout=None, acting_user=None, binary=False):
         base = (getattr(settings, 'FAIRPLAY_URL', '') or '').rstrip('/')
         if not base or not fairplay_enabled():
             raise FairPlayUnreachable()
@@ -62,8 +62,9 @@ class FairPlayClient:
         data = b'' if body is None else json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         parts = urlsplit(url)
         sent_path = parts.path + ('?' + parts.query if parts.query else '')
-        headers = signed_headers(method, sent_path, data, acting_user=self.acting_user)
-        headers['Accept'] = 'application/json'
+        headers = signed_headers(method, sent_path, data,
+                                 acting_user=self.acting_user if acting_user is None else acting_user)
+        headers['Accept'] = 'application/pdf' if binary else 'application/json'
         headers['Accept-Encoding'] = 'identity'
         if body is not None:
             headers['Content-Type'] = 'application/json'
@@ -81,6 +82,10 @@ class FairPlayClient:
             raw = _read_capped(response, deadline)
         finally:
             response.close()
+        if binary and response.status_code == 200:
+            if 'application/pdf' not in response.headers.get('Content-Type', '').lower():
+                raise FairPlayError(_('FairPlay sent an unexpected answer.'), status=response.status_code)
+            return raw
         try:
             payload = json.loads(raw.decode('utf-8')) if raw else None
         except (ValueError, UnicodeDecodeError):
@@ -148,6 +153,9 @@ class FairPlayClient:
     def set_settings(self, key, settings, read_timeout=None):
         """Idempotent; once a student has started only ``review`` may change (409 otherwise)."""
         return self.request('POST', '/exams/%s/settings' % _q(key), settings, read_timeout=read_timeout)
+
+    def access_codes_pdf(self, exam_key, acting):
+        return self.request('GET', '/exams/%s/access-codes.pdf' % _q(exam_key), acting_user=acting, binary=True)
 
     def student_report(self, key, netid):
         return self.request('GET', '/exams/%s/students/%s/report' % (_q(key), _q(netid)))

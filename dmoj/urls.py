@@ -292,6 +292,7 @@ urlpatterns = [
         path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
         path('/fairplay', fairplay.ContestFairPlay.as_view(), name='contest_fairplay'),
+        path('/access-codes.pdf', fairplay.ContestAccessCodesPdf.as_view(), name='contest_access_codes_pdf'),
         path('/fairplay/status', fairplay.ContestFairPlayStatus.as_view(), name='contest_fairplay_status'),
         path('/fairplay/students/<str:netid>/report', fairplay.ContestFairPlayReport.as_view(),
              name='contest_fairplay_report'),

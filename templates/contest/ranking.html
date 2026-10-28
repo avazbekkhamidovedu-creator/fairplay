@@ -138,6 +138,9 @@
 
 {% block before_users_table %}
     <div style="margin-bottom: 0.5em">
+        {% if tab == 'participation' and fairplay_enabled() and is_fairplay_exam(contest) and contest.is_editable_by(request.user) %}
+            <p><a class="button" href="{{ url('contest_access_codes_pdf', contest.key) }}">{{ _('Download access codes (PDF)') }}</a></p>
+        {% endif %}
         {% if tab == 'participation' %}
             {% if contest.can_see_full_scoreboard(request.user) %}
                 <input id="search-contest" type="text" placeholder="{{ _('View user participation') }}">
