@@ -585,7 +585,7 @@ final class ExamViewController: UIViewController, LockSurface,
             let lock = LockdownController.shared
             deviceTest.start(seconds: body["seconds"], context: DeviceTestContext(
                 fromServerPage: fromServer,
-                examActive: lock.isLocked || lock.lockInFlight || AppSession.shared.exam != nil,
+                examActive: lock.isLocked || lock.lockInFlight || lock.preLockInFlight || AppSession.shared.exam != nil,
                 websiteMode: external.isActive))
             return
         }
