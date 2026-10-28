@@ -136,6 +136,15 @@ settings forwarded on an editor save are made from DKU OJ's web interface: class
 `review`; kept by FairPlay also for an assignment it has not fetched yet; after the first student started
 only `review` may change).
 
+**Sync ping** (`POST sync`, DKU OJ to FairPlay, no acting user). Body `{"exam_key": "<contest key>", "class_id": <int>}`,
+either field may be left out; answer `200 {"ok": true, "queued": bool}`, `404` while FairPlay's bridge is off,
+`429` when rate limited. It only says "look again": FairPlay then reads the exam list and rosters from the
+API above. DKU OJ sends it after the database commit when a FairPlay assignment is created, when its
+settings change (name, times, problems, the FairPlay lock, classes, organizations, private contestants,
+authors, curators, testers), when it is deleted, and once when the lock is taken off (so FairPlay can drop
+it). A change to the members of a class that a FairPlay assignment uses sends one with `class_id`.
+Assignments without the lock, and a site without the bridge, send nothing.
+
 ## What DKU OJ keeps where (no schema change)
 
 | What | Where |
@@ -183,6 +192,10 @@ only `review` may change).
   bytes to the browser as `access-codes-<key>.pdf` (attachment, `Cache-Control: no-store`), at most 2 MB.
 * The editor waits at most 3 s for FairPlay when it saves settings it was given; if FairPlay does not take
   them, only the `judge.fairplay` log says so.
+* The sync ping runs in a daemon thread with a 1 s connect and 1 s read timeout, so a save never waits more
+  than that on FairPlay. Saves of the same assignment within 3 s send one ping at once and one more when the
+  3 s are over; one transaction sends one. Failures (FairPlay down, `4xx`, timeout) are only logged at
+  warning level on `judge.fairplay`; nothing is shown in the UI and the ping is not retried.
 * Everything the bridge logs goes to the `judge.fairplay` logger.
 * Changing an assignment while FairPlay runs it does not change the running exam; FairPlay picks up
   edits until the first student starts.
@@ -190,7 +203,7 @@ only `review` may change).
 ## Code
 
 `judge/utils/fairplay.py` (switch, the tag, hiding window and rule, checks),
-`judge/utils/fairplay_signals.py` (keeps the "any FairPlay exam" flag current), `judge/utils/fairplay_signing.py`,
+`judge/utils/fairplay_signals.py` (keeps the "any FairPlay exam" flag current), `judge/utils/fairplay_sync.py` (the sync ping), `judge/utils/fairplay_signing.py`,
 `judge/utils/fairplay_client.py` (calls to FairPlay), `judge/utils/fairplay_package.py` (exam list and
 package), `judge/utils/fairplay_delivery.py` (uploads, hand-ins, results), `judge/utils/fairplay_editor.py`
 (editor lock and the settings forwarded on save), `judge/utils/fairplay_teaching.py` (class
