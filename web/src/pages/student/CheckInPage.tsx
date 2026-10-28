@@ -19,7 +19,7 @@ export default function CheckInPage() {
   const ready = readinessOk(readiness);
   // Slice 6: keep an encrypted copy of the exam so a Wi-Fi drop at start does not stop anyone.
   const [offlineReady, setOfflineReady] = useState(false);
-  const canPackage = !!exam && exam.status === "live" && !exam.attempt && exam.mode !== "external";
+  const canPackage = !!exam && exam.status === "live" && !exam.attempt && exam.mode !== "external" && !exam.access_code;
   useEffect(() => {
     if (!canPackage || !exam) return;
     let alive = true;
@@ -84,10 +84,12 @@ export default function CheckInPage() {
         <section className="stu-checkin-card" aria-labelledby="c2-h">
           <div className="stu-step-head">
             <span className="stu-step-num" aria-hidden="true">2</span>
-            <h2 id="c2-h">Start code</h2>
+            <h2 id="c2-h">{exam.access_code ? "Start" : "Start code"}</h2>
           </div>
           <p className="stu-hint" style={{ margin: 0, lineHeight: 1.5 }}>
-            When your teacher opens the exam: read the rules, lock this computer, then type the code.
+            {exam.access_code
+              ? "When your teacher opens the exam: read the rules, lock this computer, then start. You are signed in with your code."
+              : "When your teacher opens the exam: read the rules, lock this computer, then type the code."}
           </p>
           <div className="stu-row">
             <button

@@ -4,6 +4,7 @@ import { NetworkError, studentApi } from "../../api/client";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AppsToClose, PreflightProblems } from "../../components/student/Preflight";
+import { CodeExamStart } from "../../components/student/CodeExamStart";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StuLoading } from "../../components/student/StudentLayout";
 import { examName, plural, toolsLine } from "../../components/student/format";
@@ -192,9 +193,15 @@ export default function BeforeStartPage() {
               <li>
                 <b>Your screen locks</b> when you continue. Other apps close until you hand in.
               </li>
-              <li>
-                <b>Then type the start code</b> your teacher reads out. The timer starts only when the code is right.
-              </li>
+              {exam?.access_code ? (
+                <li>
+                  <b>Then start the exam.</b> You are signed in with your code, so there is no start code to type. The timer starts when you start.
+                </li>
+              ) : (
+                <li>
+                  <b>Then type the start code</b> your teacher reads out. The timer starts only when the code is right.
+                </li>
+              )}
               <li>
                 <b>Don&apos;t close the laptop</b> or switch it off during the exam.
               </li>
@@ -300,11 +307,17 @@ export default function BeforeStartPage() {
       {locked && (
         <main className="stu-center">
           <section className="stu-card stu-start-card stu-code-card" aria-labelledby="code-h">
-            <h1 id="code-h">Enter the start code</h1>
+            <h1 id="code-h">{exam?.access_code ? "Start the exam" : "Enter the start code"}</h1>
             <p className="stu-muted" style={{ margin: 0 }}>
-              Your teacher reads it out in the room. The exam and the timer start when the code is right.
+              {exam?.access_code
+                ? "The exam and the timer start when you press the button."
+                : "Your teacher reads it out in the room. The exam and the timer start when the code is right."}
             </p>
-            <StartCodeForm examId={examId} autoFocus centered legend="Start code" onInFlight={onStartInFlight} paused={step === "leaving"} />
+            {exam?.access_code ? (
+              <CodeExamStart examId={examId} onInFlight={onStartInFlight} paused={step === "leaving"} />
+            ) : (
+              <StartCodeForm examId={examId} autoFocus centered legend="Start code" onInFlight={onStartInFlight} paused={step === "leaving"} />
+            )}
             {leaveError && (
               <div className="stu-alert error" role="alert">
                 {leaveError}

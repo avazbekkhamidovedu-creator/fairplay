@@ -2,7 +2,7 @@
 // are open, and a course's exam list). Moved out of ExamsPage.
 import { Link, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
-import { NOT_OPEN_FOR_YOU } from "../../pages/student/useStudentExams";
+import { NOT_OPEN_FOR_YOU, isWaiting } from "../../pages/student/useStudentExams";
 import { dateTime, examName, isToday, monthDay, plural, shortDate, shortTime } from "./format";
 
 export function UpcomingExamCard({
@@ -19,12 +19,15 @@ export function UpcomingExamCard({
   const inProgress = exam.attempt?.status === "in_progress";
   // 2026-10-23: opened for selected students only, and this student isn't one (yet)
   const notForMe = !inProgress && exam.open_for_me === false;
+  const waiting = isWaiting(exam);
   const md = monthDay(exam.scheduled_at);
   const when = inProgress
     ? "In progress"
     : notForMe
       ? NOT_OPEN_FOR_YOU
-      : exam.scheduled_at
+      : waiting
+        ? "Waiting for the exam to open"
+        : exam.scheduled_at
         ? `Open now · ${isToday(exam.scheduled_at) ? "today" : shortDate(exam.scheduled_at)} ${shortTime(exam.scheduled_at)}`
         : "Open now";
   const meta = [exam.room && `Room ${exam.room}`, `${exam.duration_min} min`, exam.question_count != null && plural(exam.question_count, "question")]
@@ -51,7 +54,11 @@ export function UpcomingExamCard({
         </H>
         <span className="stu-exam-item-meta">{meta}</span>
       </div>
-      {notForMe ? (
+      {waiting ? (
+        <span className="stu-muted" data-testid="waiting-to-open" role="status">
+          This page updates by itself
+        </span>
+      ) : notForMe ? (
         <span className="stu-muted" data-testid="not-open-for-you">
           Wait for your teacher
         </span>
