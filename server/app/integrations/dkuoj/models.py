@@ -94,3 +94,23 @@ class ClassLoginEvent(Base):
     actor: Mapped[str] = mapped_column(String(150), nullable=False, default="", server_default="")
     detail: Mapped[str] = mapped_column(String(300), nullable=False, default="", server_default="")
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class ExamAccessCode(Base):
+    """A per-student access code for one exam, printed on a sheet for the professor. The
+    code is stored as an HMAC (to look it up) and sealed (so the same sheet can be printed
+    again); bound_device is for the code login that comes later and is not used yet."""
+    __tablename__ = "exam_access_codes"
+    __table_args__ = (UniqueConstraint("exam_id", "netid", name="uq_access_code_netid"),
+                      UniqueConstraint("exam_id", "code_hmac", name="uq_access_code_hmac"))
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    exam_id: Mapped[str] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), index=True, nullable=False)
+    netid: Mapped[str] = mapped_column(String(64), nullable=False)
+    first_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
+    last_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
+    code_hmac: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_sealed: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bound_device: Mapped[str | None] = mapped_column(String(128), nullable=True)
