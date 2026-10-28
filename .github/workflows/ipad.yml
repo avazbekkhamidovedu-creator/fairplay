@@ -22,10 +22,10 @@ permissions:
   contents: write
 
 env:
-  FAIRPLAY_SERVER: https://dku-vcm-4228.vm.duke.edu
-  # Same pin as release-mac.yml: the DKU private CA (ios/Config/dku-root.pem), embedded as an
-  # extra anchor for the exam server host only (FAIRPLAY_EXTRA_ROOT_PEM, release settings step).
-  FAIRPLAY_PINS: "lvVS9i2PYsmXkR/U/VqDDJW5+zaAbJmrg3stDr9YL9c="
+  FAIRPLAY_SERVER: https://dku.speakupai.uz
+  # SHA-256 of the root CAs the server certificate (Let's Encrypt) chains to:
+  # ISRG Root X1, ISRG Root X2, GTS Root R1, GTS Root R3, GTS Root R4.
+  FAIRPLAY_PINS: "lrzsBiZJdvN0YHeazyjFp8/oo8Cq4RqP/O4FwL3fCMY=,aXKbjhWobvwXelevtxcd/GSt0owvyozxUH40RTzLFHA=,2UdDKr3nt/qQ/C5rWRAbEoDg4cfk5A+jxoh//1en9M8=,NNinPuII2bzbDZVlIJNLTkDmlIJZbotvc8hCawEKb0g=,NJ36QFjF4mMSOzmK55VXPE4TE8g/5o+TVWzV6AMbPH0="
 
 jobs:
   test:
@@ -73,7 +73,6 @@ jobs:
         env:
           FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
           FAIRPLAY_WATCHED_LOCK: "1"
-          FAIRPLAY_EXTRA_ROOT_PEM: ios/Config/dku-root.pem
         run: |
           if [ ${#FAIRPLAY_APP_KEY} -lt 32 ]; then
             echo "::error::Set the repository secret FAIRPLAY_APP_KEY (same value as the server)"; exit 1
@@ -161,7 +160,6 @@ jobs:
       - name: Release settings
         env:
           FAIRPLAY_APP_KEY: ${{ secrets.FAIRPLAY_APP_KEY }}
-          FAIRPLAY_EXTRA_ROOT_PEM: ios/Config/dku-root.pem
         run: |
           if [ "$APPROVED" = true ]; then export FAIRPLAY_WATCHED_LOCK=0; else export FAIRPLAY_WATCHED_LOCK=1; fi
           bash ios/configure-release.sh
