@@ -28,7 +28,7 @@ final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
 /// The one window: student web UI in a WKWebView, plus the native bridge
 /// (CONTRACT.md "Native bridge"). Normal window until the exam asks to lock;
 /// then borderless, covering every screen, above everything.
-final class MainWindowController: NSWindowController, LockSurface,
+final class MainWindowController: NSWindowController, LockSurface, DeviceTestEffects,
                                   WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
 
     private var webView: ExamWebView!
@@ -64,6 +64,9 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// The last page the pre-exam lock allowed and showed (not the sign-in page): where a
     /// route change goes back to when the exam id is not known. Cleared at unlock.
     private var lastPreLockPage: URL?
+    private lazy var deviceTest = DeviceTestSession(clock: { ProcessInfo.processInfo.systemUptime }, effects: self)
+    private var deviceTestTimer: Timer?
+    private var deviceTestTapOn = false
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -359,15 +362,30 @@ final class MainWindowController: NSWindowController, LockSurface,
         let origin = message.frameInfo.securityOrigin
         let originPort = origin.port == 0 ? defaultPort(origin.protocol) : origin.port
         let serverPort = server.port ?? defaultPort(server.scheme)
-        guard message.frameInfo.isMainFrame,
-              origin.protocol.lowercased() == server.scheme?.lowercased(),
-              origin.host == server.host, originPort == serverPort else { return }
+        let fromExamPage = message.frameInfo.isMainFrame
+            && origin.protocol.lowercased() == server.scheme?.lowercased()
+            && origin.host == server.host && originPort == serverPort
+        if !fromExamPage {
+            if let body = message.body as? [String: Any], body["action"] as? String == "deviceTestStart" {
+                send(DeviceTestSession.message(state: "ended", reason: .refused, remaining: 0))
+            }
+            return
+        }
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         DebugLog.log("bridge", "page -> app: \(action)")
+
+        if ["lock", "prelock", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
 
         switch action {
         case "hello":
             sendState()
+        case "deviceTestStart":
+            let lock = LockdownController.shared
+            deviceTest.start(seconds: body["seconds"],
+                             context: .init(examActive: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil,
+                                            fromExamPage: fromExamPage, websiteExam: external.isActive))
+        case "deviceTestLeave":
+            deviceTest.end(.leave)
         case "flushEvents":
             flushEventQueue()
         case "fileRefused":
@@ -609,7 +627,8 @@ final class MainWindowController: NSWindowController, LockSurface,
                                     "app_version": Config.version,
                                     "platform": "mac",
                                     "sealed_pending": Sealed.hasPending,
-                                    "prelock": LockdownController.shared.isPreLock]
+                                    "prelock": LockdownController.shared.isPreLock,
+                                    "deviceTest": true]
         // 2026-10-22: a newer release the app can install (Updater.swift); never while locked.
         if let update = Updater.shared.available, !LockdownController.shared.isLocked {
             state["update"] = ["version": update.version]
@@ -688,6 +707,9 @@ final class MainWindowController: NSWindowController, LockSurface,
                 decisionHandler(.cancel)
             }
             return
+        }
+        if deviceTest.isRunning, navigationAction.targetFrame?.isMainFrame ?? true, !isServerURL(url) {
+            deviceTest.end(.leave)
         }
         if external.blocksExamServer(url) {
             DebugLog.log("web", "navigation BLOCKED (exam server page during a Canvas exam): \(url.path)")
@@ -935,6 +957,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if webView !== self.webView { return }
         committedURL = webView.url
+        deviceTest.end(.leave)
         external.canvasCommitted(webView.url)
         // A new document replaced the old one (main frame only: WebKit reports commits for
         // the main frame). Events wait until the new page asks for them ("flushEvents").
@@ -953,6 +976,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if external.isPopup(webView) { external.closePopup(ifView: webView); return }
         DebugLog.log("crash", "exam page process crashed; reloading")
+        deviceTest.end(.error)
         eventsReady = false                  // review 2026-10-24: no page listens until the reload asks
         reload()
     }
@@ -961,6 +985,7 @@ final class MainWindowController: NSWindowController, LockSurface,
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
         if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }   // interrupted by policy
+        deviceTest.end(.error)
         var retry = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Config.startURL
         if let canvasStart = external.canvasStartURL {
             if !external.allows(retry) { retry = canvasStart }
@@ -1216,7 +1241,7 @@ final class MainWindowController: NSWindowController, LockSurface,
     }
 
     func coverAllScreens() {
-        guard let win = window, LockdownController.shared.isLocked else { return }
+        guard let win = window, LockdownController.shared.isLocked || deviceTest.isRunning else { return }
         let union = NSScreen.screens.reduce(NSRect.zero) { $0.union($1.frame) }
         let target = union.isEmpty ? (NSScreen.main?.frame ?? win.frame) : union
         // Called every 3 s: only touch the window when the screens really changed.
@@ -1268,6 +1293,31 @@ final class MainWindowController: NSWindowController, LockSurface,
         blockingView = nil; blockingLabel = nil; blockingButton = nil; blockingAction = nil
     }
 
+    // MARK: - Device test (DeviceTest.swift)
+
+    func endDeviceTest(_ reason: DeviceTestSession.Reason) { deviceTest.end(reason) }
+
+    func deviceTestBegin() {
+        DebugLog.log("devicetest", "preview started")
+        deviceTestTapOn = EventTap.isTrusted && EventTap.shared.start()
+        NSApp.presentationOptions = LockdownController.previewOptions
+        enterLockedMode()
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.deviceTest.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        deviceTestTimer = t
+    }
+
+    func deviceTestRestore() {
+        DebugLog.log("devicetest", "preview ended")
+        deviceTestTimer?.invalidate(); deviceTestTimer = nil
+        if deviceTestTapOn { EventTap.shared.stop() }
+        deviceTestTapOn = false
+        NSApp.presentationOptions = []
+        exitLockedMode()
+    }
+
+    func deviceTestNotify(_ message: [String: Any]) { send(message) }
+
     /// Emergency exit or safety unlock while a website exam is open: leave it without submitting.
     func endExternalIfActive() {
         external.abort()
@@ -1282,6 +1332,10 @@ final class MainWindowController: NSWindowController, LockSurface,
     /// lock never needs a Mac restart.
     func promptEmergencyExit() {
         DebugLog.log("exit", "Ctrl-Opt-Cmd-E pressed (locked=\(LockdownController.shared.isLocked))")
+        if deviceTest.isRunning {
+            deviceTest.end(.leave)
+            return
+        }
         // 2026-10-23: the pre-exam lock has no attempt to protect: the shortcut just unlocks
         // (no code, no server, no exit event).
         if PreLockState.emergencyExitUnlocksAtOnce(locked: LockdownController.shared.isLocked,

@@ -26,6 +26,11 @@ final class LockdownController {
 
     static let shared = LockdownController()
 
+    /// The device test keeps force-quit and logout available: it is only a preview.
+    static let previewOptions: NSApplication.PresentationOptions = [
+        .hideDock, .hideMenuBar, .disableAppleMenu, .disableProcessSwitching, .disableHideApplication
+    ]
+
     private(set) var isLocked = false
     /// 2026-10-23: locked before the start code, no exam attached yet (PreLock.swift).
     private(set) var isPreLock = false
