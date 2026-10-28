@@ -10,6 +10,8 @@ import { JoinClass } from "../../components/student/JoinClass";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import { TrialCard } from "../../components/student/TrialCard";
+import { useLegacyStudentUi } from "../../lib/features";
+import Dashboard from "./Dashboard";
 import { useMe } from "../../lib/useMe";
 import { NOT_OPEN_FOR_YOU, isWaiting, pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
 
@@ -18,7 +20,7 @@ export const HOME_OPEN_SHOWN = 6;
 /** 2026-10-24: results on the home page's Past tab; the rest are on the Grades page. */
 export const HOME_PAST_SHOWN = 5;
 
-export default function StudentHome() {
+function FullHome() {
   const me = useMe("student");
   const { exams, error, reload } = useStudentExams();
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -287,4 +289,8 @@ function ExamHero({
       )}
     </section>
   );
+}
+
+export default function StudentHome() {
+  return useLegacyStudentUi() ? <FullHome /> : <Dashboard />;
 }

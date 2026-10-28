@@ -22,7 +22,7 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       if (method !== "GET") posted.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-      if (url === "/api/health") return new Response(JSON.stringify({ ok: true, features: [] }), { status: 200 });
+      if (url === "/api/health") return new Response(JSON.stringify({ ok: true, features: ["legacy_student_ui"] }), { status: 200 });
       if (url === "/api/me") return new Response(JSON.stringify({ username: "bob", name: "Bob Li", role: "student" }), { status: 200 });
       const r = routes[`${method} ${url}`] ?? { status: 404, body: { detail: "Not found" } };
       return new Response(r.body === undefined ? "" : JSON.stringify(r.body), { status: r.status });
@@ -93,7 +93,7 @@ describe("sticky student top bar", () => {
     routes["GET /api/student/exams"] = { status: 200, body: [] };
     routes["GET /api/student/classes"] = { status: 200, body: [] };
     renderHome();
-    const bar = screen.getByTestId("stu-topnav");
+    const bar = await screen.findByTestId("stu-topnav");
     expect(bar.tagName).toBe("HEADER");
     expect(bar).toHaveClass("stu-topnav", "stu-topnav-sticky");
     expect(bar).not.toHaveClass("scrolled");

@@ -136,4 +136,4 @@ async def me(request: Request, p: Principal = Depends(current_principal),
         raise HTTPException(401, "Invalid or expired token")
     if u.role == "student" and not request_from_app(request):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
-    return {"username": u.username, "name": u.name, "role": u.role}
+    return {"username": u.username, "name": u.name, "role": u.role, **({"netid": u.netid} if u.netid else {})}

@@ -22,7 +22,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
-      if (url === "/api/health") return new Response(JSON.stringify({ ok: true, features: [] }), { status: 200 });
+      if (url === "/api/health") return new Response(JSON.stringify({ ok: true, features: ["legacy_student_ui"] }), { status: 200 });
       if (url === "/api/me") return new Response(JSON.stringify({ username: "bob", name: "Bob Li", role: "student" }), { status: 200 });
       const r = routes[`${method} ${url}`] ?? { status: 404, body: { detail: "Not found" } };
       return new Response(r.body === undefined ? "" : JSON.stringify(r.body), { status: r.status });

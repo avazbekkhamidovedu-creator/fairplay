@@ -97,6 +97,8 @@ export interface Me {
   username: string;
   name: string;
   role: Role;
+  /** the DKU OJ NetID, when the account has one */
+  netid?: string;
 }
 
 export interface Question {
