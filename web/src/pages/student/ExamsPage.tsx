@@ -3,6 +3,7 @@ import { NotLockedBanner } from "../../components/LockBanner";
 import { UpcomingExamCard, UploadWindowCard } from "../../components/student/ExamCard";
 import { PastExamRow } from "../../components/student/ResultRow";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
+import { useStudentGradesOn } from "../../lib/features";
 import { pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
 
 /** 2026-10-24: past results beyond this many sit behind "Show all". */
@@ -12,7 +13,9 @@ type Tab = "upcoming" | "past";
 
 export default function ExamsPage() {
   const { exams, error } = useStudentExams();
-  const [tab, setTab] = useState<Tab>("upcoming");
+  const gradesOn = useStudentGradesOn();
+  const [pickedTab, setTab] = useState<Tab>("upcoming");
+  const tab: Tab = gradesOn ? pickedTab : "upcoming";
   const [allPast, setAllPast] = useState(false);
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ upcoming: null, past: null });
 
@@ -21,7 +24,7 @@ export default function ExamsPage() {
   const past = exams ? pastExams(exams) : [];
   const tabs: { id: Tab; label: string }[] = [
     { id: "upcoming", label: `Upcoming · ${upcoming.length + uploads.length}` },
-    { id: "past", label: `Past · ${past.length}` },
+    ...(gradesOn ? [{ id: "past" as Tab, label: `Past · ${past.length}` }] : []),
   ];
 
   const onTabKey = (e: KeyboardEvent) => {

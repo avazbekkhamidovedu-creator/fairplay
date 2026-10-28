@@ -74,7 +74,29 @@ export function currentStudentId(): string | null {
   return tokenUserId(getToken("student"));
 }
 
+/** The exam a code sign-in is tied to (6th field of the token), or null for a normal sign-in.
+ *  Read without checking the signature, like tokenUserId. */
+export function tokenScope(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const payload = token.split(".")[0] ?? "";
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const parts = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)).split(":");
+    return parts.length > 5 && parts[5] ? parts[5] : null;
+  } catch {
+    return null;
+  }
+}
+
+let onScopedEnd: (() => void) | null = null;
+
+/** Registered by lib/studentSession: wipes the student's local state when a code sign-in ends. */
+export function setScopedEndHandler(fn: (() => void) | null): void {
+  onScopedEnd = fn;
+}
+
 export function clearToken(role: Role): void {
+  if (role === "student" && tokenScope(getToken("student"))) onScopedEnd?.();
   try {
     localStorage.removeItem(tokenKey(role));
   } catch {

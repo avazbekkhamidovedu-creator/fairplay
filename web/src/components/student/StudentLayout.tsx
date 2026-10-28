@@ -3,7 +3,7 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { clearToken } from "../../api/client";
 import * as bridge from "../../lib/bridge";
 import { clearExamDataOnSignOut } from "../../lib/offline";
-import { useFeatures } from "../../lib/features";
+import { useFeatures, useStudentGradesOn } from "../../lib/features";
 import { useMe } from "../../lib/useMe";
 import { AppVersion } from "../AppVersion";
 import { LogoMark, Wordmark } from "../ui/Icon";
@@ -67,6 +67,7 @@ export function StudentLayout({ children, white }: { children: ReactNode; white?
   const locked = useAppLocked();
   const me = useMe("student");
   const features = useFeatures();
+  const gradesOn = useStudentGradesOn();
   const header = useStickyHeader();
   const initial = me?.name?.trim().charAt(0).toUpperCase() || "?";
   const signOut = () => {
@@ -96,7 +97,7 @@ export function StudentLayout({ children, white }: { children: ReactNode; white?
                 Home
               </NavLink>
               <NavLink to="/student/exams">Exams</NavLink>
-              <NavLink to="/student/grades">Grades</NavLink>
+              {gradesOn && <NavLink to="/student/grades">Grades</NavLink>}
               {features.has("practice") && <NavLink to="/student/practice">Practice</NavLink>}
             </nav>
             <div className="stu-user">

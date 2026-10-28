@@ -2,7 +2,7 @@
 import "../../api/student";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "../../components/RequireAuth";
-import { FeatureGate } from "../../components/FeatureGate";
+import { FeatureGate, GradesGate, LegacyGate } from "../../components/FeatureGate";
 import JoinLinkPage from "./JoinLinkPage";
 import StudentLogin from "./StudentLogin";
 import StudentHome from "./StudentHome";
@@ -25,7 +25,7 @@ export default function StudentRoutes() {
       <Route path="login" element={<StudentLogin />} />
       <Route index element={<RequireAuth role="student"><StudentHome /></RequireAuth>} />
       {/* 2026-10-24: a course's own page (course cards on the home page) */}
-      <Route path="courses/:classId" element={<RequireAuth role="student"><CoursePage /></RequireAuth>} />
+      <Route path="courses/:classId" element={<RequireAuth role="student"><LegacyGate><CoursePage /></LegacyGate></RequireAuth>} />
       <Route path="exams" element={<RequireAuth role="student"><ExamsPage /></RequireAuth>} />
       <Route path="exams/:examId/start" element={<RequireAuth role="student"><BeforeStartPage /></RequireAuth>} />
       {/* 2026-10-24: open-book files before the exam opens (the early upload window) */}
@@ -35,12 +35,12 @@ export default function StudentRoutes() {
       <Route path="external/:attemptId" element={<RequireAuth role="student"><ExternalExamPage /></RequireAuth>} />
       <Route path="external-done/:attemptId" element={<RequireAuth role="student"><ExternalDonePage /></RequireAuth>} />
       <Route path="done/:attemptId" element={<RequireAuth role="student"><DonePage /></RequireAuth>} />
-      <Route path="grades" element={<RequireAuth role="student"><GradesPage /></RequireAuth>} />
-      <Route path="grades/:examId" element={<RequireAuth role="student"><FeedbackPage /></RequireAuth>} />
+      <Route path="grades" element={<RequireAuth role="student"><GradesGate><GradesPage /></GradesGate></RequireAuth>} />
+      <Route path="grades/:examId" element={<RequireAuth role="student"><GradesGate><FeedbackPage /></GradesGate></RequireAuth>} />
       <Route path="practice" element={<RequireAuth role="student"><FeatureGate feature="practice" fallback="/student"><StudentPracticePage /></FeatureGate></RequireAuth>} />
       <Route path="practice/:setId" element={<RequireAuth role="student"><FeatureGate feature="practice" fallback="/student"><StudentPracticePage /></FeatureGate></RequireAuth>} />
       {/* 2026-10-13: the class link a teacher shares (works signed in or not). */}
-      <Route path="join/:code" element={<JoinLinkPage />} />
+      <Route path="join/:code" element={<LegacyGate><JoinLinkPage /></LegacyGate>} />
       <Route path="*" element={<Navigate to="/student" replace />} />
     </Routes>
   );

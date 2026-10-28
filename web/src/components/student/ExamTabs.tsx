@@ -3,6 +3,7 @@
 // exams with the grade when the teacher released it and the review setting shows it.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useStudentGradesOn } from "../../lib/features";
 import { studentApi } from "../../api/client";
 import type { StudentClass, StudentExamSummary, StudentGradeSummary } from "../../api/types";
 import { UpcomingExamCard, UploadWindowCard } from "./ExamCard";
@@ -16,7 +17,8 @@ export type ExamTab = "active" | "past";
 /** The tab, kept in the address (?tab=past) so Back from a review lands on Past again. */
 export function useExamTab(): [ExamTab, (t: ExamTab) => void] {
   const [params, setParams] = useSearchParams();
-  const tab: ExamTab = params.get("tab") === "past" ? "past" : "active";
+  const gradesOn = useStudentGradesOn();
+  const tab: ExamTab = gradesOn && params.get("tab") === "past" ? "past" : "active";
   const set = useCallback(
     (t: ExamTab) =>
       setParams(
@@ -179,13 +181,16 @@ export function TestsSection({
   pastCount: number;
   children: ReactNode;
 }) {
+  const gradesOn = useStudentGradesOn();
   return (
     <section className="stu-tests" aria-labelledby={`${idPrefix}-h`} data-testid="tests">
       <div className="stu-tests-head">
         <h2 id={`${idPrefix}-h`} className="stu-section-title">
           {title}
         </h2>
-        <ActivePastTabs tab={tab} onTab={onTab} active={activeCount} past={pastCount} idPrefix={idPrefix} label={title} />
+        {gradesOn && (
+          <ActivePastTabs tab={tab} onTab={onTab} active={activeCount} past={pastCount} idPrefix={idPrefix} label={title} />
+        )}
       </div>
       <div
         id={`${idPrefix}-panel`}

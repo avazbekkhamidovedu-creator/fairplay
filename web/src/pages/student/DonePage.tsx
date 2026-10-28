@@ -4,6 +4,8 @@ import * as bridge from "../../lib/bridge";
 import { studentApi } from "../../api/client";
 import { clockTime, shortDate } from "../../components/student/format";
 import { CheckIcon } from "../../components/student/icons";
+import { HandInSignOut } from "../../components/student/HandInSignOut";
+import { useStudentGradesOn } from "../../lib/features";
 import { StudentLayout } from "../../components/student/StudentLayout";
 import { TrialExit } from "../../components/student/TrialExit";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
@@ -91,6 +93,7 @@ function ExamDone({ fromState }: { fromState: DoneState | null }) {
   const [info, setInfo] = useState<DoneState | null>(fromState?.receipt ? fromState : null);
   const [missing, setMissing] = useState(false);
   const pending = useUnlockPending();
+  const gradesOn = useStudentGradesOn();
 
   useEffect(() => {
     if (info) return;
@@ -140,8 +143,9 @@ function ExamDone({ fromState }: { fromState: DoneState | null }) {
             </span>
           </div>
           {missing && <p className="stu-muted stu-small">The receipt could not be loaded. It is also shown under Exams, Past.</p>}
-          <p className="stu-done-foot">Your laptop unlocks now. Grades appear in Grades when your teacher releases them.</p>
+          <p className="stu-done-foot">Your laptop unlocks now.{gradesOn && " Grades appear in Grades when your teacher releases them."}</p>
           {pending && bridge.isLocked() && <StillLocked />}
+          <HandInSignOut />
           <Link to="/student" className="stu-btn" style={{ marginTop: 12 }}>
             Back to home
           </Link>

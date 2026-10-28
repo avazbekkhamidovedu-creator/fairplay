@@ -3,26 +3,52 @@
 // Insights is hidden in the UI for now (its student-profile API stays on).
 import { useEffect, useState } from "react";
 
-export type Feature = "scan" | "lms" | "practice" | "insights";
+export type Feature = "scan" | "lms" | "practice" | "insights" | "legacy_student_ui";
 
-let cached: Promise<Set<Feature>> | null = null;
+type Health = { features?: unknown; student_grades?: unknown } | null;
+let health: Promise<Health> | null = null;
+
+function loadHealth(): Promise<Health> {
+  if (!health) {
+    health = fetch("/api/health", { headers: { Accept: "application/json" } })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+  }
+  return health;
+}
 
 export function loadFeatures(): Promise<Set<Feature>> {
-  if (!cached) {
-    cached = fetch("/api/health", { headers: { Accept: "application/json" } })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j: { features?: unknown } | null) => {
-        const list = Array.isArray(j?.features) ? (j?.features as unknown[]) : [];
-        return new Set(list.filter((f): f is Feature => typeof f === "string") as Feature[]);
-      })
-      .catch(() => new Set<Feature>());
-  }
-  return cached;
+  return loadHealth().then((j) => {
+    const list = Array.isArray(j?.features) ? (j?.features as unknown[]) : [];
+    return new Set(list.filter((f): f is Feature => typeof f === "string") as Feature[]);
+  });
+}
+
+/** Students see grades and past exams unless the server says it switched them off. */
+export function loadStudentGrades(): Promise<boolean> {
+  return loadHealth().then((j) => j?.student_grades !== false);
 }
 
 /** Test helper. */
 export function _resetFeaturesForTests(): void {
-  cached = null;
+  health = null;
+}
+
+/** The earlier student screens (class joining, course cards, grades list) show only when the server lists this. */
+export function useLegacyStudentUi(): boolean {
+  return useFeatures().has("legacy_student_ui");
+}
+
+export function useStudentGradesOn(): boolean {
+  const [on, setOn] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    void loadStudentGrades().then((v) => alive && setOn(v));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return on;
 }
 
 /** The switched-on optional features (empty until the server answers, or on error). */

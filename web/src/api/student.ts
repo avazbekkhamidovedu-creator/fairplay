@@ -24,6 +24,7 @@ import type {
   TrialInfo,
 } from "./types";
 import * as bridge from "../lib/bridge";
+import "../lib/studentSession";
 import { attemptIdOfPath, getAttemptSession, setAttemptSession } from "../lib/appSession";
 import {
   ApiError,
