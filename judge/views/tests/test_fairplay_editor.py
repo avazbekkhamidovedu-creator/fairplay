@@ -114,7 +114,7 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         data = response.json()
         self.assertTrue(data['ok'])
         self.assertNotIn('fairplay_warning', data)
-        self.assertNotEqual(data['redirect'], reverse('contest_fairplay', args=['fpexam']))
+        self.assertNotIn('/fairplay', data['redirect'])
 
     def test_new_key_takes_the_settings_along(self):
         self.before_the_window()
@@ -301,14 +301,6 @@ class FairPlayCloneAndTabTestCase(FairPlayDataMixin, TestCase):
         self.assertFalse(is_fairplay_exam(clone))
         self.assertTrue(is_fairplay_exam(self.reload_exam()))
 
-    def test_no_tab_for_anyone(self):
-        for user, shown in ((self.teacher, False), (self.tester, False), (self.classmate, False)):
-            client = Client()
-            client.force_login(user)
-            with self.subTest(user=user.username):
-                html = client.get(reverse('contest_view', args=['fpexam'])).content.decode()
-                self.assertEqual(reverse('contest_fairplay', args=['fpexam']) in html, shown)
-
 
 @FAIRPLAY_OFF
 class FairPlayEditorBridgeOffTestCase(FairPlayEditorMixin, TestCase):
@@ -394,7 +386,7 @@ class FairPlayBoxTestCase(FairPlayDataMixin, TestCase):
         self.assertTrue(response['receipt'])
         html = self.client_for(self.teacher).get(reverse('contest_view', args=['fpexam'])).content.decode()
         self.assertNotIn('fairplay-box', html)
-        self.assertNotIn(reverse('contest_fairplay', args=['fpexam']), html)
+        self.assertNotIn('/fairplay', html)
         self.assertNotIn('FairPlay report', html)
 
     def test_live_room_link_is_retired(self):

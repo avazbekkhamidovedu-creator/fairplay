@@ -13,14 +13,12 @@ from judge.models import Class
 from judge.models.tests.util import create_organization, create_user
 from judge.utils.fairplay import fairplay_token, fairplay_tokens, fairplay_url_insecure
 from judge.utils.fairplay_client import FairPlayClient, FairPlayError, FairPlayUnreachable, MAX_RESPONSE_BYTES
-from judge.utils.fairplay_delivery import added_minutes, deliver_submission
-from judge.utils.fairplay_package import iso
 from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP, canonical_string, direction_key, \
     sign
 from judge.utils.fairplay_teaching import CLASS_LOGIN_KEY
 from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, fp_signed, \
     set_fairplay
-from judge.views.tests.test_fairplay_pages import PagesMixin, exam, fake_response
+from judge.views.tests.test_fairplay_pages import PagesMixin, fake_response
 
 NEW_TOKEN = 'fp-new-token-rotation-0123456789abcdefghij'
 REDIS = {'default': {'BACKEND': 'django.core.cache.backends.redis.RedisCache', 'LOCATION': 'redis://x:6379/0'}}
@@ -86,80 +84,6 @@ class ClassScopeTestCase(FairPlayDataMixin, TestCase):
         # fp_student is in both: only the FairPlay class is listed.
         classes = self.get('fairplay_api_student_classes', 'fp_student').json()['classes']
         self.assertEqual([c['id'] for c in classes], [self.klass.id])
-
-
-@FAIRPLAY_ON
-class ClearHandInTestCase(PagesMixin, TestCase):
-    def setUp(self):
-        super().setUp()
-        self.fp.student_report.return_value = {'name': 'Avazbek Khamidov', 'netid': 'fp_student',
-                                               'status': 'handed_in', 'events': []}
-        deliver_submission(self.reload_exam(), {
-            'username': 'fp_student', 'attempt_id': 'att_1', 'handed_in_evidence': 'server',
-            'handed_in_at': iso(timezone.now()), 'answers': [{'question_id': 'p%06d' % self.short.id,
-                                                              'short_answer': {'text': 'x'}}],
-            'integrity_report_url': 'https://exam.example.edu/teacher/exams/1/submissions/1'})
-
-    def report(self, user):
-        return self.login(user).get(reverse('contest_fairplay_report', args=['fpexam', 'fp_student']))
-
-    def clear(self, user, netid='fp_student'):
-        return self.login(user).post(reverse('contest_fairplay_action', args=['fpexam', 'clear-hand-in']),
-                                     {'netid': netid})
-
-    def test_report_shows_the_hand_in_and_the_clear_button(self):
-        html = self.report(self.teacher).content.decode()
-        self.assertIn('id="fairplay-hand-in"', html)
-        self.assertIn('att_1', html)
-        self.assertIn('Clear FairPlay hand-in', html)
-        # Also when FairPlay is down: the hand-in is DKU OJ's own record.
-        self.fp.student_report.side_effect = FairPlayUnreachable()
-        self.assertContains(self.report(self.teacher), 'id="fairplay-clear-hand-in"')
-
-    def test_clear(self):
-        response = self.clear(self.teacher)
-        self.assertRedirects(response, reverse('contest_fairplay_report', args=['fpexam', 'fp_student']),
-                             fetch_redirect_response=False)
-        self.assertNotIn('id="fairplay-hand-in"', self.report(self.teacher).content.decode())
-        # Nothing left to clear: back to the tab with a message.
-        response = self.login(self.teacher).post(
-            reverse('contest_fairplay_action', args=['fpexam', 'clear-hand-in']), {'netid': 'fp_student'},
-            follow=True)
-        self.assertContains(response, 'There is no FairPlay hand-in of this student to clear.')
-        self.assertContains(self.clear(self.teacher, netid='<bad>'), '', status_code=302)
-
-    def test_clear_permissions_and_csrf(self):
-        for user in (self.student, self.tester, self.course_admin, self.other_teacher):
-            self.assertEqual(self.clear(user).status_code, 404, user.username)
-        self.assertEqual(self.login(self.teacher, csrf=True).post(
-            reverse('contest_fairplay_action', args=['fpexam', 'clear-hand-in']), {'netid': 'fp_student'},
-        ).status_code, 403)
-        self.assertIn('id="fairplay-hand-in"', self.report(self.teacher).content.decode())
-
-    def test_assignment_page_has_no_receipts_box(self):
-        html = self.login(self.teacher).get(reverse('contest_view', args=['fpexam'])).content.decode()
-        self.assertNotIn('id="fairplay-receipts"', html)
-        self.assertNotIn(reverse('contest_fairplay_report', args=['fpexam', 'fp_student']), html)
-
-    def test_add_time_is_remembered(self):
-        for _ in range(2):
-            self.login(self.teacher).post(reverse('contest_fairplay_action', args=['fpexam', 'add-time']),
-                                          {'minutes': '10'})
-        self.assertEqual(added_minutes(self.reload_exam()), 20)
-        self.fp.add_time.side_effect = FairPlayError('The exam is not live.', status=409)
-        self.login(self.teacher).post(reverse('contest_fairplay_action', args=['fpexam', 'add-time']),
-                                      {'minutes': '10'})
-        self.assertEqual(added_minutes(self.reload_exam()), 20)
-
-    def test_class_login_marks_the_class(self):
-        self.assertIsNone(cache.get(CLASS_LOGIN_KEY % self.klass.id))
-        self.login(self.course_admin).post(reverse('fairplay_class_login_create',
-                                                   args=[self.org.id, self.org.slug, self.klass.id]))
-        self.assertIsNotNone(cache.get(CLASS_LOGIN_KEY % self.klass.id))
-        # Seeing an active class login (as a manager of the class) renews the mark.
-        cache.delete(CLASS_LOGIN_KEY % self.klass.id)
-        self.login(self.course_admin).get(reverse('fairplay_course_login', args=[self.org.id, self.org.slug]))
-        self.assertIsNotNone(cache.get(CLASS_LOGIN_KEY % self.klass.id))
 
 
 @FAIRPLAY_ON
@@ -291,22 +215,6 @@ class EarlyRejectTestCase(FairPlayDataMixin, TestCase):
 
 @FAIRPLAY_ON
 class LenientRepliesTestCase(PagesMixin, TestCase):
-    def test_tab_survives_odd_counts_and_students(self):
-        self.fp.exam.return_value = exam(counts={'roster': 'many', 'set_up': None, 'handed_in': [1]},
-                                         students=['not a dict', None, {'netid': 'fp_student', 'status': 'waiting'}],
-                                         open_to=7)
-        response = self.login(self.teacher).get(reverse('contest_fairplay', args=['fpexam']))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['not_set_up'], 0)
-        self.assertEqual(response.context['fp_waiting'], [{'netid': 'fp_student', 'status': 'waiting'}])
-
-    def test_hidden_assignment_is_not_given_to_fairplay(self):
-        from judge.models import Contest
-        client = self.login(self.teacher)
-        self.assertNotContains(client.get(reverse('contest_fairplay', args=['fpexam'])), 'id="fairplay-not-listed"')
-        Contest.objects.filter(pk=self.exam.pk).update(is_visible=False)
-        self.assertContains(client.get(reverse('contest_fairplay', args=['fpexam'])), 'id="fairplay-not-listed"')
-
     def test_key_rename_with_odd_settings(self):
         from judge.utils.fairplay_editor import FairPlayEditorPlan, fairplay_save_settings
         with mock.patch('judge.utils.fairplay_client.FairPlayClient') as client_class:
@@ -401,42 +309,3 @@ class TokenRotationTestCase(FairPlayDataMixin, TestCase):
             self.assertEqual(self.client.get(url, **meta).status_code, 200)
             self.assertEqual(self.client.get(url, **meta).status_code, 401)
         cache.delete('fpb:nonce:' + meta['HTTP_X_FP_NONCE'])
-
-
-@FAIRPLAY_ON
-class WebsitesBlockedTestCase(PagesMixin, TestCase):
-    def tab(self):
-        return self.login(self.teacher).get(reverse('contest_fairplay', args=['fpexam'])).content.decode()
-
-    def test_warning_listed_and_escaped(self):
-        data = exam()
-        data['settings']['websites_blocked'] = [
-            {'site': 'chat.openai.com', 'reason': 'AI chat'},
-            {'site': '<img src=x onerror=alert(1)>', 'reason': '<b>messaging</b>'},
-            'not a dict', {'reason': 'no site'},
-        ]
-        self.fp.exam.return_value = data
-        html = self.tab()
-        self.assertIn('id="fairplay-websites-blocked"', html)
-        self.assertIn('FairPlay will not open these sites during the exam:', html)
-        self.assertIn('chat.openai.com', html)
-        self.assertIn('(AI chat)', html)
-        self.assertIn('&lt;img src=x onerror=alert(1)&gt;', html)
-        self.assertNotIn('<img src=x', html)
-        self.assertNotIn('<b>messaging</b>', html)
-        self.assertNotIn('no site', html)
-
-    def test_no_warning_when_absent(self):
-        self.assertNotIn('id="fairplay-websites-blocked"', self.tab())
-        data = exam()
-        data['settings']['websites_blocked'] = []
-        self.fp.exam.return_value = data
-        self.assertNotIn('id="fairplay-websites-blocked"', self.tab())
-        self.fp.exam.side_effect = FairPlayUnreachable()
-        self.assertNotIn('id="fairplay-websites-blocked"', self.tab())
-
-    def test_editor_has_no_websites_help(self):
-        with mock.patch('judge.utils.fairplay_client.FairPlayClient') as client_class:
-            client_class.return_value.exam.return_value = exam()
-            html = self.login(self.teacher).get(reverse('contest_edit', args=['fpexam'])).content.decode()
-        self.assertNotIn('always blocked by FairPlay', html)

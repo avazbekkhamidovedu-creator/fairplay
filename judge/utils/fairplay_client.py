@@ -14,7 +14,7 @@ from judge.utils.fairplay import fairplay_enabled, fairplay_url_insecure
 from judge.utils.fairplay_signing import signed_headers
 
 __all__ = ['API_PREFIX', 'CLASS_STATUS_CACHE_SECONDS', 'MAX_RESPONSE_BYTES', 'FairPlayClient', 'FairPlayError',
-           'FairPlayUnreachable', 'QUICK_READ_TIMEOUT', 'cached_class_status', 'format_fp_time', 'without_password']
+           'FairPlayUnreachable', 'QUICK_READ_TIMEOUT', 'cached_class_status', 'without_password']
 
 API_PREFIX = '/api/integrations/dkuoj/v1'
 CONNECT_TIMEOUT = 5
@@ -40,7 +40,7 @@ class FairPlayError(Exception):
 
 class FairPlayUnreachable(FairPlayError):
     def __init__(self, detail=None):
-        super().__init__(detail or _('FairPlay not reachable'), status=None)
+        super().__init__(detail or _('FairPlay cannot be reached'), status=None)
 
 
 def _q(value):
@@ -57,7 +57,7 @@ class FairPlayClient:
             raise FairPlayUnreachable()
         if fairplay_url_insecure(base):
             # Also a system check (judge.checks); this covers servers started without checks.
-            raise FairPlayUnreachable(_('FairPlay not reachable: FAIRPLAY_URL must use https://'))
+            raise FairPlayUnreachable(_('FairPlay cannot be reached: FAIRPLAY_URL must use https://'))
         url = base + API_PREFIX + path
         data = b'' if body is None else json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         parts = urlsplit(url)
@@ -76,7 +76,7 @@ class FairPlayClient:
                                         timeout=(min(CONNECT_TIMEOUT, read_timeout), read_timeout),
                                         allow_redirects=False, stream=True)
         except requests.RequestException as e:
-            logger.warning('FairPlay not reachable: %s %s: %s', method, path, e.__class__.__name__)
+            logger.warning('FairPlay cannot be reached: %s %s: %s', method, path, e.__class__.__name__)
             raise FairPlayUnreachable()
         try:
             raw = _read_capped(response, deadline)
@@ -198,22 +198,3 @@ def without_password(status):
 def cached_class_status(class_id):
     """From DKU OJ's cache only; never calls FairPlay."""
     return cache.get(CLASS_STATUS_CACHE_KEY % class_id)
-
-
-def format_fp_time(value, fmt=None):
-    """A FairPlay ISO-8601 time as local text, or the raw value if it isn't one."""
-    from django.template.defaultfilters import date
-    from django.templatetags.tz import localtime
-    from django.utils.dateparse import parse_datetime
-    if not value:
-        return ''
-    try:
-        parsed = parse_datetime(str(value).replace('Z', '+00:00'))
-    except ValueError:
-        parsed = None
-    if parsed is None:
-        return str(value)
-    if parsed.tzinfo is None:
-        from datetime import timezone as dt_timezone
-        parsed = parsed.replace(tzinfo=dt_timezone.utc)
-    return date(localtime(parsed), fmt or _('N j, Y, g:i a'))

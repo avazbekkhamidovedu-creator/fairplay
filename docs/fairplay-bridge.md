@@ -56,7 +56,7 @@ editor before the editor lock (the option stays visible on them), or let them be
   instructors of classes in them, authors, curators and testers of any FairPlay exam, site staff, and
   the assignment's banned users. Safe Exam Browser and FairPlay can't both be on (the admin checks the
   same when the tag is attached there). A hidden (not visible) assignment is a draft: FairPlay is not
-  given it until it is visible (its FairPlay tab says so).
+  given it until it is visible.
 * **Hiding window.** From **24 hours before the start** (when FairPlay may download the package) until
   the exam is **released** (its results are finalized and it has closed for everyone, or **14 days
   after the end**, when hand-ins can no longer arrive, whichever comes first; "closed for everyone" is
@@ -71,9 +71,9 @@ editor before the editor lock (the option stays visible on them), or let them be
 * **Editor lock.** From the start of the hiding window until 14 days after the end, the editor refuses
   to change the assignment ID, to switch the lock away from FairPlay, and to add, remove or replace
   problems (a one-line form error, e.g. "The lock can't be changed now."). Everything else (times, points, order, texts) can still change.
-* There is no FAIRPLAY item in the top menu and no FairPlay tab or box on assignment pages. The old
-  pages (`/fairplay/`, `/contest/<key>/fairplay`, the student report) are not linked from anywhere and
-  stay reachable by address only for the people they were for; they print no "not reachable" text.
+* DKU OJ has no FAIRPLAY menu item, no FairPlay course pages and no FairPlay tab, box or report page:
+  the exam is run from the FairPlay side. The only FairPlay controls in DKU OJ are the lock choice in
+  the editor and the access codes button below.
 * On the assignment's **Participation** page, editors of a FairPlay assignment (bridge on) get one
   button, **Download access codes (PDF)**, which saves `access-codes-<assignment ID>.pdf` (the request
   is below). If FairPlay does not have the codes yet (404 or 409), or can't be reached, the page shows
@@ -109,7 +109,7 @@ malformed headers or a timestamp more than 60 s off, and 413 for a declared `Con
 endpoint's limit; then it reads at most the limit and answers 401 for a wrong signature (compared in
 constant time) or a nonce seen in the last 180 s (cache key `fpb:nonce:<nonce>`). Answers are
 not signed, so they travel over https. DKU OJ reads at most 2 MB of a FairPlay answer and waits at most
-connect + read timeout for all of it (5 s + 15 s for actions, 3 s for page loads and the live table).
+connect + read timeout for all of it (5 s + 15 s for actions, 3 s for the editor).
 
 **FairPlay to DKU OJ** (`/api/fairplay/v1/`, UTF-8 JSON, ISO-8601 UTC times ending in `Z`):
 
@@ -119,13 +119,15 @@ connect + read timeout for all of it (5 s + 15 s for actions, 3 s for page loads
 | `GET exams/<key>/package` | The exam package: questions of every type without any answer key, statements as DKU OJ markdown (or sanitized HTML for full-markup problems), images as `fp-asset:<name>` (editor attachments and images uploaded with the problem editor, `MEDIA_URL` + `MARTOR_UPLOAD_MEDIA_DIR`; no other file under `MEDIA_ROOT`). Code questions offer the allowed languages, only those with a harness when the problem has harnesses. `425` until 24 hours before the start; `ETag` / `If-None-Match`. |
 | `GET exams/<key>/assets/<name>` | One file listed in the package. |
 | `POST exams/<key>/uploads?username=&question_id=&filename=` | A student's file answer (raw body; student, question and file name in the signed query string, `X-Sha256` header). Returns an `upload_id` that only works for that student and question; unused uploads are deleted after 15 days (longer than FairPlay retries a hand-in). |
-| `POST exams/<key>/submissions` | One student's final answers. Answer: `{"receipt", "submissions": [{question_id, submission_id}], "warnings": [...]}`. Idempotent on `attempt_id` (same body, same receipt; different body, `409`), all-or-nothing (`422` names the question), `403` for students not on the roster. An answer to a question no longer in the exam, or option ids that no longer exist, is skipped and listed in `warnings` (kept with the hand-in and shown to the professor); the rest is filed with `200`. A failure of the database or the file store is `503` with `Retry-After` (FairPlay retries); only a refused request is `4xx`. One attempt per student: another attempt id while one is on file → `409` (a professor can clear it). `410` after the exam's close + 14 days. Code answers only in the problem's allowed languages, and only those with a harness when it has harnesses. Late = handed in more than 2 minutes after the close (end time + minutes added on the FairPlay tab), where the hand-in time is FairPlay's `handed_in_at` kept between the exam's start and the time DKU OJ received it. `integrity_report_url` kept only under `FAIRPLAY_URL` (or `FAIRPLAY_PUBLIC_URL`). |
+| `POST exams/<key>/submissions` | One student's final answers. Answer: `{"receipt", "submissions": [{question_id, submission_id}], "warnings": [...]}`. Idempotent on `attempt_id` (same body, same receipt; different body, `409`), all-or-nothing (`422` names the question), `403` for students not on the roster. An answer to a question no longer in the exam, or option ids that no longer exist, is skipped and listed in `warnings` (kept with the hand-in and shown to the professor); the rest is filed with `200`. A failure of the database or the file store is `503` with `Retry-After` (FairPlay retries); only a refused request is `4xx`. One attempt per student: another attempt id while one is on file → `409` (a professor can clear it). `410` after the exam's close + 14 days. Code answers only in the problem's allowed languages, and only those with a harness when it has harnesses. Late = handed in more than 2 minutes after the close (end time + minutes added in FairPlay), where the hand-in time is FairPlay's `handed_in_at` kept between the exam's start and the time DKU OJ received it. `integrity_report_url` kept only under `FAIRPLAY_URL` (or `FAIRPLAY_PUBLIC_URL`). |
 | `GET exams/<key>/results?changed_since=&page=` | Each handed-in student's result as they may see it: released points and feedback, or `"released": false`; later regrades and withdrawn releases too. |
 | `GET classes/<id>/roster` | A class's students (members minus its teachers, course admins and instructors, authors, curators and testers of any FairPlay exam and staff), read when a student sets up FairPlay. Only for a class a FairPlay exam uses or that got a class login from DKU OJ; else 404. |
 | `GET students/<netid>/classes` | The NetID's active classes as a student, among the same classes. |
 
 **DKU OJ to FairPlay** (`/api/integrations/dkuoj/v1/`, the professor in `X-FP-Acting-User`; DKU OJ checks
-the permission first and FairPlay checks again that the professor edits the exam): class logins
+the permission first and FairPlay checks again that the professor edits the exam). `FairPlayClient` can
+make all of the calls below, but since the FairPlay pages were removed only the access codes call and the
+settings forwarded on an editor save are made from DKU OJ's web interface: class logins
 (`POST/DELETE classes/<id>/login`, `GET classes/<id>/status`), student reset
 (`POST students/<netid>/reset`), the exam (`GET exams/<key>`: state, codes, counts, students and its
 `settings`) and its actions (`POST exams/<key>/open|close|add-time|new-code|approve`, a student's report
@@ -158,15 +160,13 @@ only `review` may change).
   transaction after locking the student's profile row (so a delivery whose cache lock expired while it
   waited is still caught), DKU OJ checks whether the student already has submissions in the exam (newer
   than a professor's clear). If so, the hand-in is
-  refused with 409 instead of being filed twice, FairPlay shows it to the teacher as not delivered, and
-  the FairPlay tab shows a warning. The student's report page then shows the
-  submissions on file; **Clear FairPlay hand-in** lets FairPlay deliver again. A replay of the same
+  refused with 409 instead of being filed twice, FairPlay shows it to the teacher as not delivered. A replay of the same
   attempt whose response was lost and whose record the cache lost is refused the same way (its answers
   are already filed).
 * Added minutes: lateness and the 14-day window use FairPlay's close time from the hand-in instead, but
   never more than 8 hours past the end time.
-* Class logins: a class that has no FairPlay exam yet is not served to FairPlay until its manager opens
-  the FAIRPLAY course pages (or makes a new class login).
+* Class logins: a class that has no FairPlay exam is served to FairPlay only while a class-login mark
+  (180 days) from before the course pages were removed is still in the cache; DKU OJ no longer makes new marks.
 * File names of uploads not yet handed in: the file is still filed, named `answer<ext>`.
 
 ## Behaviour notes
@@ -193,9 +193,8 @@ only `review` may change).
 `judge/utils/fairplay_signals.py` (keeps the "any FairPlay exam" flag current), `judge/utils/fairplay_signing.py`,
 `judge/utils/fairplay_client.py` (calls to FairPlay), `judge/utils/fairplay_package.py` (exam list and
 package), `judge/utils/fairplay_delivery.py` (uploads, hand-ins, results), `judge/utils/fairplay_editor.py`
-(editor lock and the settings forwarded on save), `judge/utils/fairplay_teaching.py` (who
-teaches what, rosters), `judge/views/api/fairplay.py` (the API), `judge/views/fairplay.py` (FAIRPLAY pages
-and the FairPlay tab), `judge/views/fairplay_editor.py` (forwards settings after an editor save) and
+(editor lock and the settings forwarded on save), `judge/utils/fairplay_teaching.py` (class
+rosters), `judge/views/api/fairplay.py` (the API), `judge/views/fairplay.py` (the access codes download), `judge/views/fairplay_editor.py` (forwards settings after an editor save) and
 `judge/checks.py`; the rest of the code base only calls into these modules (`fairplay_hidden_for`,
 `fairplay_hidden_q`, `fairplay_visible_problems`, `fairplay_public_problems`, ...) at the places that serve
 an assignment or a problem. Tests: `judge/views/tests/test_fairplay_*.py`,

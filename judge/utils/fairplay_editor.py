@@ -11,7 +11,7 @@ __all__ = [
     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
     'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
     'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
-    'parse_fairplay_payload', 'pop_unsaved_settings', 'push_settings', 'stash_unsaved_settings', 'websites_text',
+    'parse_fairplay_payload', 'push_settings', 'websites_text',
 ]
 
 logger = logging.getLogger('judge.fairplay')
@@ -26,7 +26,6 @@ DEFAULT_SETTINGS = {
 MAX_WEBSITE_LINES = 100
 MAX_WEBSITE_LENGTH = 2100
 MAX_UPLOAD_DAYS = 7
-UNSAVED_SESSION_KEY = 'fairplay_unsaved_settings'
 
 
 def _bool(value):
@@ -125,28 +124,6 @@ def push_settings(contest_key, settings, acting_user=None):
     from judge.utils.fairplay_client import FairPlayClient, QUICK_READ_TIMEOUT
     return FairPlayClient(acting_user=acting_user).set_settings(contest_key, settings,
                                                                 read_timeout=QUICK_READ_TIMEOUT)
-
-
-def stash_unsaved_settings(request, contest_key, settings, reason):
-    """Keep settings FairPlay didn't take, to offer them again on the FairPlay tab."""
-    try:
-        unsaved = dict(request.session.get(UNSAVED_SESSION_KEY) or {})
-        unsaved[contest_key] = {'settings': settings, 'reason': str(reason)[:300]}
-        request.session[UNSAVED_SESSION_KEY] = dict(list(unsaved.items())[-10:])
-    except Exception:
-        logger.warning('Could not keep unsaved FairPlay settings of %s in the session', contest_key, exc_info=True)
-
-
-def pop_unsaved_settings(request, contest_key, keep=False):
-    try:
-        unsaved = dict(request.session.get(UNSAVED_SESSION_KEY) or {})
-    except Exception:
-        logger.warning('Could not read unsaved FairPlay settings from the session', exc_info=True)
-        return None
-    item = unsaved.get(contest_key) if keep else unsaved.pop(contest_key, None)
-    if not keep and item is not None:
-        request.session[UNSAVED_SESSION_KEY] = unsaved
-    return item if isinstance(item, dict) else None
 
 
 class FairPlayEditorPlan:
