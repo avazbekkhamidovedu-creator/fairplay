@@ -658,10 +658,14 @@ otherwise). The codes are made for the students on the exam's synced list.
 - **`GET /exams/<key>/access-codes.pdf`** → `200 application/pdf`, `Content-Disposition:
   attachment; filename="access-codes-<key>.pdf"`, `Cache-Control: no-store`. A code is made for
   every student on the list who has none (existing codes never change, so a second download is the
-  same sheet); students without a NetID are skipped. Header: exam title, course, generated time
-  (UTC) and "Do not share. One code per student."; slips sorted by last name, then first name,
-  each with last name, first name, NetID and the code in large monospace; 8 slips per A4 page
-  (2 x 4) with cut lines. Names are the roster's `first_name` / `last_name` (kept on the roster row at each
+  same sheet); students without a NetID are skipped. Query `layout=both` (default) | `list` | `slips`
+  (anything else: 422). One PDF with up to two parts: **Class list** for the invigilator (sorted by last
+  name, then first name; columns #, Last name, First name, NetID, Access code in bold monospace and an
+  empty Present box; 28 rows a page, header with exam title, course, generated time (UTC) and "Do not
+  share. One code per student." repeated on each page) and **Slips** to cut out (same order, 12 per A4
+  page, 2 x 6, dashed cut lines; last name, first name, NetID, the code in Courier-Bold 26 pt and the exam
+  title in small type). Every page has "Page x of y". 50 students: both = 2 + 5 pages; 60 students: list
+  3 pages, slips 5. Names are the roster's `first_name` / `last_name` (kept on the roster row at each
   sync, refreshed on every download; an entry with neither falls back to the account name split at
   its first space); a text with characters outside Latin-1 (Chinese names) is printed in the
   built-in CJK font. Unknown exam → 404; no student with a NetID on the list → 409

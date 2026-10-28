@@ -1062,3 +1062,10 @@ Codes are made per student and exam (`docs/dkuoj-bridge-v2.md` §12). All three 
 - Start: `POST /api/student/exams/{id}/start` needs no `start_code` when the student's code for that exam is bound to the device that sends the signed start proof. Every other start still needs it. The exam must be live.
 - Exam list: an exam with codes has `"access_code": true` (key absent otherwise) and `package_id: null`. A draft exam the student signed in for, scheduled within 30 minutes, is listed with `status: "draft"` and `question_count: null` ("waiting for the exam to open").
 - `GET .../package` and `.../package-key` of an exam with codes: `409 "This exam is taken online and has no offline copy"`.
+
+## Code sessions, grades switch, legacy screens (2026-10-28)
+
+- The token from `code-login/confirm` carries a sixth field, the exam id it is scoped to. With it, `/api/student/exams/{other id}/...`, `trial`, `practice` and `classes` answer 403, and the exam list holds that exam only. It stops working (401) 5 minutes after the attempt's real `submitted_at`, and 30 minutes after the exam's close time for a student who never started. Nothing is deleted. A second exam needs a new code.
+- `GET /api/me` adds `netid` when the account has one.
+- `/api/health` adds `student_grades` (bool, `FAIRPLAY_STUDENT_GRADES`, default off) and lists `legacy_student_ui` in `features` when `FAIRPLAY_LEGACY_STUDENT_UI=1`. With `student_grades` off, `GET /api/student/grades` and `/grades/{id}` answer the same JSON 404 as an unknown path; the web hides Grades and Past. Without `legacy_student_ui` the web hides class joining, course cards and the old home page.
+- `GET .../access-codes.pdf` takes `layout=both|list|slips` (`docs/dkuoj-bridge-v2.md` §12).

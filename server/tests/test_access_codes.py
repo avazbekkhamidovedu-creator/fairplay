@@ -61,7 +61,7 @@ def test_pdf_headers_content_and_stable_codes(oj):
     assert set(codes) == {"alice", "carol", "ax19", "bl642"}
     assert all(len(c) == 6 for c in codes.values()) and len(set(codes.values())) == 4
     doc, text = pdf_text(r.content)
-    assert len(doc) == 1
+    assert len(doc) == 2          # class list + slips
     for word in ("Avazbek", "Khamidov", "ax19", codes["ax19"], "Do not share. One code per student.", "UTC"):
         assert word in text
     assert text.index("Chen") < text.index("Khamidov") < text.index("Wang")
@@ -74,24 +74,70 @@ def test_pdf_headers_content_and_stable_codes(oj):
     assert not any(c in " ".join(db(oj, sealed)) for c in codes.values())
 
 
-def test_eight_slips_per_page(oj):
-    run(oj)
-
+def add_students(c, n):
     async def many(s):
         from app.models import User
         e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
-        for i in range(8):
-            u = User(username=f"zz{i}", name=f"Pat <b>{i}</b> & O'Neil" + "x" * 300, role="student",
-                     password_hash="x", netid=f"zz{i}")
+        for i in range(n):
+            u = User(username=f"zz{i:02d}", name=f"Pat {i}", role="student", password_hash="x", netid=f"zz{i:02d}")
             s.add(u)
             await s.flush()
-            s.add(OjRosterEntry(exam_id=e.id, user_id=u.id))
+            s.add(OjRosterEntry(exam_id=e.id, user_id=u.id, first_name=f"Pat{i:02d}", last_name=f"Okafor{i:02d}"))
         await s.commit()
-    db(oj, many)
-    r = call(oj, "GET", PDF)
-    assert r.status_code == 200
-    doc, text = pdf_text(r.content)
-    assert len(doc) == 2 and "zz7" in text
+    db(c, many)
+
+
+def test_layouts_and_page_counts_for_50_students(oj):
+    run(oj)
+    add_students(oj, 46)                      # 4 from the sync + 46 = 50
+    codes = codes_of(oj)
+    assert len(codes) == 50
+    both = call(oj, "GET", PDF)
+    assert both.status_code == 200
+    doc, text = pdf_text(both.content)
+    assert len(doc) == 2 + 5                  # 28 rows a page, 12 slips a page
+    assert "Page 1 of 7" in text and "Page 7 of 7" in text
+    lst = call(oj, "GET", PDF + "?layout=list")
+    assert len(pdf_text(lst.content)[0]) == 2
+    slips = call(oj, "GET", PDF + "?layout=slips")
+    assert len(pdf_text(slips.content)[0]) == 5
+    assert len(pdf_text(call(oj, "GET", PDF + "?layout=both").content)[0]) == 7
+    for resp in (both, lst, slips):
+        assert resp.headers["cache-control"] == "no-store"
+        assert resp.headers["content-disposition"] == f'attachment; filename="access-codes-{KEY}.pdf"'
+    for name, resp in (("both", both), ("list", lst), ("slips", slips)):
+        t = pdf_text(resp.content)[1]
+        for netid in ("zz00", "zz45", "ax19"):
+            assert netid in t, (name, netid)
+        assert "Okafor45" in t and "Pat45" in t and codes["ax19"] in t and codes["zz45"] in t
+    list_text = pdf_text(lst.content)[1]
+    assert "Present" in list_text and "Access code" in list_text and "Do not share" in list_text
+    assert list_text.count("Last name") == 2 and "Class list" in list_text
+    assert "Present" not in pdf_text(slips.content)[1] and "CS 101 Midterm" in pdf_text(slips.content)[1]
+
+
+def test_sixty_students_fit_three_list_pages_and_five_slip_pages(oj):
+    run(oj)
+    add_students(oj, 56)
+    call(oj, "GET", PDF)
+    assert len(pdf_text(call(oj, "GET", PDF + "?layout=list").content)[0]) == 3
+    assert len(pdf_text(call(oj, "GET", PDF + "?layout=slips").content)[0]) == 5
+    assert len(pdf_text(call(oj, "GET", PDF).content)[0]) == 8
+
+
+def test_list_is_sorted_and_slips_keep_the_order(oj):
+    run(oj)
+    t = pdf_text(call(oj, "GET", PDF + "?layout=list").content)[1]
+    assert t.index("Chen") < t.index("Khamidov") < t.index("Wang")
+    s = pdf_text(call(oj, "GET", PDF + "?layout=slips").content)[1]
+    assert s.index("Chen") < s.index("Khamidov") < s.index("Wang")
+
+
+def test_bad_layout_is_refused(oj):
+    run(oj)
+    for bad in ("grid", "", "LIST", "both;x"):
+        assert call(oj, "GET", PDF + f"?layout={bad}").status_code == 422, bad
+    assert db(oj, lambda s: s.scalar(select(ExamAccessCode.id).limit(1))) is None
 
 
 def test_reissue_invalidates_old_code(oj):
@@ -175,7 +221,7 @@ def test_chinese_names_build(oj):
     r = call(oj, "GET", PDF)
     assert r.status_code == 200 and r.content.startswith(b"%PDF")
     doc, text = pdf_text(r.content)
-    assert len(doc) == 1 and "ax19" in text
+    assert len(doc) == 2 and "ax19" in text
 
 
 def test_concurrent_creation_and_collision(oj, monkeypatch):

@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -805,6 +805,7 @@ def _event_class(e: Exam) -> int | None:
 
 @router.get("/exams/{key}/access-codes.pdf")
 async def exam_access_codes_pdf(key: str, request: Request, call: BridgeCall = Depends(signed_call),
+                                layout: str = Query("both", pattern="^(both|list|slips)$"),
                                 session: AsyncSession = Depends(get_session)):
     from . import access_codes, access_codes_pdf
     e = await _editor_exam(session, key, call, required=False)
@@ -816,7 +817,7 @@ async def exam_access_codes_pdf(key: str, request: Request, call: BridgeCall = D
     students = sorted(({"last": r.last_name, "first": r.first_name, "netid": r.netid, "code": code}
                        for r, code in sheet.rows),
                       key=lambda s: (s["last"].casefold(), s["first"].casefold(), s["netid"]))
-    pdf = access_codes_pdf.render(e.title, e.course, utcnow(), students)
+    pdf = access_codes_pdf.render(e.title, e.course, utcnow(), students, layout)
     class_id = _event_class(e)
     if class_id is not None:
         await add_event(session, class_id, "access_codes_downloaded", actor=call.acting_user,
