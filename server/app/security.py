@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import base64
 import hashlib
 import hmac
@@ -9,11 +10,13 @@ import os
 import secrets
 import threading
 import time
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends, HTTPException, Request
 
 from .config import Settings
+from .timeutil import utcnow
 
 
 def hash_password(password: str, iterations: int, salt: bytes | None = None) -> str:
@@ -79,10 +82,12 @@ def key_id(secret: str) -> str:
 
 
 def make_token(secret: str, user_id: int, role: str, ttl_s: int, now: float | None = None,
-               version: int = 0) -> str:
-    """payload = "<uid>:<role>:<exp>:<token_version>:<key id>" (audit S-15)."""
+               version: int = 0, scope: str = "") -> str:
+    """payload = "<uid>:<role>:<exp>:<token_version>:<key id>[:<exam id>]" (audit S-15). A scope
+    (an access-code sign-in) ties the token to that one exam."""
     exp = int((now or time.time()) + ttl_s)
-    payload = _b64(f"{user_id}:{role}:{exp}:{int(version)}:{key_id(secret)}".encode())
+    tail = f":{scope}" if scope else ""
+    payload = _b64(f"{user_id}:{role}:{exp}:{int(version)}:{key_id(secret)}{tail}".encode())
     sig = _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
 
@@ -90,15 +95,21 @@ def make_token(secret: str, user_id: int, role: str, ttl_s: int, now: float | No
 def parse_token(secret: str, token: str) -> tuple[int, str, int] | None:
     """(user id, role, token version) or None. Tokens from before S-15 (no version /
     key id) are refused: their holders sign in once more."""
+    full = parse_scoped_token(secret, token)
+    return full[:3] if full else None
+
+
+def parse_scoped_token(secret: str, token: str) -> tuple[int, str, int, str] | None:
+    """Like parse_token plus the exam id the token is scoped to ("" = not scoped)."""
     try:
         payload, sig = token.split(".")
         expected = _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
         if not hmac.compare_digest(sig, expected):
             return None
-        uid, role, exp, ver, kid = _unb64(payload).decode().split(":")
-        if int(exp) < time.time() or role not in ("teacher", "student") or kid != key_id(secret):
+        uid, role, exp, ver, kid, *rest = _unb64(payload).decode().split(":")
+        if int(exp) < time.time() or role not in ("teacher", "student") or kid != key_id(secret) or len(rest) > 1:
             return None
-        return int(uid), role, int(ver)
+        return int(uid), role, int(ver), (rest[0] if rest else "")
     except (ValueError, UnicodeDecodeError):
         return None
 
@@ -149,11 +160,12 @@ async def forget_user_cache(uid: int) -> None:
 
 
 class Principal:
-    __slots__ = ("user_id", "role")
+    __slots__ = ("user_id", "role", "scope")
 
-    def __init__(self, user_id: int, role: str):
+    def __init__(self, user_id: int, role: str, scope: str = ""):
         self.user_id = user_id
         self.role = role
+        self.scope = scope
 
 
 async def current_principal(request: Request) -> Principal:
@@ -162,15 +174,17 @@ async def current_principal(request: Request) -> Principal:
     scheme, _, token = auth.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(401, "Not authenticated")
-    parsed = parse_token(settings.secret, token.strip())
+    parsed = parse_scoped_token(settings.secret, token.strip())
     if not parsed:
         raise HTTPException(401, "Invalid or expired token")
-    uid, role, ver = parsed
+    uid, role, ver, scope = parsed
     # Audit S-15: signed out everywhere (version bumped), deleted, or role changed -> refused.
     cur = await _current_user(uid)
     if cur is None or cur[0] != role or cur[1] != ver:
         raise HTTPException(401, "Signed out. Please sign in again.")
-    return Principal(uid, role)
+    if scope and await scope_over(uid, scope):
+        raise HTTPException(401, "Signed out. Please sign in again.")
+    return Principal(uid, role, scope)
 
 
 # perf 0.6.2: async (they never block). A plain `def` dependency runs in FastAPI's thread
@@ -181,7 +195,54 @@ async def require_teacher(p: Principal = Depends(current_principal)) -> Principa
     return p
 
 
-async def require_student(p: Principal = Depends(current_principal)) -> Principal:
+SCOPED_AFTER_HANDIN_S = 300
+SCOPED_AFTER_END_S = 30 * 60
+_EXAM_PATH = re.compile(r"^/api/student/exams/([^/]+)")
+_UNSCOPED_PATHS = ("/api/student/trial", "/api/student/practice", "/api/student/classes", "/api/student/materials")
+
+
+def _now() -> datetime:
+    return utcnow()
+
+
+async def scope_over(uid: int, exam_id: str) -> bool:
+    """A code sign-in stops working 5 minutes after its exam was handed in, and 30 minutes
+    after the exam's end for a student who never started. The end moment is cached."""
+    from .db import get_database
+    from .models import Attempt, Exam
+    from .services import exam_closes_at
+    from .store import get_store
+    from sqlalchemy import select
+    store = get_store()
+    key = f"scope:{uid}:{exam_id}"
+    raw = await store.get(key)
+    if raw is None:
+        async with get_database().sessionmaker() as s:
+            sub = (await s.execute(select(Attempt.submitted_at).where(
+                Attempt.exam_id == exam_id, Attempt.student_id == uid))).scalar()
+            e = await s.get(Exam, exam_id)
+            closes = exam_closes_at(e) if e is not None else None
+        end = None
+        if sub is not None:
+            end = sub + timedelta(seconds=SCOPED_AFTER_HANDIN_S)
+        elif closes is not None:
+            end = closes + timedelta(seconds=SCOPED_AFTER_END_S)
+        raw = end.isoformat() if end else "-"
+        await store.set(key, raw, 600 if sub is not None else 30)
+    return raw != "-" and _now() >= datetime.fromisoformat(raw)
+
+
+async def forget_scope(uid: int, exam_id: str) -> None:
+    from .store import get_store
+    await get_store().delete(f"scope:{uid}:{exam_id}")
+
+
+async def require_student(request: Request, p: Principal = Depends(current_principal)) -> Principal:
     if p.role != "student":
         raise HTTPException(403, "Student role required")
+    if p.scope:
+        path = request.url.path
+        m = _EXAM_PATH.match(path)
+        if (m and m.group(1) != p.scope) or path.startswith(_UNSCOPED_PATHS):
+            raise HTTPException(403, "This sign-in is for one exam. Use a new code for another exam.")
     return p

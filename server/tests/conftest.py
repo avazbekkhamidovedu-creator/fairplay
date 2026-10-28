@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The suite covers the optional parts too (they are off by default on a real server).
 os.environ.setdefault("FAIRPLAY_FEATURES", "scan,lms,practice")
 os.environ.setdefault("FAIRPLAY_BROWSER_GATE", "off")
+os.environ.setdefault("FAIRPLAY_STUDENT_GRADES", "1")
 
 from app.config import Settings  # noqa: E402
 from app.main import create_app  # noqa: E402

@@ -127,6 +127,8 @@ class Settings:
     login_hash_slots: int = field(default_factory=lambda: _int("FAIRPLAY_LOGIN_HASH_SLOTS", 4))
     # API requests in progress at once per worker process; more wait in line (app/admission.py).
     max_inflight: int = field(default_factory=lambda: _int("FAIRPLAY_MAX_INFLIGHT", 128))
+    # Students see their grades and past exams only when this is on (FAIRPLAY_STUDENT_GRADES).
+    student_grades: bool = field(default_factory=lambda: _flag("FAIRPLAY_STUDENT_GRADES", False))
     static_dir: str = field(default_factory=lambda: os.environ.get(
         "PROCTORA_STATIC_DIR",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")))

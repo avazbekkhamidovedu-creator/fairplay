@@ -151,6 +151,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                         member_of_exam(p.user_id))))
         # slice 6: paper exams are printed; students never see them in the app
         .where(or_(Exam.delivery.is_(None), Exam.delivery != "paper"))
+        .where(Exam.id == p.scope if p.scope else true())     # a code sign-in sees its own exam only
         .where(Exam.is_trial == false())     # the sample exam lives only in its own card
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     coded = await exams_with_codes(session, [r[0] for r in rows])
@@ -740,6 +741,8 @@ async def submit(aid: str, body: AnswersIn, request: Request,
     if a.status != "submitted":
         raise HTTPException(409, "Answers changed while handing in, try again")
     await cache_attempt(get_store(), a)
+    from .security import forget_scope
+    await forget_scope(a.student_id, a.exam_id)
     return {"status": "submitted", "submitted_at": iso(a.submitted_at), "receipt": a.receipt}
 
 
@@ -989,7 +992,12 @@ async def device_check(body: DeviceCheckIn, p: Principal = Depends(require_stude
 
 
 # ---------------------------------------------------------------- slice 2: grades
-@router.get("/grades")
+async def grades_enabled(request: Request) -> None:
+    if not ac.settings_of(request).student_grades:
+        raise HTTPException(404, "Not Found")
+
+
+@router.get("/grades", dependencies=[Depends(grades_enabled)])
 async def my_grades(p: Principal = Depends(require_student),
                     session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
@@ -1076,7 +1084,7 @@ def _correct_answer(q: dict):
     return None
 
 
-@router.get("/grades/{exam_id}")
+@router.get("/grades/{exam_id}", dependencies=[Depends(grades_enabled)])
 async def my_grade_detail(exam_id: str, p: Principal = Depends(require_student),
                           session: AsyncSession = Depends(get_session)):
     a = await find_attempt(session, exam_id, p.user_id)

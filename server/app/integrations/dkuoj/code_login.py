@@ -249,5 +249,5 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
                  f"exam {e.id}: signed in on device {(device or '-')[:8]}")
     await remember_user(u.id, u.role, int(u.token_version or 0))
     return _no_store({"token": make_token(s.secret, u.id, u.role, s.student_token_ttl_s,
-                                          version=u.token_version or 0),
+                                          version=u.token_version or 0, scope=e.id),
                       "role": u.role, "name": u.name})

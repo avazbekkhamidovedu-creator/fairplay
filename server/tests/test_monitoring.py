@@ -105,7 +105,7 @@ def test_lms_sync_age_exposed_only_when_recorded(mclient):
 
 def test_health_response_unchanged(mclient):
     extra = {"browser_demo"} if mclient.app.state.settings.browser_gate == "off" else set()
-    assert set(mclient.get("/api/health").json()) == {"ok", "demo_logins", "features"} | extra
+    assert set(mclient.get("/api/health").json()) == {"ok", "demo_logins", "features", "student_grades"} | extra
 
 
 def test_sentry_is_a_noop_without_dsn(monkeypatch):

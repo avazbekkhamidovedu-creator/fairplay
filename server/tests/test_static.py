@@ -23,4 +23,4 @@ def test_api_404_is_json(client):
         assert r.headers["content-type"].startswith("application/json")
         assert r.json() == {"detail": "Not Found"}
     assert client.get("/api/health").json() == {"ok": True, "demo_logins": True, "features": ["scan", "lms", "practice"],
-                                                "browser_demo": True}     # the suite runs with the browser gate off
+                                                "student_grades": True, "browser_demo": True}     # the suite runs with the browser gate off
