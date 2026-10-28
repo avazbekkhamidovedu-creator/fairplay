@@ -680,3 +680,25 @@ matched ignoring case, spaces and dashes. Stored as an HMAC-SHA256 (key derived 
 secret) and sealed (`app.lms.secretbox`) so the same sheet can be printed again; table
 `exam_access_codes` (unique `(exam_id, netid)` and `(exam_id, code_hmac)`). Student sign-in with
 a code is not part of this version. No new signing vectors: the format is unchanged.
+
+## 13. Immediate sync (2026-10-29)
+
+DKU OJ pings FairPlay when an assignment is saved, so it shows up at once instead of at the next
+pass of the periodic sync (now every 30 s by default; `DKUOJ_SYNC_SECONDS` still overrides).
+
+- **`POST /sync`** (oj->fp, signed like every call in §3; any `X-FP-Acting-User`, or none, is
+  accepted because the call only starts a refresh) body `{"exam_key": "<contest key>", "class_id": 31}`,
+  both optional. Unknown fields, a wrong type, an empty or over-200-character key, or a
+  `class_id` that is not a positive integer: 422. Answer within about 3 seconds:
+  `{"ok": true, "queued": false}`.
+- The work runs in the background: fetch the exam from DKU OJ (create or update it, editors and
+  roster included), fetch the package when the start is inside the 24 h lead window, run the
+  auto-open check. With no `exam_key` (or only a `class_id`) every exam changed since the last
+  sync is refreshed.
+- One run per exam at a time, also against the periodic loop (a short-lived guard per key in the
+  store). When the exam is busy the answer is `"queued": true`: a follow-up run is marked and
+  starts when the current one finishes. Pings are never dropped, many pings in a row collapse
+  into one follow-up.
+- Rate limit: 30 pings per minute in total and 6 per minute per `exam_key`; beyond that 429 with
+  `Retry-After: 60`. 401 unsigned or badly signed, 404 while the bridge is off.
+- No new signing vectors; the periodic sync stays as the safety net if a ping is lost.
