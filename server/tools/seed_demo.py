@@ -117,6 +117,8 @@ async def seed(settings, args) -> list[dict]:
     from app.models import Exam, User
     from app.timeutil import iso, utcnow
 
+    from app.integrations.dkuoj import sync as ojsync
+    ojsync.BACKGROUND = False       # this process only seeds; the server's own loop opens the exam
     rng = random.Random(args.seed)
     app = create_app(settings)
     async with app.router.lifespan_context(app):
@@ -130,7 +132,7 @@ async def seed(settings, args) -> list[dict]:
             await s.commit()
             item = {
                 "key": KEY, "name": TITLE, "course": {"id": 1, "name": "Demo course"},
-                "classes": [{"id": 1, "name": "Demo class"}],
+                "classes": [{"id": 1, "name": "Demo section A"}],
                 "start_time": iso(start), "end_time": iso(start + timedelta(hours=3)),
                 "time_limit_seconds": 5400, "results_hidden": True, "package_version": PACKAGE_VERSION,
                 "removed": False, "updated_at": iso(now),
