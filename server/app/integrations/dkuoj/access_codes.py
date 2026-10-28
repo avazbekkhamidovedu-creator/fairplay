@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,7 @@ from ...models import Exam, User
 from ...timeutil import utcnow
 from .models import ExamAccessCode, OjRosterEntry
 
+WINDOW_LEAD = timedelta(minutes=30)
 ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 6
 
@@ -127,3 +129,52 @@ async def lookup(session: AsyncSession, secret: str, exam_id: str, code: str) ->
     return (await session.execute(select(ExamAccessCode).where(
         ExamAccessCode.exam_id == exam_id, ExamAccessCode.code_hmac == code_hmac(secret, code),
         ExamAccessCode.revoked_at.is_(None)))).scalar_one_or_none()
+
+
+async def in_window(session: AsyncSession, e: Exam, now: datetime) -> bool:
+    """A code works while the exam is open, or from 30 minutes before its scheduled start,
+    and never after it closed (its close time plus the largest extra time)."""
+    from ...closing import max_extra
+    from ...services import exam_closes_at
+    if e.status not in ("draft", "live") or e.delivery == "paper":
+        return False
+    closes = exam_closes_at(e)
+    if closes is not None and now >= closes + await max_extra(session, e):
+        return False
+    if e.status == "live":
+        return True
+    return e.scheduled_at is not None and now >= e.scheduled_at - WINDOW_LEAD
+
+
+async def matches(session: AsyncSession, secret: str, code: str) -> list[tuple[ExamAccessCode, Exam]]:
+    """Every row with this code (revoked ones too) on a draft or live exam, newest exam first."""
+    h = code_hmac(secret, code)
+    rows = (await session.execute(
+        select(ExamAccessCode, Exam).join(Exam, Exam.id == ExamAccessCode.exam_id)
+        .where(ExamAccessCode.code_hmac == h, Exam.status.in_(("draft", "live")))
+        .order_by(Exam.created_at.desc()))).all()
+    return [(r, e) for r, e in rows]
+
+
+async def exam_has_codes(session: AsyncSession, exam_id: str) -> bool:
+    return (await session.execute(select(ExamAccessCode.id).where(
+        ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None)).limit(1))).first() is not None
+
+
+async def exams_with_codes(session: AsyncSession, exam_ids: list[str]) -> set[str]:
+    if not exam_ids:
+        return set()
+    return set((await session.execute(select(ExamAccessCode.exam_id).where(
+        ExamAccessCode.exam_id.in_(exam_ids), ExamAccessCode.revoked_at.is_(None)).distinct())).scalars())
+
+
+async def signed_in_here(session: AsyncSession, exam_id: str, user_id: int, device_id: str | None) -> bool:
+    """The student's code for this exam is bound to this device: the code sign-in already
+    authorised the start (no start code needed)."""
+    if not device_id:
+        return False
+    return (await session.execute(select(ExamAccessCode.id).where(
+        ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None),
+        ExamAccessCode.bound_device == device_id,
+        ExamAccessCode.netid == select(User.netid).where(User.id == user_id).scalar_subquery()
+    ).limit(1))).first() is not None

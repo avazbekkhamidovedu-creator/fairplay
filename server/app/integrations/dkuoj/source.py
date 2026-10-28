@@ -40,7 +40,8 @@ class DkuojSource(ExternalSource):
         from .routes_v2 import router as bridge_router
         from .routes_outbox import router as outbox_router
         from .setup import router as setup_router
-        return [bridge_router, setup_router, outbox_router]
+        from .code_login import router as code_login_router
+        return [bridge_router, setup_router, outbox_router, code_login_router]
 
     def background_tasks(self, settings) -> list:
         from . import sync
