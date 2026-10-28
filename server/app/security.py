@@ -133,18 +133,19 @@ async def _current_user(uid: int) -> tuple[str, int] | None:
         role, _, ver = raw.partition(":")
         return role, int(ver)
     async with get_database().sessionmaker() as s:
-        row = (await s.execute(select(User.role, User.token_version).where(User.id == uid))).first()
+        row = (await s.execute(select(User.role, User.token_version, User.username).where(User.id == uid))).first()
     if row is None:
         return None
+    role = "student" if row.username == ADMIN_TESTER_USER else row.role
     # 0.6.2 review: only fill an EMPTY entry. A sign-out that ran after the read above has
     # already written the new version (remember_user); writing back the old one would let a
     # signed-out token keep working for USER_CACHE_TTL_S.
-    if not await store.setnx(f"tv:{uid}", f"{row.role}:{int(row.token_version or 0)}", USER_CACHE_TTL_S):
+    if not await store.setnx(f"tv:{uid}", f"{role}:{int(row.token_version or 0)}", USER_CACHE_TTL_S):
         raw = await store.get(f"tv:{uid}")
         if raw:
             role, _, ver = raw.partition(":")
             return role, int(ver)
-    return row.role, int(row.token_version or 0)
+    return role, int(row.token_version or 0)
 
 
 async def remember_user(uid: int, role: str, token_version: int) -> None:
@@ -182,7 +183,7 @@ async def current_principal(request: Request) -> Principal:
     cur = await _current_user(uid)
     if cur is None or cur[0] != role or cur[1] != ver:
         raise HTTPException(401, "Signed out. Please sign in again.")
-    if scope and await scope_over(uid, scope):
+    if scope and scope != ADMIN_SCOPE and await scope_over(uid, scope):
         raise HTTPException(401, "Signed out. Please sign in again.")
     return Principal(uid, role, scope)
 
@@ -195,6 +196,9 @@ async def require_teacher(p: Principal = Depends(current_principal)) -> Principa
     return p
 
 
+ADMIN_SCOPE = "admin_test"
+ADMIN_TESTER_USER = "admin-tester"
+_ADMIN_PATHS = ("/api/student/exams",)
 SCOPED_AFTER_HANDIN_S = 300
 SCOPED_AFTER_END_S = 30 * 60
 _EXAM_PATH = re.compile(r"^/api/student/exams/([^/]+)")
@@ -240,6 +244,10 @@ async def forget_scope(uid: int, exam_id: str) -> None:
 async def require_student(request: Request, p: Principal = Depends(current_principal)) -> Principal:
     if p.role != "student":
         raise HTTPException(403, "Student role required")
+    if p.scope == ADMIN_SCOPE:
+        if request.method != "GET" or request.url.path.rstrip("/") not in _ADMIN_PATHS:
+            raise HTTPException(403, "This sign-in is for one exam. Use a new code for another exam.")
+        return p
     if p.scope:
         path = request.url.path
         m = _EXAM_PATH.match(path)

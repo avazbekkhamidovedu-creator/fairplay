@@ -95,6 +95,8 @@ class Settings:
     # Extra browser origins allowed to call the API (the UI itself is same-origin).
     cors_origins: list[str] = field(default_factory=lambda: _list("FAIRPLAY_CORS_ORIGINS"))
     token_ttl_s: int = 43200                 # teachers: 12 h
+    admin_test_code: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_ADMIN_TEST_CODE", "").strip(),
+                                 repr=False)
     # Audit S-15: student tokens travel through the exam page and the app; shorter life.
     student_token_ttl_s: int = field(default_factory=lambda: _int("FAIRPLAY_STUDENT_TOKEN_TTL_S", 8 * 3600))
     db_pool_size: int = field(default_factory=lambda: _int("DB_POOL_SIZE", 10))

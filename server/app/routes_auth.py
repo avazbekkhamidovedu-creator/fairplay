@@ -11,7 +11,7 @@ from .browser_gate import request_from_app
 from .db import get_session
 from .models import User
 from .schemas import LoginIn
-from .security import Principal, current_principal, hash_password, make_token, verify_password_async
+from .security import ADMIN_SCOPE, Principal, current_principal, hash_password, make_token, verify_password_async
 from .store import get_store
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -134,6 +134,8 @@ async def me(request: Request, p: Principal = Depends(current_principal),
     u = await session.get(User, p.user_id)
     if u is None:
         raise HTTPException(401, "Invalid or expired token")
+    if p.scope == ADMIN_SCOPE:
+        return {"username": u.username, "name": u.name, "role": "student"}
     if u.role == "student" and not request_from_app(request):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return {"username": u.username, "name": u.name, "role": u.role, **({"netid": u.netid} if u.netid else {})}

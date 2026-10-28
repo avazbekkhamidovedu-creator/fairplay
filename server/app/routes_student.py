@@ -26,7 +26,7 @@ from .review import (ALL, ANSWERS, BREAKDOWN, REVIEW_CLOSED, opens_detail, revie
                      shows_breakdown, shows_score)
 from .schemas import (SCALAR_ONLY_DETAIL, AnswersIn, AppBeatIn, DeviceCheckIn, EventsIn, ExitCodeIn,
                       HeartbeatIn, OfflineKeyIn, StartIn, SwapRequestIn)
-from .security import Principal, require_student
+from .security import ADMIN_SCOPE, Principal, require_student
 from .services import (LIVE_TTL, attempt_key, attempt_meta_from, attempt_view, cache_attempt,
                        find_attempt, get_attempt_meta, get_exam_cached, get_exam_hot, new_id,
                        new_receipt, new_session_id, student_tools, code_language,
@@ -115,6 +115,9 @@ def offline_start(offline_started_at, now):
 @router.get("/exams")
 async def my_exams(request: Request, p: Principal = Depends(require_student),
                    session: AsyncSession = Depends(get_session)):
+    if p.scope == ADMIN_SCOPE:
+        from .integrations.dkuoj.admin_test import preview_exams
+        return JSONResponse(await preview_exams(session))
     from .materials import maybe_cleanup_materials
     from .offline import package_id
     await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly

@@ -29,10 +29,10 @@ from ...db import get_session
 from ...models import Attempt, Exam, User
 from ...routes_auth import client_ip
 from ...schemas import ClientProofIn
-from ...security import make_token
+from ...security import ADMIN_SCOPE, make_token
 from ...store import get_store
 from ...timeutil import utcnow
-from . import access_codes
+from . import access_codes, admin_test
 from .models import ExamAccessCode
 from .setup import add_event, make_kind_token, parse_kind_token
 
@@ -181,6 +181,12 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
     counters = _counters(ip, device)
     await _check_not_blocked(store, counters)
 
+    if s.admin_test_code and admin_test.matches(s.admin_test_code, body.code):
+        await admin_test.record_use(session, ip)
+        token = make_kind_token(s.secret, KIND, {"scope": ADMIN_SCOPE, "dev": device or ""}, CONFIRM_TTL_S)
+        return _no_store({"first_name": "Admin", "last_name": "Tester", "netid": "",
+                          "exam_title": admin_test.EXAM_TITLE, "confirm_token": token})
+
     code = access_codes.normalise(body.code)
     row = e = None
     reason: str | None = "malformed"
@@ -213,10 +219,18 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     if await store.incr(f"codelogin:confirm:{client_ip(request)}", 60) > CONFIRMS_PER_MIN:
         raise HTTPException(429, TOO_MANY)
     tok = parse_kind_token(s.secret, KIND, body.confirm_token.strip())
-    if tok is None or not isinstance(tok.get("row"), int):
+    admin = tok is not None and tok.get("scope") == ADMIN_SCOPE and bool(s.admin_test_code)
+    if tok is None or (not admin and not isinstance(tok.get("row"), int)):
         raise HTTPException(400, CONFIRM_EXPIRED)
     if not await store.setnx(f"codelogin:used:{tok['jti']}", "1", CONFIRM_TTL_S + 60):
         raise HTTPException(400, CONFIRM_EXPIRED)
+    if admin:
+        u = await admin_test.tester_user(session)
+        await remember_user(u.id, "student", int(u.token_version or 0))
+        ttl = min(s.student_token_ttl_s, admin_test.MAX_TTL_S)
+        return _no_store({"token": make_token(s.secret, u.id, "student", ttl, version=u.token_version or 0,
+                                              scope=ADMIN_SCOPE),
+                          "role": "student", "name": u.name})
 
     row = await session.get(ExamAccessCode, tok["row"])
     e = await session.get(Exam, row.exam_id) if row is not None else None
