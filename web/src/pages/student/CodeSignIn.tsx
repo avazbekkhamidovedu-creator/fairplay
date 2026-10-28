@@ -124,6 +124,10 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
           <AppVersion short className="cs-version" />
         </span>
         <button type="button" className="cs-test-btn" onClick={openPanel}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="4.5" y="5" width="15" height="10.5" rx="1.5" />
+            <path d="M2.5 18.5h19" />
+          </svg>
           Test my device
         </button>
       </header>
