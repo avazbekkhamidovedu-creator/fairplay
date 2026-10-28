@@ -13,7 +13,7 @@ class JudgeAppConfig(AppConfig):
         #          DO NOT REMOVE THINKING THE IMPORT IS UNUSED.
         # noinspection PyUnresolvedReferences
         from . import checks, signals, jinja2  # noqa: F401, imported for side effects
-        from .utils import fairplay_signals  # noqa: F401, imported for side effects
+        from .utils import fairplay_signals, fairplay_sync  # noqa: F401, imported for side effects
 
         from judge.models import Language, Profile
         from django.contrib.auth.models import User
