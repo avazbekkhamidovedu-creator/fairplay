@@ -15,7 +15,8 @@ from django.db.models import Count, Max, Min, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from judge.models import ContestParticipation, Language, ProblemSubmissionType, Profile, Submission, SubmissionFile
+from judge.models import ContestParticipation, ContestSubmission, Language, ProblemSubmissionType, Profile, \
+    Submission, SubmissionFile
 from judge.storage import StorageUnavailableError
 from judge.utils.fairplay import DELIVERY_WINDOW, KEY_ADDED_MINUTES, KEY_FAIRPLAY_CLOSES, MAX_ADDED_MINUTES
 from judge.utils.fairplay_package import QUESTION_TYPES, canonical_json, code_languages, exam_roster, iso, \
@@ -52,6 +53,10 @@ _KEY_WARNINGS = 'fpb:warnings:%d'
 _KEY_ADDED = KEY_ADDED_MINUTES
 _KEY_UPLOAD = 'fpb:upload:%s'
 _KEY_RESULTS = 'fpb:results:%d'
+
+LABEL_PREFIX = 'FairPlay hand-in '
+LABEL_SUPERSEDED = ', superseded'
+MAX_REVISION = 50
 
 
 class DeliveryError(Exception):
@@ -258,6 +263,50 @@ def _attempt_key(attempt_id):
     return _KEY_ATTEMPT % hashlib.sha256(attempt_id.encode('utf-8')).hexdigest()
 
 
+def _attempt_ref(attempt_id, revision):
+    """Revision 1 keeps the plain attempt id; a later revision of the same attempt is its own delivery."""
+    return attempt_id if revision == 1 else '%s#r%d' % (attempt_id, revision)
+
+
+def _label(revision, superseded=False):
+    return '%s%d%s' % (LABEL_PREFIX, revision, LABEL_SUPERSEDED if superseded else '')
+
+
+def label_revision(note):
+    """The hand-in number a note written by DKU OJ names, else None."""
+    if not isinstance(note, str) or not note.startswith(LABEL_PREFIX):
+        return None
+    digits = note[len(LABEL_PREFIX):].split(',', 1)[0]
+    return int(digits) if digits.isdigit() else None
+
+
+def _current_revision(contest, profile):
+    """The revision that counts now: from the record, else from the labels on the filed answers, else 0."""
+    record = cache.get(_KEY_HAND_IN % (contest.id, profile.id))
+    if isinstance(record, dict):
+        return int(record.get('revision') or 1)
+    filed = _filed_submissions(contest, profile)
+    if not filed.exists():
+        return 0
+    labelled = [label_revision(n) for n in filed.values_list('review_note', flat=True)]
+    return max([r for r in labelled if r] or [1])
+
+
+def _supersede(contest, participation, revision):
+    """Take the answers of hand-in ``revision`` out of the score; they stay on file, labelled.
+
+    The link to the participation is what every contest format scores from, so removing it is what keeps
+    the earlier hand-in out of the score and the scoreboard. The submissions keep their contest.
+    """
+    ids = list(ContestSubmission.objects.filter(participation=participation).values_list('submission_id', flat=True))
+    if not ids:
+        return
+    Submission.objects.filter(Q(review_note='') | Q(review_note__startswith=LABEL_PREFIX), id__in=ids) \
+        .update(review_note=_label(revision, True))
+    ContestSubmission.objects.filter(participation=participation, submission_id__in=ids).delete()
+    Submission.objects.filter(id__in=ids).update(contest_object=contest)
+
+
 def _filed_submissions(contest, profile):
     """Submissions newer than the professor's last clear."""
     queryset = Submission.objects.filter(contest_object=contest, user=profile,
@@ -355,6 +404,7 @@ def hand_ins(contest):
             'received_at': hand_in.get('received_at'),
             'handed_in_at': hand_in.get('handed_in_at'),
             'record_missing': hand_in.get('record_missing'),
+            'revision': hand_in.get('revision') or 1,
             'warnings': hand_in.get('warnings') or [],
         })
     return rows
@@ -512,11 +562,17 @@ ON_FILE_WITHOUT_RECORD = ('This student already has answers on file for this exa
                           "student's FairPlay report in DKU OJ; then deliver again.")
 
 
-def _already_handed_in(contest, profile, attempt_id, body_hash):
-    """The receipt to replay, a 409, or None when nothing of this student is on file."""
-    record = cache.get(_attempt_key(attempt_id))
+def _already_handed_in(contest, profile, attempt_id, body_hash, revision=1):
+    """The receipt to replay, a 409, or None when nothing is on file or a newer revision may follow."""
+    record = cache.get(_attempt_key(_attempt_ref(attempt_id, revision)))
     if isinstance(record, dict):
         return _replay(record, contest, body_hash)
+    on_file = _current_revision(contest, profile)
+    if revision > on_file:
+        return None
+    if revision < on_file:
+        raise DeliveryError(409, 'Hand-in %d of this exam is already on file; DKU OJ does not accept the older '
+                                 'hand-in %d.' % (on_file, revision))
     current = cache.get(_KEY_HAND_IN % (contest.id, profile.id))
     if isinstance(current, dict):
         raise _other_attempt(current)
@@ -545,9 +601,16 @@ def deliver_submission(contest, payload, now=None):
     attempt_id = payload.get('attempt_id')
     if not isinstance(attempt_id, str) or not attempt_id or len(attempt_id) > 128:
         raise DeliveryError(422, 'attempt_id is required (at most 128 characters).')
+    revision = payload.get('revision', 1)
+    if not isinstance(revision, int) or isinstance(revision, bool) or not 1 <= revision <= MAX_REVISION:
+        raise DeliveryError(422, 'revision must be a whole number from 1 to %d.' % MAX_REVISION)
+    supersedes = payload.get('supersedes')
+    if supersedes is not None and (not isinstance(supersedes, str) or len(supersedes) > 128):
+        raise DeliveryError(422, 'supersedes must be a string of at most 128 characters.')
     body_hash = hashlib.sha256(canonical_json(payload).encode('utf-8')).hexdigest()
+    attempt_ref = _attempt_ref(attempt_id, revision)
 
-    record = cache.get(_attempt_key(attempt_id))
+    record = cache.get(_attempt_key(attempt_ref))
     if isinstance(record, dict):
         return _replay(record, contest, body_hash)
 
@@ -591,16 +654,18 @@ def deliver_submission(contest, payload, now=None):
 
     with _StudentLock(contest, profile) as lock:
         # Checked again under the lock: a parallel delivery of the same attempt has finished.
-        replay = _already_handed_in(contest, profile, attempt_id, body_hash)
+        replay = _already_handed_in(contest, profile, attempt_id, body_hash, revision)
         if replay is not None:
             return replay
         stored, written = [], False
-        keys = [_attempt_key(attempt_id), _KEY_HAND_IN % (contest.id, profile.id)]
+        hand_in_key = _KEY_HAND_IN % (contest.id, profile.id)
+        keys = [_attempt_key(attempt_ref), hand_in_key]
+        previous = cache.get(hand_in_key)
         try:
             with transaction.atomic():
                 # The cache lock may have expired: check again under the profile row lock.
                 Profile.objects.select_for_update().filter(pk=profile.pk).first()
-                replay = _already_handed_in(contest, profile, attempt_id, body_hash)
+                replay = _already_handed_in(contest, profile, attempt_id, body_hash, revision)
                 if replay is not None:
                     return replay
                 participation = ContestParticipation.objects.filter(
@@ -611,6 +676,8 @@ def deliver_submission(contest, payload, now=None):
                         # FairPlay's start, kept within the exam's own window and never in the future.
                         real_start=min(max(started_at or now, contest.start_time), now))
                     transaction.on_commit(contest.update_user_count, robust=True)
+                if revision > 1:
+                    _supersede(contest, participation, _current_revision(contest, profile) or revision - 1)
                 filed = []
                 for answer in to_file:
                     lock.renew()
@@ -622,11 +689,14 @@ def deliver_submission(contest, payload, now=None):
                     language, value = prepared
                     submission = _file_answer(profile, contest_problem, participation, language, value, question_id)
                     stored += _stored_files(submission)
+                    if revision > 1:
+                        Submission.objects.filter(id=submission.id).update(review_note=_label(revision))
                     filed.append({'question_id': question_id, 'submission_id': submission.id})
                 record = {
                     'attempt_id': attempt_id, 'receipt': 'oj_rcpt_' + secrets.token_hex(12),
                     'contest_id': contest.id, 'profile_id': profile.id, 'participation_id': participation.id,
-                    'body_sha256': body_hash, 'package_version': str(payload.get('package_version') or '')[:32],
+                    'body_sha256': body_hash, 'revision': revision, 'supersedes': supersedes or '',
+                    'package_version': str(payload.get('package_version') or '')[:32],
                     'submissions': filed, 'warnings': warnings, 'started_at': iso(started_at),
                     'deadline_at': iso(deadline_at), 'handed_in_at': iso(handed_in_at), 'received_at': iso(now),
                     'handed_in_evidence': evidence, 'report_url': report_url,
@@ -638,7 +708,11 @@ def deliver_submission(contest, payload, now=None):
         except BaseException as e:
             _delete_stored(stored)
             if written:
-                cache.delete_many(keys)
+                cache.delete(keys[0])
+                if isinstance(previous, dict):
+                    cache.set(hand_in_key, previous, RECORD_TTL)
+                else:
+                    cache.delete(hand_in_key)
             if isinstance(e, TRANSIENT_ERRORS):
                 logger.exception('FairPlay hand-in of %s for %s failed', profile.user.username, contest.key)
                 raise transient_error()
@@ -676,6 +750,11 @@ def _handed_in(contest):
                 .select_related('user__user').order_by('id'))
 
 
+def _feedback(submission):
+    note = submission.review_note or ''
+    return '' if label_revision(note) else note
+
+
 def _result_state(participation, contest_problems, scoring):
     """What the student may see now: released points per question, or ``{'released': False}``."""
     from judge.utils.contest_grade import student_display_points, student_display_released
@@ -694,7 +773,7 @@ def _result_state(participation, contest_problems, scoring):
         questions.append({
             'question_id': problem_question_id(cp.problem_id),
             'points': points,
-            'feedback_md': (submission.review_note or '') if student_display_released(submission) else '',
+            'feedback_md': _feedback(submission) if student_display_released(submission) else '',
         })
     return {'released': True, 'total': total, 'total_points': sum(cp.points for cp in contest_problems),
             'questions': questions}

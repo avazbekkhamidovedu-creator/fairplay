@@ -43,6 +43,9 @@
             {{ link_user(submission.user) }}
             <br class="xs-br">
             <span class="time">{{ relative_time(submission.date) }}</span>
+            {% if submission.contest_object_id and submission.review_note.startswith('FairPlay hand-in ') and submission.contest_object.is_editable_by(request.user) %}
+                <span class="submission-contest">{{ submission.review_note }}</span>
+            {% endif %}
             {% if not request.in_contest and submission.contest_object_id %}
                 <a href="{{ url('contest_view', submission.contest_object.key) }}"
                    class="submission-contest">

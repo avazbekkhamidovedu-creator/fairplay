@@ -93,7 +93,8 @@ def submission_related(queryset):
               'problem__code', 'problem__is_public', 'problem__submission_type', 'problem__points',
               'language__short_name', 'language__key', 'date', 'time', 'memory',
               'points', 'result', 'status', 'case_points', 'case_total', 'current_testcase', 'contest_object',
-              'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override') \
+              'locked_after', 'problem__submission_source_visibility_mode', 'user__username_display_override',
+              'review_note') \
         .prefetch_related('contest_object__authors', 'contest_object__curators',
                           'manual_grade', 'contest__problem')
 

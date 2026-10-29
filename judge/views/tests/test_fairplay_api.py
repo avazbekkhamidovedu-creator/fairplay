@@ -548,8 +548,8 @@ class FairPlaySubmissionsTestCase(FairPlayAPIMixin, TestCase):
         real = fairplay_delivery._already_handed_in
         calls = []
 
-        def slow(contest, profile, attempt_id, body_hash):
-            result = real(contest, profile, attempt_id, body_hash)
+        def slow(contest, profile, attempt_id, body_hash, revision=1):
+            result = real(contest, profile, attempt_id, body_hash, revision)
             calls.append(attempt_id)
             if len(calls) == 1:
                 # The first delivery stalls here; its lock expires and attempt a2 is filed.
