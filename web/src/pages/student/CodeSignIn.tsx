@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, codeLoginApi, setToken } from "../../api/client";
+import { ApiError, TooEarlyError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
 import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
 import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
@@ -9,6 +9,7 @@ import { UpdateCard, useSignInUpdate } from "../../components/code-signin/Update
 import { AppVersion } from "../../components/AppVersion";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import * as bridge from "../../lib/bridge";
+import { countdownText, opensInMs, startsMessage } from "../../lib/earlyCode";
 import { keepDeviceCheck, sendPendingDeviceCheck } from "../../lib/pendingDeviceCheck";
 import { useLegacyStudentUi } from "../../lib/legacyStudentUi";
 import "../../styles/code-signin.css";
@@ -41,12 +42,21 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
   const [error, setError] = useState<string | null>(null);
   const [shake, setShake] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [early, setEarly] = useState<Date | null>(null);
+  const [now, setNow] = useState(() => new Date());
   const [check, setCheck] = useState<DeviceCheckState>({ kind: "idle" });
   const [panel, setPanel] = useState(false);
   const [tryOpen, setTry] = useState(false);
   const update = useSignInUpdate();
   const installing = update?.phase.kind === "installing";
 
+  useEffect(() => {
+    if (!early) return;
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, [early]);
+
+  const waitMs = early ? opensInMs(early, now) : 0;
   const code = chars.join("");
   const complete = code.length === CODE_CHARS;
 
@@ -64,6 +74,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
     e.preventDefault();
     if (!complete || busy) return;
     setError(null);
+    setEarly(null);
     const typed = normalizeCode(code);
     setBusy(true);
     try {
@@ -73,7 +84,12 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
       setTypedCode(typed);
       setPrompt(res);
     } catch (err) {
-      fail(errorText(err));
+      if (err instanceof TooEarlyError) {
+        setNow(new Date());
+        setEarly(err.startsAt);
+      } else {
+        fail(errorText(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -187,6 +203,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
                 onChange={(next) => {
                   setChars(next);
                   if (error) setError(null);
+                  if (early) setEarly(null);
                 }}
                 invalid={error === NOT_VALID}
                 shakeKey={shake}
@@ -198,8 +215,13 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
                   {error}
                 </p>
               )}
-              <button type="submit" className="cs-btn cs-btn-primary cs-block" disabled={!complete || busy || installing}>
-                {busy ? "Checking…" : "Continue"}
+              {early && (
+                <p className="cs-info" role="status" data-testid="code-early">
+                  {startsMessage(early, now)}
+                </p>
+              )}
+              <button type="submit" className="cs-btn cs-btn-primary cs-block" disabled={!complete || busy || installing || waitMs > 0}>
+                {busy ? "Checking…" : waitMs > 0 ? `You can start in ${countdownText(waitMs)}` : "Continue"}
               </button>
             </form>
             {legacy && (

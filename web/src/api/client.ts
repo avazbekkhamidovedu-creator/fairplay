@@ -135,6 +135,16 @@ export class ApiError extends Error {
   }
 }
 
+/** Code sign-in: a valid code for an exam that opens later (400 too_early, starts_at in UTC). */
+export class TooEarlyError extends ApiError {
+  startsAt: Date;
+  constructor(startsAt: Date) {
+    super(400, "too_early", "too_early");
+    this.name = "TooEarlyError";
+    this.startsAt = startsAt;
+  }
+}
+
 /** S4: start refused because the attempt is bound to another computer (409 swap_needed).
  *  deviceId = this computer's app device id (null in a browser: it can't take over). */
 export class SwapNeededError extends ApiError {
@@ -152,6 +162,10 @@ export const UPGRADE_EVENT = "fairplay-upgrade-required";
 export function errorOf(status: number, body: unknown, fallback: string): ApiError {
   const b = body && typeof body === "object" ? (body as { detail?: unknown; min_app_version?: unknown }) : {};
   const d = b.detail;
+  const startsAt = (body as { starts_at?: unknown } | null)?.starts_at;
+  if (status === 400 && d === "too_early" && typeof startsAt === "string" && !Number.isNaN(Date.parse(startsAt))) {
+    return new TooEarlyError(new Date(startsAt));
+  }
   const code = d && typeof d === "object" && !Array.isArray(d) && typeof (d as { code?: unknown }).code === "string"
     ? (d as { code: string }).code
     : null;

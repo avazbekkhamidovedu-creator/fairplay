@@ -9,6 +9,7 @@ import { UpcomingExamCard } from "../components/student/ExamCard";
 import * as bridge from "../lib/bridge";
 import { keepDeviceCheck } from "../lib/pendingDeviceCheck";
 import StudentLogin from "../pages/student/StudentLogin";
+import { countdownText, opensInMs, startsMessage } from "../lib/earlyCode";
 import { isWaiting, upcomingExams } from "../pages/student/useStudentExams";
 
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
@@ -195,6 +196,27 @@ describe("student sign-in with an access code", () => {
     expect(boxes()[0]!.getAttribute("aria-invalid")).toBe("true");
     expect(getToken("student")).toBeNull();
     expect(boxes()).toHaveLength(6);
+  });
+
+  it("a valid code for an exam that opens later shows the start time and a countdown instead of Continue", async () => {
+    const user = userEvent.setup();
+    const startsAt = new Date(Date.now() + 3 * 24 * 3600 * 1000 + 5 * 60 * 1000);
+    reply("/api/student/code-login", { status: 400, body: { detail: "too_early", starts_at: startsAt.toISOString() } });
+    renderLogin();
+    await enter(user, "K7M2QX");
+    const info = await screen.findByTestId("code-early");
+    expect(info.textContent).toBe(startsMessage(startsAt, new Date()));
+    expect(info.textContent).toMatch(/^Your exam starts \w{3}, \w{3} \d+ at .* Come back 30 minutes before\.$/);
+    expect(info.getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(boxes()[0]!.getAttribute("aria-invalid")).not.toBe("true");
+    expect(codeText()).toBe("K7M2QX");
+    const btn = screen.getByRole("button", { name: /^You can start in / }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(called("/api/student/code-login/confirm")).toHaveLength(0);
+    await user.click(boxes()[5]!);
+    await user.keyboard("{Backspace}");
+    expect(screen.queryByTestId("code-early")).toBeNull();
   });
 
   it("sends the cleaned-up code with the app's signed proof", async () => {
@@ -411,5 +433,32 @@ describe("starting an exam entered with a code", () => {
     renderStart();
     await user.click(screen.getByRole("button", { name: "Start exam" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/not open right now/);
+  });
+});
+
+describe("early code message", () => {
+  const at = new Date(2026, 9, 30, 15, 0);
+
+  it("today: only the time", () => {
+    expect(startsMessage(at, new Date(2026, 9, 30, 9, 0), "en-US")).toBe(
+      "Your exam starts at 3:00 PM. Come back 30 minutes before.",
+    );
+  });
+
+  it("another day: weekday and date too", () => {
+    expect(startsMessage(at, new Date(2026, 9, 29, 23, 59), "en-US")).toBe(
+      "Your exam starts Fri, Oct 30 at 3:00 PM. Come back 30 minutes before.",
+    );
+  });
+
+  it("counts down to 30 minutes before the start", () => {
+    const ms = opensInMs(at, new Date(2026, 9, 30, 13, 59, 30));
+    expect(ms).toBe(30 * 60 * 1000 + 30 * 1000);
+  });
+
+  it("formats minutes, seconds and hours; never negative", () => {
+    expect(countdownText(754_000)).toBe("12:34");
+    expect(countdownText(3_909_000)).toBe("1:05:09");
+    expect(opensInMs(at, new Date(2026, 9, 30, 16, 0))).toBe(0);
   });
 });
