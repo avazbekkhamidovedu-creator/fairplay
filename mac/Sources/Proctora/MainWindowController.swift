@@ -644,13 +644,14 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     private let eventQueueMax = 300
 
     func sendEvent(type: String, detail: String, time: String) {
+        guard DeviceTestSession.forwardsEvents(previewRunning: deviceTest.isRunning) else { return }
         if external.isActive {
             // Our JS page is gone while the exam website is open: the controller sends events itself.
             external.queueEvent(type: type, detail: detail, time: time)
             return
         }
         let event: [String: Any] = ["type": type, "detail": detail, "client_time": time]
-        if eventsReady, let webView, isServerURL(webView.url) {
+        if eventsReady, isServerURL(committedURL) {
             send(["type": "event", "event": event])
         } else {
             eventQueue.append(event)
@@ -666,7 +667,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func send(_ detail: [String: Any]) {
-        guard let webView, isServerURL(webView.url),
+        guard let webView, isServerURL(committedURL), isServerURL(webView.url),
               let data = try? JSONSerialization.data(withJSONObject: detail.merging(["bridge_nonce": bridgeNonce]) { _, b in b }),
               let json = String(data: data, encoding: .utf8) else { return }
         if let t = detail["type"] as? String, t != "event" {
@@ -1299,6 +1300,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     func deviceTestBegin() {
         DebugLog.log("devicetest", "preview started")
+        Updater.devicePreview = true
         deviceTestTapOn = EventTap.isTrusted && EventTap.shared.start()
         NSApp.presentationOptions = LockdownController.previewOptions
         enterLockedMode()
@@ -1309,6 +1311,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     func deviceTestRestore() {
         DebugLog.log("devicetest", "preview ended")
+        Updater.devicePreview = false
         deviceTestTimer?.invalidate(); deviceTestTimer = nil
         let tapOn = deviceTestTapOn
         deviceTestTapOn = false

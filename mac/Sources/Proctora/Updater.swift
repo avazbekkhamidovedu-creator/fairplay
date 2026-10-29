@@ -93,10 +93,19 @@ final class Updater {
         timer = t
     }
 
+    /// True while the device-test preview runs (set by the window controller). An update must not
+    /// swap the app under the preview any more than under a lock.
+    static var devicePreview = false
+
+    static func mayUpdateNow(locked: Bool, examBound: Bool, devicePreview: Bool) -> Bool {
+        !locked && !examBound && !devicePreview
+    }
+
     func check() {
         guard !Config.isDevBuild, !checking, !installing else { return }
-        guard !LockdownController.shared.isLocked else {
-            DebugLog.log("update", "check skipped while locked")
+        guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked, examBound: false,
+                                   devicePreview: Updater.devicePreview) else {
+            DebugLog.log("update", "check skipped while locked or in a device test")
             schedule(after: Updater.retryAfterFailure)
             return
         }
@@ -262,7 +271,8 @@ final class Updater {
         }
         DebugLog.log("update", "install requested")
         guard !Config.isDevBuild else { fail(.download); return }
-        guard !LockdownController.shared.isLocked, AppSession.shared.exam == nil else { fail(.locked); return }
+        guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked, examBound: AppSession.shared.exam != nil,
+                                   devicePreview: Updater.devicePreview) else { fail(.locked); return }
         guard !installing else {
             DebugLog.log("update", "install already running")
             send(["type": "updateFailed", "reason": Failure.busy.rawValue])

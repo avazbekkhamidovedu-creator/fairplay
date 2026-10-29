@@ -130,6 +130,11 @@ private func make() -> (DeviceTestSession, FakeEffects, Clock) {
         #expect("\(fx.last?["reason"] ?? "")" == "leave")
     }
 
+    @Test func previewKeyPressesAreNotForwarded() {
+        #expect(!DeviceTestSession.forwardsEvents(previewRunning: true))
+        #expect(DeviceTestSession.forwardsEvents(previewRunning: false))
+    }
+
     @Test func noWatchdogMarkerIsTouched() {
         let before = FileManager.default.fileExists(atPath: Watchdog.markerURL.path)
         let (s, _, _) = make()

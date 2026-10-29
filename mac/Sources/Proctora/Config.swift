@@ -49,9 +49,14 @@ enum Config {
 
     static var startURL: URL { serverURL.appendingPathComponent("student/login") }
 
-    /// Release builds only talk to an https server (audit #11).
+    /// Release builds only talk to an https server with at least one pin (audit #11): without pins
+    /// the app would fall back to the system trust store, which a user-installed root defeats.
     static var serverIsAcceptable: Bool {
-        isDevBuild || serverURL.scheme?.lowercased() == "https"
+        acceptable(isDev: isDevBuild, scheme: serverURL.scheme, pins: pins)
+    }
+
+    static func acceptable(isDev: Bool, scheme: String?, pins: [String]) -> Bool {
+        isDev || (scheme?.lowercased() == "https" && !pins.isEmpty)
     }
 
     /// Dev-build safety net: unlock by itself after this long. Always 0 (never) in release.

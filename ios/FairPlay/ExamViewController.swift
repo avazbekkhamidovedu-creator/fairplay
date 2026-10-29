@@ -779,7 +779,11 @@ final class ExamViewController: UIViewController, LockSurface,
     /// Server status from the app's own beats: a teacher close also unlocks.
     func handleServerStatus(_ status: String) {
         if status == "submitted", LockdownController.shared.isLocked, !external.isActive { requestUnlockOnce() }
+        if status == GoneCheck.sessionGone, LockdownController.shared.isLocked, goneCheck.shouldCheck() {
+            requestUnlockOnce()
+        }
     }
+    private var goneCheck = GoneCheck()
 
     func sendState() {
         send(["type": "state", "locked": LockdownController.shared.isLocked, "trusted": true,

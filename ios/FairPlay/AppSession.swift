@@ -116,6 +116,10 @@ final class AppSession {
                                    "locked": locked, "checks": checks, "signature": AppSession.sign(msg)]
         Net.request("POST", path: "api/student/attempts/\(exam.attemptId)/app-beat", token: exam.token,
                     appSession: exam.session, body: body) { status, json in
+            if status == 409 {
+                AppSession.shared.onStatus?(GoneCheck.sessionGone)
+                return
+            }
             guard status == 200, let st = json?["status"] as? String else { return }
             AppSession.shared.onStatus?(st)
         }

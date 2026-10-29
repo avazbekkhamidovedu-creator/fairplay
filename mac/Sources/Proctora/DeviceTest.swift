@@ -24,6 +24,9 @@ final class DeviceTestSession {
         var websiteExam: Bool
     }
 
+    /// The preview has no attempt: its key presses must not reach the integrity-event queue.
+    static func forwardsEvents(previewRunning: Bool) -> Bool { !previewRunning }
+
     static func restoresScreen(locked: Bool) -> Bool { !locked }
 
     static func clamp(_ raw: Any?) -> Int {
