@@ -70,7 +70,8 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
     if d.payload:
         return d.payload
     questions = e.questions or []
-    answers = a.answers or {}
+    snap = d.snapshot or {}
+    answers = snap["answers"] if snap else (a.answers or {})
     uploads = dict(d.uploads or {})
     for q in questions:
         if q.get("type") != "file_upload":
@@ -95,9 +96,10 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
     body = {
         "username": username, "attempt_id": a.id,
         "package_version": e.external_frozen_version or e.external_version,
-        "started_at": _z(a.started_at), "deadline_at": _z(a.deadline_at),
-        "handed_in_at": _z(a.submitted_at or a.updated_at),
-        "handed_in_evidence": "sealed" if a.sealed_proof else "server",
+        "started_at": _snap_z(snap, "started_at", a.started_at),
+        "deadline_at": _snap_z(snap, "deadline_at", a.deadline_at),
+        "handed_in_at": _snap_z(snap, "handed_in_at", a.submitted_at or a.updated_at),
+        "handed_in_evidence": snap.get("evidence") or ("sealed" if a.sealed_proof else "server"),
         "answers": out_answers,
         "integrity_report_url": report_url(cfg, e.id, a.id),
         # 2026-10-24 (v2 §11): when the exam closes in FairPlay (DKU OJ's end time + the minutes
@@ -105,9 +107,18 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
         # when it has lost that count (bounded there).
         "exam_closes_at": _z(exam_closes_at(e)),
     }
+    if int(d.revision or 1) > 1:
+        # a reopened attempt handed in again: this one counts, the earlier one stays on file
+        body["revision"] = int(d.revision)
+        body["supersedes"] = int(d.revision) - 1
     d.payload = body
     await session.commit()
     return body
+
+
+def _snap_z(snap: dict, name: str, live) -> str | None:
+    from ...timeutil import parse_iso
+    return _z(parse_iso(snap[name])) if snap.get(name) else _z(live)
 
 
 def _z(dt) -> str | None:
@@ -171,6 +182,12 @@ async def _deliver_one(session: AsyncSession, client: DkuojClient, throttle: Thr
     if d is None or d.status not in ("pending", "failed"):
         return None
     if worker is not None and (d.claimed_by != worker or d.locked_until is None or d.locked_until <= now):
+        return None
+    if int(d.revision or 1) > 1 and (await session.execute(select(OjDelivery.id).where(
+            OjDelivery.attempt_id == d.attempt_id, OjDelivery.revision < d.revision,
+            OjDelivery.status.in_(("pending", "failed"))).limit(1))).first() is not None:
+        d.next_at, d.locked_until, d.claimed_by = now + BACKOFF_FIRST, None, None     # after the earlier one
+        await session.commit()
         return None
     a = await session.get(Attempt, d.attempt_id)
     e = await session.get(Exam, d.exam_id)

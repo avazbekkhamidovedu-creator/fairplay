@@ -5,7 +5,8 @@ Each function checks the exam's state, commits, and drops the caches it changed;
 permission checks stay with the caller."""
 from __future__ import annotations
 
-from datetime import timedelta
+import json
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
@@ -18,7 +19,7 @@ from .closing import close_exam_now, max_extra
 from .integrations.registry import integration_for
 from .models import Attempt, Exam
 from .services import (attempt_key, exam_closes_at, exam_delivery, invalidate_exam, new_invigilator_code,
-                       new_start_code)
+                       new_session_id, new_start_code)
 from .store import get_store
 from .timeutil import iso, utcnow
 
@@ -162,3 +163,83 @@ async def approve_resume(session: AsyncSession, a: Attempt) -> dict:
     await ac.add_event(session, store, a.id, a.exam_id, "resume_approved",
                        f"teacher let the student continue; {minutes:g} min added")
     return {"ok": True, "minutes_added": minutes, "deadline_at": iso(a.deadline_at)}
+
+
+async def release_attempt_device(session: AsyncSession, a: Attempt, swap: bool = False,
+                                 clear_pending: bool = False) -> tuple[bool, str | None]:
+    """The old computer is cut off and the next start from any FairPlay app binds the attempt;
+    answers and timer stay. With `swap`, a pending swap request is approved the way
+    approve-swap does (the old computer may send one final save). Returns (moved a pending
+    swap, the device it asked from)."""
+    now = utcnow()
+    moved = swap and a.swap_requested_at is not None
+    target = a.swap_device_id if moved else None
+    if moved:
+        a.swap_old_session, a.swap_approved_at = a.session_id, now
+        a.swap_requested_at = None
+    a.device_id = None
+    a.session_id = new_session_id()   # nobody holds this one: the old device is cut off
+    if clear_pending:
+        a.pending_resume = False
+    a.updated_at = now
+    await session.commit()
+    store = get_store()
+    if moved:
+        await store.set(f"swapbase:{a.id}", json.dumps(a.answers or {}), ac.SWAP_FINAL_SAVE_S + 10)
+    await store.delete(attempt_key(a.id), f"abt:{a.id}")
+    await store.hdel(f"ab:{a.exam_id}", a.id)       # audit S-13: old device's beats go too
+    return moved, target
+
+
+async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: int,
+                         cap: datetime | None) -> datetime:
+    """Put a handed-in attempt back to in_progress for `minutes` (at most until `cap`), with
+    its answers. The device is freed. The caller has checked who may do it and writes the
+    event; this refuses what must never be reopened: not handed in, exam not live, graded or
+    released, or reopened before. Returns the new deadline."""
+    from .integrations.outbox import REOPENED, freeze_unsent
+    from .models import IntegrityEvent
+    from .security import forget_scope
+    if a.status != "submitted":
+        raise HTTPException(409, "This student has not handed in")
+    if e.status != "live":
+        raise HTTPException(409, "Exam is not live")
+    if a.external_result is not None or e.grades_released or a.grades or a.score is not None:
+        raise HTTPException(409, "This hand-in is already graded or released and cannot be reopened")
+    if (await session.execute(select(IntegrityEvent.id).where(
+            IntegrityEvent.attempt_id == a.id, IntegrityEvent.type == REOPENED).limit(1))).first() is not None:
+        raise HTTPException(409, "This attempt was reopened once already")
+    now = utcnow()
+    deadline = now + timedelta(minutes=minutes)
+    if cap is not None:
+        deadline = min(deadline, cap)
+    if deadline <= now:
+        raise HTTPException(409, "This exam has ended")
+    await freeze_unsent(session, a)
+    a.status, a.submitted_at, a.receipt = "in_progress", None, None
+    a.auto_submitted, a.late, a.sealed_proof = False, False, None
+    a.score, a.needs_grading = None, 0
+    a.deadline_at = deadline
+    a.device_id, a.session_id = None, new_session_id()
+    a.pending_resume = False
+    a.swap_device_id = a.swap_requested_at = a.swap_old_session = a.swap_approved_at = None
+    a.updated_at = now
+    await session.commit()
+    store = get_store()
+    await store.delete(attempt_key(a.id), f"abt:{a.id}", f"entry:{a.id}")
+    await store.hdel(f"ab:{a.exam_id}", a.id)
+    await forget_scope(a.student_id, a.exam_id)
+    return deadline
+
+
+def offline_exit_code(settings, a: Attempt, mac_code_raw: str) -> tuple[str, str]:
+    """(exit code, normalised Mac code). The code a locked Mac that cannot reach the server accepts (OfflineExit.swift): the
+    invigilator types the Mac code shown on the student's screen. Only works on that
+    student's Mac for its current app session, and is logged."""
+    mac_code = ac.normalize_mac_code(mac_code_raw)
+    if mac_code is None:
+        raise HTTPException(422, "A Mac code has 8 letters and digits, like K7QM-3XPA")
+    if not a.session_id:
+        raise HTTPException(409, "This student's app has no session yet. Restart their Mac; answers are saved on it.")
+    code = ac.offline_exit_code(ac.offline_key(settings.secret, a.id, a.session_id), mac_code)
+    return code, mac_code

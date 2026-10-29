@@ -143,9 +143,11 @@ def test_bad_layout_is_refused(oj):
 def test_reissue_invalidates_old_code(oj):
     run(oj)
     old = codes_of(oj)
-    r = call(oj, "POST", REISSUE, {"netid": "alice"})
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    r = call(oj, "POST", REISSUE, {"netid": "alice", "reason": "lost the slip"})
     new = codes_of(oj)
+    assert r.status_code == 200 and r.json() == {"ok": True, "code": new["alice"], "first_name": "Alice",
+                                                 "last_name": "Chen"}
+    assert r.headers["cache-control"] == "no-store"
     assert new["alice"] != old["alice"]
     assert {k: v for k, v in new.items() if k != "alice"} == {k: v for k, v in old.items() if k != "alice"}
 
@@ -156,8 +158,8 @@ def test_reissue_invalidates_old_code(oj):
     gone, fresh, other = db(oj, find)
     assert gone is None and fresh.netid == "alice" and other.netid == "carol"
     assert codes_of(oj)["alice"] in pdf_text(call(oj, "GET", PDF).content)[1]
-    assert call(oj, "POST", REISSUE, {"netid": "nobody9"}).status_code == 404
-    assert call(oj, "POST", REISSUE, {}).status_code == 400
+    assert call(oj, "POST", REISSUE, {"netid": "nobody9", "reason": "x"}).status_code == 404
+    assert call(oj, "POST", REISSUE, {"reason": "x"}).status_code == 400
 
 
 def test_refused_requests(oj):
@@ -166,9 +168,9 @@ def test_refused_requests(oj):
     assert oj.post(REISSUE, json={"netid": "alice"}).status_code == 401
     for who in ("alice", "nobody", ""):
         assert call(oj, "GET", PDF, acting=who).status_code == 403
-        assert call(oj, "POST", REISSUE, {"netid": "alice"}, acting=who).status_code == 403
+        assert call(oj, "POST", REISSUE, {"netid": "alice", "reason": "x"}, acting=who).status_code == 403
     assert call(oj, "GET", f"{V1}/exams/nope/access-codes.pdf").status_code == 404
-    assert call(oj, "POST", f"{V1}/exams/nope/access-codes/reissue", {"netid": "alice"}).status_code == 404
+    assert call(oj, "POST", f"{V1}/exams/nope/access-codes/reissue", {"netid": "alice", "reason": "x"}).status_code == 404
     assert db(oj, lambda s: s.scalar(select(ExamAccessCode.id).limit(1))) is None
 
 

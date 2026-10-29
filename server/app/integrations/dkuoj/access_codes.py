@@ -114,11 +114,12 @@ async def _ensure(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
     return sheet
 
 
-async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) -> bool:
-    """Replace the student's code (the old one stops matching); False when the NetID is not
-    on the exam's list."""
+async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) -> tuple[str, str, str] | None:
+    """Replace the student's code (the old one stops matching) and return (code, first name,
+    last name); None when the NetID is not on the exam's list. The plain code leaves only
+    through the caller's response."""
     if netid not in {u.netid for u, _, _ in await _roster(session, exam) if u.netid}:
-        return False
+        return None
     await ensure_codes(session, secret, exam)
     row = (await session.execute(select(ExamAccessCode).where(
         ExamAccessCode.exam_id == exam.id, ExamAccessCode.netid == netid))).scalar_one()
@@ -126,8 +127,25 @@ async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) ->
     code, h = _new_code(secret, taken)
     row.code_hmac, row.code_sealed = h, secretbox.seal(secret, code)
     row.created_at, row.revoked_at, row.used_at, row.bound_device = utcnow(), None, None, None
+    first, last = row.first_name, row.last_name
     await session.commit()
-    return True
+    return code, first, last
+
+
+async def unbind(session: AsyncSession, exam_id: str, netid: str) -> bool:
+    """Free the student's code from its device so the next sign-in binds again (no commit).
+    True when a bound code was freed."""
+    res = await session.execute(update(ExamAccessCode).where(
+        ExamAccessCode.exam_id == exam_id, ExamAccessCode.netid == netid, ExamAccessCode.revoked_at.is_(None),
+        ExamAccessCode.bound_device.is_not(None)).values(bound_device=None))
+    return bool(res.rowcount)
+
+
+async def states(session: AsyncSession, exam_id: str) -> dict[str, str]:
+    """netid -> "unused" | "bound" for every code that is not revoked (no code: not listed)."""
+    return {n: ("bound" if dev else "unused") for n, dev in (await session.execute(
+        select(ExamAccessCode.netid, ExamAccessCode.bound_device).where(
+            ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None)))).all()}
 
 
 async def revoke_missing(session: AsyncSession, exam_id: str, netids: set[str]) -> int:

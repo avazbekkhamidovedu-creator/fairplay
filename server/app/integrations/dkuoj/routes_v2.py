@@ -17,7 +17,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ... import exam_control as control
@@ -404,6 +404,13 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
         w = warnings.setdefault(aid, [])
         if len(w) < MAX_WARNINGS:
             w.append((detail or typ.replace("_", " "))[:200])
+    from . import access_codes
+    from ..outbox import REOPENED
+    code_states = await access_codes.states(session, e.id)
+    reopens = dict((await session.execute(
+        select(IntegrityEvent.attempt_id, func.count()).where(
+            IntegrityEvent.exam_id == e.id, IntegrityEvent.type == REOPENED)
+        .group_by(IntegrityEvent.attempt_id))).all())
     t = time.time()
     counts = {"roster": len(roster), "set_up": 0, "not_started": 0, "writing": 0, "offline": 0,
               "waiting": 0, "handed_in": 0}
@@ -430,6 +437,12 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
         students.append({
             "netid": u.netid or u.username, "name": u.name, "set_up": up, "status": status,
             "answered": min(int((a.answered if a else 0) or 0), nq), "questions": nq,
+            "swap_requested": bool(a is not None and a.status == "in_progress" and a.swap_requested_at),
+            "code_state": code_states.get(u.netid or "", "none"),
+            "reopened": bool(a is not None and reopens.get(a.id)),
+            "hand_in_count": (int(reopens.get(a.id) or 0) + int(a.status == "submitted")) if a else 0,
+            "waiting_since": iso(a.pending_since) if a is not None and a.status == "in_progress"
+            and a.pending_resume else None,
             "seconds_left": (max(0, int((a.deadline_at - now).total_seconds()))
                              if a is not None and a.status == "in_progress" else None),
             "warnings": list(reversed(warnings.get(a.id, []))) if a else []})
@@ -892,25 +905,3 @@ async def exam_access_codes_pdf(key: str, request: Request, call: BridgeCall = D
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="access-codes-{name}.pdf"',
                              "Cache-Control": "no-store"})
-
-
-@router.post("/exams/{key}/access-codes/reissue")
-async def exam_access_code_reissue(key: str, request: Request, call: BridgeCall = Depends(signed_call),
-                                   session: AsyncSession = Depends(get_session)):
-    from . import access_codes
-    netid = call.data.get("netid")
-    if not isinstance(netid, str) or not netid.strip():
-        raise HTTPException(400, "netid is required")
-    netid = netid.strip()[:64]
-    e = await _editor_exam(session, key, call, required=False)
-    if e is None:
-        raise HTTPException(404, "Unknown exam")
-    if not await access_codes.reissue(session, request.app.state.settings.secret, e, netid):
-        raise HTTPException(404, "This student is not on this exam's list")
-    class_id = _event_class(e)
-    if class_id is not None:
-        await add_event(session, class_id, "access_code_reissued", netid=netid, actor=call.acting_user,
-                        detail=f"exam {key}")
-        await session.commit()
-    log.info("DKU OJ exam %s: access code reissued by %s", key, call.acting_user)
-    return {"ok": True}

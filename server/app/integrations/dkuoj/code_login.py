@@ -7,7 +7,9 @@
    stored. A wrong, revoked, expired, other-exam or second-device code all give the same 400.
 3. POST /api/student/code-login/confirm {confirm_token}: "This is me". Binds the code to the
    device, finds or creates the student account (no usable password) and answers like a
-   normal student login: {token, role, name}.
+   normal student login: {token, role, name}. Both answers carry `resume`: true when the
+   student already has an attempt in progress (same device after a restart, or another device
+   after the professor's release-device), so the app offers "Resume exam".
 
 Failures are counted per source network (an IPv6 /64, an IPv4 address), per device and
 across all sources together (a sliding window), and answered with 429 + Retry-After. The
@@ -191,6 +193,15 @@ async def _freed(session: AsyncSession, exam_id: str, netid: str) -> bool:
                Attempt.device_id.is_(None)).limit(1))).first() is not None
 
 
+async def _resuming(session: AsyncSession, exam_id: str, netid: str) -> bool:
+    """The student already has an attempt running: the next start continues it (answers and
+    timer kept, never a second attempt), so the app shows "Resume exam", not "Start exam"."""
+    return (await session.execute(
+        select(Attempt.id).join(User, User.id == Attempt.student_id)
+        .where(Attempt.exam_id == exam_id, User.netid == netid, Attempt.status == "in_progress").limit(1)
+    )).first() is not None
+
+
 async def _second_device(session: AsyncSession, e: Exam, row: ExamAccessCode, device: str) -> None:
     await _audit(session, e, "access_code_second_device", row.netid,
                  f"exam {e.id}: code used on device {device[:8]}, bound to {(row.bound_device or '')[:8]}")
@@ -241,7 +252,7 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
         await admin_test.record_use(session, ip)
         token = make_kind_token(s.secret, KIND, {"scope": ADMIN_SCOPE, "dev": device or ""}, CONFIRM_TTL_S)
         return _no_store({"first_name": "Admin", "last_name": "Tester", "netid": "",
-                          "exam_title": admin_test.EXAM_TITLE, "confirm_token": token})
+                          "exam_title": admin_test.EXAM_TITLE, "resume": False, "confirm_token": token})
 
     code = access_codes.normalise(body.code)
     row = e = None
@@ -272,7 +283,8 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
     token = make_kind_token(s.secret, KIND, {"row": row.id, "dev": device or "", "bound": row.bound_device or ""},
                             CONFIRM_TTL_S)
     return _no_store({"first_name": row.first_name, "last_name": row.last_name, "netid": row.netid,
-                      "exam_title": e.title, "confirm_token": token})
+                      "exam_title": e.title, "resume": await _resuming(session, e.id, row.netid),
+                      "confirm_token": token})
 
 
 @router.post("/code-login/confirm")
@@ -296,7 +308,7 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
         ttl = min(s.student_token_ttl_s, admin_test.MAX_TTL_S)
         return _no_store({"token": make_token(s.secret, u.id, "student", ttl, version=u.token_version or 0,
                                               scope=ADMIN_SCOPE),
-                          "role": "student", "name": u.name})
+                          "role": "student", "name": u.name, "resume": False})
 
     row = await session.get(ExamAccessCode, tok["row"])
     e = await session.get(Exam, row.exam_id) if row is not None else None
@@ -330,4 +342,4 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     await remember_user(u.id, u.role, int(u.token_version or 0))
     return _no_store({"token": make_token(s.secret, u.id, u.role, s.student_token_ttl_s,
                                           version=u.token_version or 0, scope=e.id),
-                      "role": u.role, "name": u.name})
+                      "role": u.role, "name": u.name, "resume": await _resuming(session, e.id, row.netid)})

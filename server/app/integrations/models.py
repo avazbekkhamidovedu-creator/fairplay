@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, DateTime, Index, Integer, String
+from sqlalchemy import JSON, BigInteger, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..db import Base
@@ -13,16 +13,23 @@ BigIntPK = BigInteger().with_variant(Integer(), "sqlite")
 
 
 class ExternalDelivery(Base):
-    """Outbox: one row per handed-in attempt of an exam from an external system, written in
+    """Outbox: one row per hand-in (revision) of an attempt of an exam from an external system, written in
     the same transaction as the hand-in. status pending | sent | failed | dead. A worker claims
     a row with a lease (claimed_by, locked_until) before sending. `payload`
     is the body built once (every retry sends the same bytes); `uploads` maps answer file
     id -> the external system's upload id. Sent by the integration's worker."""
     __tablename__ = "external_deliveries"
-    __table_args__ = (Index("ix_external_deliveries_due", "source", "status", "next_at"),)
+    __table_args__ = (Index("ix_external_deliveries_due", "source", "status", "next_at"),
+                      UniqueConstraint("attempt_id", "revision", name="uq_delivery_attempt_revision"))
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
-    attempt_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    # 1 for the first hand-in; a reopened attempt (exam_control.reopen_attempt) hands in again
+    # as revision 2. Each revision is its own row, receipt and payload.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    # What the attempt held when it was reopened before this revision's payload was built
+    # (the payload is built when the row is sent, from the attempt as it is then).
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     exam_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
     tries: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

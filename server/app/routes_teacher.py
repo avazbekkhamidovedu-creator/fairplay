@@ -36,6 +36,8 @@ ONLINE_WINDOW_S = 15
 NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound",
                   "offline_exit_code_issued", "canvas_quiz_started", "client_canvas_quiz_started",
                   "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
+                  "device_released_oj", "attempt_reopened", "extra_time_granted",   # the same from DKU OJ
+                  "access_code_reissued",
                   AUTO_CLOSE_EVENT)                       # 2026-10-23: the automatic close
 MAX_RESUME_EXTENSION = control.MAX_RESUME_EXTENSION
 # The app's own signal counts as "app online" for this long (beats every 5 s).
@@ -293,12 +295,7 @@ async def offline_exit(exam_id: str, aid: str, body: OfflineExitIn, request: Req
     a = await session.get(Attempt, aid)
     if a is None or a.exam_id != e.id:
         raise HTTPException(404, "Attempt not found")
-    mac_code = ac.normalize_mac_code(body.mac_code)
-    if mac_code is None:
-        raise HTTPException(422, "A Mac code has 8 letters and digits, like K7QM-3XPA")
-    if not a.session_id:
-        raise HTTPException(409, "This student's app has no session yet. Restart their Mac; answers are saved on it.")
-    code = ac.offline_exit_code(ac.offline_key(ac.settings_of(request).secret, aid, a.session_id), mac_code)
+    code, mac_code = control.offline_exit_code(ac.settings_of(request), a, body.mac_code)
     await ac.add_event(session, get_store(), aid, exam_id, "offline_exit_code_issued",
                        f"teacher gave an offline exit code for Mac code {mac_code[:4]}-{mac_code[4:]}")
     return {"code": code}
@@ -315,14 +312,8 @@ async def release_device(exam_id: str, aid: str, p: Principal = Depends(require_
         raise HTTPException(404, "Attempt not found")
     if a.status != "in_progress":
         raise HTTPException(409, "Attempt already submitted")
-    a.device_id = None
-    a.session_id = new_session_id()   # nobody holds this one: the old device is cut off
-    a.updated_at = utcnow()
-    await session.commit()
-    store = get_store()
-    await store.delete(attempt_key(aid), f"abt:{aid}")
-    await store.hdel(f"ab:{exam_id}", aid)       # audit S-13: old device's beats go too
-    await ac.add_event(session, store, aid, exam_id, "device_released",
+    await control.release_attempt_device(session, a)
+    await ac.add_event(session, get_store(), aid, exam_id, "device_released",
                        "teacher allowed this exam to move to another computer")
     return {"ok": True}
 

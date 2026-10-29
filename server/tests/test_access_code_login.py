@@ -81,11 +81,12 @@ def test_right_code_confirms_with_names_then_signs_in(oj, ready):
     assert r.status_code == 200, r.text
     body = r.json()
     assert {k: v for k, v in body.items() if k != "confirm_token"} == {
-        "first_name": "Avazbek", "last_name": "Khamidov", "netid": "ax19", "exam_title": "CS 101 Midterm"}
+        "first_name": "Avazbek", "last_name": "Khamidov", "netid": "ax19", "exam_title": "CS 101 Midterm",
+        "resume": False}
     assert r.headers["cache-control"] == "no-store"
     assert db(oj, lambda s: s.scalar(select(ExamAccessCode.used_at).where(ExamAccessCode.netid == "ax19"))) is None
     r = confirm(oj, body["confirm_token"])
-    assert r.status_code == 200 and set(r.json()) == {"token", "role", "name"}
+    assert r.status_code == 200 and set(r.json()) == {"token", "role", "name", "resume"}
     assert r.json()["role"] == "student" and r.json()["name"] == "Avazbek Khamidov"
     assert oj.get("/api/student/exams", headers=bearer(r.json())).status_code == 200
     assert db(oj, lambda s: s.scalar(select(ExamAccessCode.used_at).where(ExamAccessCode.netid == "ax19")))

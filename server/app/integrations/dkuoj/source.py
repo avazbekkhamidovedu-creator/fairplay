@@ -12,7 +12,7 @@ from sqlalchemy.orm import undefer
 from ...models import Exam
 from ..base import ExternalSource
 from .config import DkuojConfig
-from .models import OjAsset, OjEditor, OjRosterEntry, OjState
+from .models import OjAsset, OjEditor, OjRosterEntry, OjState, OjStudentGrant
 
 NOT_READY = "This exam has not arrived from DKU OJ yet. Try again in a minute."
 REMOVED = "FairPlay was switched off for this exam in DKU OJ."
@@ -41,7 +41,8 @@ class DkuojSource(ExternalSource):
         from .routes_outbox import router as outbox_router
         from .setup import router as setup_router
         from .code_login import router as code_login_router
-        return [bridge_router, setup_router, outbox_router, code_login_router]
+        from .routes_rescue import router as rescue_router
+        return [bridge_router, setup_router, outbox_router, code_login_router, rescue_router]
 
     def background_tasks(self, settings) -> list:
         from . import sync
@@ -88,9 +89,14 @@ class DkuojSource(ExternalSource):
         return select(OjRosterEntry.user_id).where(OjRosterEntry.exam_id == exam_id)
 
     async def max_extra_time(self, session: AsyncSession, exam_id: str) -> timedelta:
-        top = (await session.execute(select(func.max(OjRosterEntry.extra_time_seconds)).where(
-            OjRosterEntry.exam_id == exam_id))).scalar()
-        return timedelta(seconds=max(0, int(top or 0)))
+        extra = {uid: int(x or 0) for uid, x in (await session.execute(
+            select(OjRosterEntry.user_id, OjRosterEntry.extra_time_seconds)
+            .where(OjRosterEntry.exam_id == exam_id))).all()}
+        grants = {uid: int(x or 0) for uid, x in (await session.execute(
+            select(OjStudentGrant.user_id, OjStudentGrant.extra_seconds)
+            .where(OjStudentGrant.exam_id == exam_id))).all()}
+        top = max([extra.get(uid, 0) + grants.get(uid, 0) for uid in extra.keys() | grants.keys()] or [0])
+        return timedelta(seconds=max(0, top))
 
     def roster_condition(self, user_id: int):
         return exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id)
@@ -116,12 +122,14 @@ class DkuojSource(ExternalSource):
 
     async def on_start(self, session: AsyncSession, exam_id: str, user_id: int) -> timedelta:
         """The first start freezes the package version (sync never applies another one
-        after that); the student's DKU OJ extra time."""
+        after that); the student's DKU OJ extra time plus what a professor granted (OjStudentGrant)."""
         await session.execute(update(Exam).where(Exam.id == exam_id, Exam.external_frozen_version.is_(None))
                               .values(external_frozen_version=Exam.external_version))
         extra = (await session.execute(select(OjRosterEntry.extra_time_seconds).where(
             OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id))).scalar()
-        return timedelta(seconds=max(0, int(extra or 0)))
+        granted = (await session.execute(select(OjStudentGrant.extra_seconds).where(
+            OjStudentGrant.exam_id == exam_id, OjStudentGrant.user_id == user_id))).scalar()
+        return timedelta(seconds=max(0, int(extra or 0)) + max(0, int(granted or 0)))
 
     async def on_handin(self, session: AsyncSession, attempt_id: str, exam_id: str, now, evidence: str) -> None:
         from ..outbox import enqueue
@@ -149,7 +157,7 @@ class DkuojSource(ExternalSource):
         return {"enabled": True, "source": self.id, "name": self.name, "url": self.config.url,
                 "last_run": state.get("last_run"), "last_error": state.get("last_error"), "exams": int(exams),
                 "deliveries": {k: int(counts.get(k, 0)) for k in ("pending", "failed", "sent", "dead")},
-                "problems": [{"attempt_id": d.attempt_id, "exam_id": d.exam_id, "status": d.status,
+                "problems": [{"attempt_id": d.attempt_id, "revision": int(d.revision or 1), "exam_id": d.exam_id, "status": d.status,
                               "tries": d.tries, "last_error": d.last_error} for d in bad]}
 
 

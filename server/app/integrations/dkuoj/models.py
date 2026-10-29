@@ -34,6 +34,19 @@ class OjRosterEntry(Base):
     last_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
+class OjStudentGrant(Base):
+    """Extra time a professor gave one student from DKU OJ. Kept apart from OjRosterEntry,
+    whose extra_time_seconds is DKU OJ's own value and is overwritten by every roster sync."""
+    __tablename__ = "oj_student_grants"
+    __table_args__ = (UniqueConstraint("exam_id", "user_id", name="uq_oj_grant"),)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    exam_id: Mapped[str] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    extra_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    by: Mapped[str] = mapped_column(String(150), nullable=False, default="", server_default="")
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
 class OjAsset(Base):
     """A file referenced by a statement (fp-asset:<name>), checked against its sha256.
     Bytes in the database (the host's disk is not kept across deploys)."""
