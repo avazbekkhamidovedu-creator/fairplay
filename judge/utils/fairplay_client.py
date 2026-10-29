@@ -147,8 +147,32 @@ class FairPlayClient:
     def new_code(self, key):
         return self.request('POST', '/exams/%s/new-code' % _q(key))
 
-    def approve(self, key, netid):
-        return self.request('POST', '/exams/%s/approve' % _q(key), {'netid': netid})
+    def approve(self, key, netid, reason=None):
+        body = {'netid': netid}
+        if reason:
+            body['reason'] = reason
+        return self.request('POST', '/exams/%s/approve' % _q(key), body)
+
+    def release_device(self, key, netid, reason):
+        return self.request('POST', '/exams/%s/students/%s/release-device' % (_q(key), _q(netid)),
+                            {'reason': reason})
+
+    def reissue_code(self, key, netid, reason):
+        """Answers ``{code, first_name, last_name}``; the new code is shown once and never kept."""
+        return self.request('POST', '/exams/%s/access-codes/reissue' % _q(key),
+                            {'netid': netid, 'reason': reason})
+
+    def reopen(self, key, netid, minutes, reason):
+        return self.request('POST', '/exams/%s/students/%s/reopen' % (_q(key), _q(netid)),
+                            {'minutes': int(minutes), 'reason': reason})
+
+    def extra_time(self, key, netid, minutes, reason):
+        return self.request('POST', '/exams/%s/students/%s/extra-time' % (_q(key), _q(netid)),
+                            {'minutes': int(minutes), 'reason': reason})
+
+    def offline_exit(self, key, netid, mac_code):
+        return self.request('POST', '/exams/%s/students/%s/offline-exit' % (_q(key), _q(netid)),
+                            {'mac_code': mac_code})
 
     def set_settings(self, key, settings, read_timeout=None):
         """Idempotent; once a student has started only ``review`` may change (409 otherwise)."""
