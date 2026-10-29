@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="fairplay-help">
+    <h2>{{ _('FairPlay student help') }}: {{ contest.name }}</h2>
+    <p><strong>{{ question }}</strong></p>
+    <table class="table" style="width:auto">
+        <tr><td>{{ _('Student') }}</td><td>{{ name }} ({{ netid }})</td></tr>
+        <tr><td>{{ _('Action') }}</td><td>{{ button }}</td></tr>
+        {% if minutes %}<tr><td>{{ _('Minutes') }}</td><td>{{ minutes }}</td></tr>{% endif %}
+        <tr><td>{{ _('Reason') }}</td><td>{{ reason }}</td></tr>
+    </table>
+    <form method="post" action="{{ url('contest_fairplay_help', contest.key) }}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="{{ action }}">
+        <input type="hidden" name="netid" value="{{ netid }}">
+        <input type="hidden" name="name" value="{{ name }}">
+        <input type="hidden" name="reason" value="{{ reason }}">
+        {% if minutes %}<input type="hidden" name="minutes" value="{{ minutes }}">{% endif %}
+        {% if mac_code %}<input type="hidden" name="mac_code" value="{{ mac_code }}">{% endif %}
+        <input type="hidden" name="confirm" value="1">
+        <button type="submit" class="button" style="width:auto">{{ _('Yes, do it') }}</button>
+        <a class="button" style="width:auto" href="{{ url('contest_fairplay_help', contest.key) }}">{{ _('Cancel') }}</a>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% macro action_form(s, action, label, minutes=false, mac=false) %}
+    <form method="post" action="{{ url('contest_fairplay_help', contest.key) }}" style="margin: 0.4em 0">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="{{ action }}">
+        <input type="hidden" name="netid" value="{{ s.netid }}">
+        <input type="hidden" name="name" value="{{ s.name }}">
+        {% if minutes %}
+            <input type="number" name="minutes" min="1" max="{{ max_minutes }}" value="10" required style="width:5em" aria-label="{{ _('Minutes') }}"> {{ _('min') }}
+        {% endif %}
+        {% if mac %}
+            <input type="text" name="mac_code" maxlength="64" required placeholder="{{ _('Code shown on the Mac') }}">
+        {% endif %}
+        <input type="text" name="reason" maxlength="300" required placeholder="{{ _('Reason (required)') }}">
+        <button type="submit" class="button" style="width:auto">{{ label }}</button>
+    </form>
+{% endmacro %}
+
+{% block body %}
+<div class="fairplay-help">
+    <h2>{{ _('FairPlay student help') }}: {{ contest.name }}</h2>
+    <p><a href="{{ url('contest_participation_own', contest.key) }}">{{ _('Back to participation') }}</a></p>
+
+    {% if unreachable %}
+        <p class="fairplay-help-warn">{{ _('FairPlay cannot be reached, so the students cannot be shown. Try again in a minute.') }}</p>
+    {% else %}
+        <p>
+            {{ _('Start code') }}: <strong style="font-family: monospace">{{ exam.start_code or '-' }}</strong>
+            &nbsp; {{ _('Invigilator code') }}: <strong style="font-family: monospace">{{ exam.invigilator_code or '-' }}</strong>
+        </p>
+    {% endif %}
+
+    <form method="post" action="{{ url('contest_fairplay_help', contest.key) }}" style="margin: 0 0 1em">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="sync">
+        <button type="submit" class="button" style="width:auto">{{ _('Sync now') }}</button>
+        <span class="helptext">{{ _('Asks FairPlay to read the exam and the student list again.') }}</span>
+    </form>
+
+    <p class="helptext">{{ _('Every action asks for a reason and then for a confirmation. The reason is kept in the FairPlay log.') }}</p>
+
+    <table class="table" id="fairplay-help-students">
+        <thead>
+            <tr>
+                <th>{{ _('NetID') }}</th><th>{{ _('Name') }}</th><th>{{ _('State') }}</th>
+                <th>{{ _('Code') }}</th><th>{{ _('Hand-ins') }}</th><th>{{ _('Actions') }}</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for s in students %}
+            <tr>
+                <td>{{ s.netid }}</td>
+                <td>{{ s.name }}</td>
+                <td>
+                    {{ s.status_label }}
+                    {% if s.swap_requested %}<br>{{ _('asks to move to another computer') }}{% endif %}
+                    {% if s.reopened %}<br>{{ _('hand-in reopened') }}{% endif %}
+                </td>
+                <td>{{ s.code_label }}</td>
+                <td>{{ s.hand_ins }}</td>
+                <td>
+                    <details>
+                        <summary class="button" style="width:auto">{{ _('Actions') }}</summary>
+                        {% if s.status == 'waiting' %}{{ action_form(s, 'approve', _('Approve resume')) }}{% endif %}
+                        {{ action_form(s, 'release-device', _('Move to another computer')) }}
+                        {{ action_form(s, 'reissue', _('Issue new code')) }}
+                        {% if s.status == 'handed_in' or s.hand_ins %}{{ action_form(s, 'reopen', _('Reopen hand-in'), minutes=true) }}{% endif %}
+                        {{ action_form(s, 'extra-time', _('Give extra time'), minutes=true) }}
+                        {{ action_form(s, 'offline-exit', _('Offline exit code'), mac=true) }}
+                    </details>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="6">{{ _('No students to show yet.') }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
