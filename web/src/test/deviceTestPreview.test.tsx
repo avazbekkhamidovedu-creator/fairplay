@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DeviceCheckDialog } from "../components/code-signin/DeviceCheckDialog";
+import CodeSignIn from "../pages/student/CodeSignIn";
 import * as bridge from "../lib/bridge";
 import DeviceTestPage from "../pages/student/DeviceTestPage";
 
@@ -15,16 +15,12 @@ function native() {
   bridge.hello();
 }
 
-const REPORT = { problems: [], apps_to_close: [], checks: [], platform: "mac", app_version: "1", os_version: "15" };
-
 function dialog() {
+  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false })));
   return render(
     <MemoryRouter initialEntries={["/student/login"]}>
       <Routes>
-        <Route
-          path="/student/login"
-          element={<DeviceCheckDialog state={{ kind: "done", report: REPORT }} onAgain={() => {}} onClose={() => {}} />}
-        />
+        <Route path="/student/login" element={<CodeSignIn onUseAccount={() => {}} />} />
         <Route path="/student/device-test" element={<p>Preview page</p>} />
       </Routes>
     </MemoryRouter>,
@@ -42,7 +38,12 @@ function page(state?: unknown) {
   );
 }
 
-const BUTTON = /Try the exam screen/;
+const BUTTON = /^Start$/;
+const ENTRY = { name: "Test my device" };
+
+async function open() {
+  await userEvent.click(screen.getByRole("button", ENTRY));
+}
 
 beforeEach(() => {
   native();
@@ -56,20 +57,39 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("device test button", () => {
-  it("is hidden without deviceTest and shown with it", async () => {
-    send({ type: "state", locked: false, trusted: true, version: "1" });
-    const { unmount } = dialog();
-    expect(screen.queryByRole("button", { name: BUTTON })).toBeNull();
-    unmount();
+describe("device test pop-up", () => {
+  it("shows only the short pop-up with Start focused when the app reports deviceTest", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
-    expect(screen.getByRole("button", { name: BUTTON })).toBeInTheDocument();
+    await open();
+    expect(screen.getByRole("dialog", { name: "Try the exam screen" })).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "Start" })).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Test my device" })).toBeNull();
+    expect(screen.queryByLabelText("Device check results")).toBeNull();
+  });
+
+  it("falls back to the device check dialog without deviceTest", async () => {
+    send({ type: "state", locked: false, trusted: true, version: "1" });
+    dialog();
+    await open();
+    expect(await screen.findByRole("dialog", { name: "Test my device" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: BUTTON })).toBeNull();
+  });
+
+  it("Cancel closes and posts nothing", async () => {
+    send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
+    dialog();
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(post).not.toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
   });
 
   it("posts deviceTestStart(60) and opens the page when the app says started", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
+    await open();
     await userEvent.click(screen.getByRole("button", { name: BUTTON }));
     expect(post).toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
     send({ type: "deviceTest", state: "started", remaining: 60 });
@@ -79,6 +99,7 @@ describe("device test button", () => {
   it("shows the line and stays when no answer comes in 1.5 s", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
+    await open();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await userEvent.click(screen.getByRole("button", { name: BUTTON }));
     await act(async () => void vi.advanceTimersByTime(1600));
@@ -89,6 +110,7 @@ describe("device test button", () => {
   it("shows one line and stays when refused", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
+    await open();
     await userEvent.click(screen.getByRole("button", { name: BUTTON }));
     send({ type: "deviceTest", state: "ended", reason: "refused", remaining: 0 });
     expect(screen.getByText("The test can't start right now.")).toBeInTheDocument();

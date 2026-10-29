@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { deviceTestStart, getNativeState, onDeviceTest, type PreflightReport } from "../../lib/bridge";
+import { useEffect, useRef } from "react";
+import type { PreflightReport } from "../../lib/bridge";
 import { UpdateCard, type SignInUpdate } from "./UpdatePrompt";
 
 export type DeviceCheckState =
@@ -40,44 +39,6 @@ export function DeviceCheckDialog({
   update?: SignInUpdate | null;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
-  const [trying, setTrying] = useState(false);
-  const [refused, setRefused] = useState(false);
-  const stop = useRef<(() => void) | null>(null);
-
-  useEffect(() => () => stop.current?.(), []);
-
-  function tryExamScreen() {
-    setRefused(false);
-    setTrying(true);
-    let timer = 0;
-    const finish = (remaining?: number) => {
-      stop.current?.();
-      stop.current = null;
-      navigate("/student/device-test", { state: { remaining } });
-    };
-    const off = onDeviceTest((m) => {
-      if (m.state === "started") finish(m.remaining);
-      else {
-        stop.current?.();
-        stop.current = null;
-        setTrying(false);
-        if (m.reason === "refused" || m.reason === "error") setRefused(true);
-      }
-    });
-    stop.current = () => {
-      off();
-      window.clearTimeout(timer);
-    };
-    timer = window.setTimeout(() => {
-      stop.current?.();
-      stop.current = null;
-      setTrying(false);
-      setRefused(true);
-    }, 1500);
-    deviceTestStart(60);
-  }
-
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     box.current?.focus();
@@ -133,18 +94,6 @@ export function DeviceCheckDialog({
             </ul>
             <p className="cs-muted" role="status">Your teacher sees this check after you sign in.</p>
           </>
-        )}
-        {getNativeState()?.deviceTest === true && (
-          <div>
-            <button type="button" className="cs-btn cs-btn-secondary" onClick={tryExamScreen} disabled={trying || running}>
-              Try the exam screen (1 minute)
-            </button>
-            {refused && (
-              <p className="cs-muted" role="status">
-                The test can't start right now.
-              </p>
-            )}
-          </div>
         )}
         <div className="cs-dialog-actions">
           <button type="button" className="cs-btn cs-btn-secondary" onClick={onAgain} disabled={running}>

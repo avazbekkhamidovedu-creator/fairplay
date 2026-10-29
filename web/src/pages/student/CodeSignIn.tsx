@@ -4,6 +4,7 @@ import { ApiError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
 import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
 import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
+import { TryExamScreenDialog } from "../../components/code-signin/TryExamScreenDialog";
 import { UpdateCard, useSignInUpdate } from "../../components/code-signin/UpdatePrompt";
 import { AppVersion } from "../../components/AppVersion";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
@@ -42,6 +43,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
   const [busy, setBusy] = useState(false);
   const [check, setCheck] = useState<DeviceCheckState>({ kind: "idle" });
   const [panel, setPanel] = useState(false);
+  const [tryOpen, setTry] = useState(false);
   const update = useSignInUpdate();
   const installing = update?.phase.kind === "installing";
 
@@ -109,6 +111,10 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
   }
 
   function openPanel() {
+    if (bridge.getNativeState()?.deviceTest === true) {
+      setTry(true);
+      return;
+    }
     setPanel(true);
     if (check.kind === "idle" || check.kind === "none") void runCheck();
   }
@@ -206,6 +212,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
           </section>
         )}
       </main>
+      {tryOpen && <TryExamScreenDialog onClose={() => setTry(false)} />}
       {panel && <DeviceCheckDialog state={check} onAgain={() => void runCheck()} onClose={() => setPanel(false)} update={update} />}
     </div>
   );
