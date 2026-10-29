@@ -466,6 +466,13 @@ final class LockdownController {
         surface?.coverAllScreens()
     }
 
+    /// A windowed app we just asked to quit is not shown as a problem until this long has passed.
+    static let closeGrace: TimeInterval = 2
+
+    static func closeGraceOver(askedAt: Date, now: Date) -> Bool {
+        now.timeIntervalSince(askedAt) > closeGrace
+    }
+
     /// Ends what we may end; returns names of what still runs and must go.
     private func checkProcesses(atLock: Bool) -> [String] {
         var still: [String] = []
@@ -496,7 +503,8 @@ final class LockdownController {
                 continue
             }
             if let asked = quitting[app.processIdentifier] {
-                if now.timeIntervalSince(asked) > 2, LockdownController.forceQuit(app) { continue }
+                if !LockdownController.closeGraceOver(askedAt: asked, now: now) { continue }
+                if LockdownController.forceQuit(app) { continue }
             } else {
                 quitting[app.processIdentifier] = now
                 askedNow = true
@@ -504,6 +512,7 @@ final class LockdownController {
                 let asked = app.terminate()
                 DebugLog.log("quit", "asked to quit (\(asked ? "sent" : "REFUSED")): \(DebugLog.describe(app))")
                 if !asked, LockdownController.forceQuit(app) { continue }
+                if asked { continue }
             }
             still.append(name)
         }
