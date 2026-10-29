@@ -230,10 +230,15 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
    "counts": {"roster": 68, "set_up": 61, "not_started": 3, "writing": 23, "offline": 1,
               "waiting": 1, "handed_in": 41},
    "students": [{"netid":"bl642","name":"Bob Li","set_up":true,"status":"writing|not_started|offline|waiting|handed_in",
-                 "answered":2,"questions":3,"seconds_left":2460,"warnings":["Left the app once (8 s)"]}],
+                 "answered":2,"questions":3,"seconds_left":2460,"swap_requested":false,"code_state":"bound|unused|none",
+                 "reopened":false,"hand_in_count":0,"waiting_since":null,"warnings":["Left the app once (8 s)"]}],
    "server_time": "..."}
   ```
   `synced:false` (404 is not used) when FairPlay hasn't got the assignment yet.
+  Student fields (2026-10-30): `swap_requested` = a device swap pending approval;
+  `code_state` = `"bound"` (used on this device), `"unused"` (freed by release or reissue),
+  or `"none"` (no code); `reopened` = attempt was reopened once; `hand_in_count` = reopens + 1
+  if submitted; `waiting_since` = ISO time when pending resume began (null if not waiting).
   `settings.websites` = the sites the lock really opens; `settings.websites_blocked` = the
   ones DKU OJ asked for that FairPlay refused, each with its reason (always present, `[]`
   when none). Security review 2026-10-24: FairPlay has its own policy for sites an external
@@ -290,6 +295,22 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
 - **`GET /exams/<key>/students/<netid>/report`** → `{"name","netid","status","started_at",
   "handed_in_at","events":[{"at","kind","detail"}]}` (the integrity events, oldest first, ≤ 500).
 
+### Professor rescue actions (2026-10-30)
+
+Five endpoints let a professor fix student emergencies without restarting them. All answers and timer stay when appropriate. Every call requires a reason (a string, 1–200 characters), an audit event with the acting user and reason, and replies `Cache-Control: no-store`.
+
+- **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"code"}` (200 if not handed in; 409 if submitted). Unbinds the access code and frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device using the same access code. Rate limit: 3 per student per exam, counted over 30 days.
+
+- **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "...", "reason": "..."}` → `{"ok": true, "code": "...", "first_name": "...", "last_name": "..."}` (200; 404 if the student is not on the roster). Issues a new access code for the student. The code is returned once in the response and never logged or stored in events. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
+
+- **`POST /exams/<key>/students/<netid>/reopen`** body `{"minutes": 5..60, "reason": "..."}` → `{"ok": true, "deadline_at": "..."}` (200; 409 if not handed in, exam not live, graded, or already reopened once). The first hand-in receipt is kept on file; answers are restored, device freed, and a new deadline is set. Rate limit: once per attempt, while live and not graded.
+
+- **`POST /exams/<key>/students/<netid>/extra-time`** body `{"minutes": 1..120, "reason": "..."}` → `{"ok": true, "deadline_at": "..."|null}` (200; 409 if exam closed or already handed in). Adds extra time for one student, capped at 240 total. If they are writing, their deadline moves out. Rate limit: none per student, but cap is hard per student per exam.
+
+- **`POST /exams/<key>/students/<netid>/offline-exit`** body `{"mac_code": "K7QM-3XPA", "reason": "..."} | {"mac_code": "...", "reason": null}` → `{"code": "..."}` (200; 404 if not started). Gives a Mac that is locked and cannot reach the server an offline exit code. `reason` is optional. Rate limit: 20 per student per hour.
+
+All five use the exam editors from the bridge's last sync (403 if the acting user is not an editor). FairPlay checks the student is on the roster or has an in-progress attempt in that exam (404 otherwise). Authorization, rate-limit and recovery errors are `400/403/404/409/429` with `{"detail": "..."}`.
+
 Errors: `{"detail": "..."}` with 400/403/404/409; DKU OJ shows the detail text.
 
 ## 4. Student accounts in FairPlay (class login → own login)
@@ -339,6 +360,8 @@ App/web flow (all on the FairPlay server; the app shows the FairPlay web pages):
    (checked in that order). Creates or completes the NetID's account
    (role student, `set_up_at` = now), increments the class login's `used`, returns the normal
    login response (`token`, role, etc.). Identity tokens are single-use.
+
+Once set up, a student can also log in with an access code (one per exam). `POST /api/student/code-login` body `{"code": "...", "client": {...}}` → `{"first_name": "...", "last_name": "...", "netid": "...", "exam_title": "...", "resume": false, "confirm_token": "..."}` (2026-10-30, for app and web sign-in). The `resume` flag tells the app whether the student already has an in-progress attempt (same device restart, or another device if the professor released it): resume shows "Resume exam", not "Start exam", and the next `POST /api/student/code-login/confirm` returns the same `resume` flag and does NOT create a second attempt.
 
 Student's classes (course cards, 2026-10-24): `GET /api/student/classes` (FairPlay student
 sign-in) lists the student's FairPlay classes (joined with a join code) AND, for a student with a

@@ -122,11 +122,23 @@ python3 loadtest/loadtest.py --base http://127.0.0.1:8100 --students 5000 --exam
 - **Postgres**: `shared_buffers` ≈ 25 % of RAM, SSD; attempts are updated in place on every save, so let autovacuum run (defaults are fine at this size).
 - **Static files**: through nginx's cache (nginx.conf) or a CDN in front of `/assets/` (immutable, safe to cache forever). The FairPlay apps ship Pyodide and pdf.js themselves (asset pack), so coding and open-book exams don't download them at exam start.
 
-## Known gaps / risks
-- The sizing is computed, not measured on the target hardware: run `loadtest.py` once on the real server (a separate client machine, 5,000 students, `--login-first`) before the first big exam.
-- TLS was not in the test (nginx terminates it; budget ~1 extra vCPU per school for TLS at 2,250 req/s with keep-alive). Postgres used TLS locally, which slightly inflates the database-path numbers.
-- Redis is a single point and single-threaded: one Redis per ~3 schools; it holds live state only (answers are in Postgres), but if it is lost mid-exam the live room is empty until the next beats and one-time nonces must be fetched again.
-- The real apps' beat timers keep firing during a slowdown (the test clients wait); with too little CPU real clients would build a longer queue than in run B.
+## Student emergencies (2026-10-30)
+
+Rescue actions the professor uses from DKU OJ when a student hits a problem mid-exam. The student's data (answers, timer) is always kept unless they hand in; no second attempt is created.
+
+| Emergency | Action | Who |
+|---|---|---|
+| Laptop dies / keyboard breaks / broken wifi | Release device (frees device, unbinds code) | Professor via FairPlay tab |
+| Lost their access code | Reissue code (new code given once) | Professor via FairPlay tab |
+| Accidental hand-in | Reopen (restore answers, new 5–60 min window) | Professor via FairPlay tab |
+| Running out of time | Extra time (add 1–120 min, capped 240 total) | Professor via FairPlay tab |
+| Mac locked, offline | Offline exit code | Professor via FairPlay tab |
+| Bound to wrong device | Release device, restart | Professor + student |
+| Crashed, can't resume | Approve in live room or Release device + restart | Professor in live room or via FairPlay tab |
+| Test crashed (app restart loop) | Release device (different device), OR extra time (same device, new session) | Professor via FairPlay tab |
+| Offline or dropped connection | App resumes when reconnected; if stuck, approve resume in live room | Professor in live room (if waiting) |
+| Not on roster but handed in work | Manual intervention: roster sync missed them, or they took it from outside the class | Admin / DKU OJ |
+| Extra time needed | Extra time (cap 240 min total), or extend exam for everyone | Professor via FairPlay tab or live room |
 
 ## 0.6.2: legacy static paths (remove in 0.6.3)
 `server/static/pyodide/`, `server/static/pdfjs/` and the 0.6.1 hashed files in `server/static/assets/`

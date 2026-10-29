@@ -909,8 +909,8 @@ ids of external exams are opaque (`q_` + 16 hex).
 - **Results** (`GET /api/exams/{id}/results`): top-level `"external"` (same block or null); per
   attempt of an external exam `"external_result"` (`{released, total, total_points, updated_at,
   questions: [{question_id, points, feedback_md}]}` or null) and `"external_delivery"`
-  (`{status: pending|sent|failed|dead, tries, last_error, receipt, next_at, sent_at}` or null);
-  scores are the released external totals (0 before). A dead delivery adds the event
+  (`{revision: 1..n, status: pending|sent|failed|dead, tries, last_error, receipt, next_at, sent_at}` or null, 2026-10-30).
+  Revisions: a hand-in starts with revision 1; each reopen increments it. DKU OJ must keep earlier hand-ins (by revision) labelled and count only the latest for any scoring or grade. Scores are the released external totals (0 before). A dead delivery adds the event
   `external_delivery_failed` to the attempt.
 - **Grading queue** (`GET /api/exams/{id}/grading`) gains `"external"` (null for FairPlay); graded
   externally → `{exam_id, title, course, status, grades_released: false, external: {...},
@@ -936,6 +936,15 @@ ids of external exams are opaque (`q_` + 16 hex).
 - `GET /api/integrations/<source>/status` (teacher) → `{enabled, source, name, url, last_run,
   last_error, exams, deliveries: {pending, failed, sent, dead}, problems: [...]}` (`{enabled:
   false, source, name}` when not connected).
+
+### Professor rescue actions (2026-10-30)
+Five endpoints let a professor help a student in an emergency without restarting them. Each is called with the student's exam key and NetID, requires an editor of the exam, answers `Cache-Control: no-store`, and audits the acting user and reason.
+- **Release device** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/release-device`) body `{"reason": "..."}` → frees the device, unbinds the access code, and keeps answers and timer. Rate limit: 3 per student per exam, counted over 30 days.
+- **Reissue code** (POST `/api/integrations/dkuoj/v1/exams/<key>/access-codes/reissue`) body `{"netid": "...", "reason": "..."}` → issues a new code, returned once in the response. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
+- **Reopen** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/reopen`) body `{"minutes": 5..60, "reason": "..."}` → restores submitted answers, frees device, sets a new deadline. Allowed once per attempt, while live and not graded.
+- **Extra time** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/extra-time`) body `{"minutes": 1..120, "reason": "..."}` → adds time, capped at 240 total per student per exam.
+- **Offline exit code** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/offline-exit`) body `{"mac_code": "...", "reason": "..." | null}` → unlocks a locked Mac. Rate limit: 20 per student per hour.
+See `docs/dkuoj-bridge-v2.md` §3 for full details.
 
 ### DKU OJ client behaviour (aligned with the DKU OJ patch)
 404 = bridge off / unknown; 401, 403, 409, 413, 422, 400 on a hand-in → dead + alert, never
