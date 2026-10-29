@@ -52,6 +52,7 @@ export default function ClassLoginSetup({
   const [netid, setNetid] = useState("");
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [username, setUsername] = useState("");
+  const [accessCode, setAccessCode] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
   const [doneAs, setDoneAs] = useState("");
@@ -76,7 +77,13 @@ export default function ClassLoginSetup({
     }
     setBusy(true);
     try {
-      const res = await setupApi.identify(setup.setup_token, { first_name: f, last_name: l, netid: n });
+      const code = accessCode.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const res = await setupApi.identify(setup.setup_token, {
+        first_name: f,
+        last_name: l,
+        netid: n,
+        ...(code ? { access_code: code } : {}),
+      });
       setIdentity({ token: res.identity_token, name: res.name, netid: res.netid });
       setStep(2);
     } catch (err) {
@@ -190,6 +197,11 @@ export default function ClassLoginSetup({
             <label htmlFor="setup-netid">NetID</label>
             <input id="setup-netid" className="input" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               value={netid} onChange={(e) => setNetid(e.target.value)} />
+          </div>
+          <div className="t-field">
+            <label htmlFor="setup-code">Access code from your exam sheet (if you have one)</label>
+            <input id="setup-code" className="input mono" autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+              value={accessCode} onChange={(e) => setAccessCode(e.target.value)} />
           </div>
           {alert}
           <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={busy}>

@@ -105,6 +105,20 @@ describe("device test pop-up", () => {
     await act(async () => void vi.advanceTimersByTime(1600));
     expect(screen.getByText("The test can't start right now.")).toBeInTheDocument();
     expect(screen.queryByText("Preview page")).toBeNull();
+    expect(post).toHaveBeenCalledWith({ action: "deviceTestLeave" });
+  });
+
+  it("leaves at once when a late started arrives after the timeout", async () => {
+    send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
+    dialog();
+    await open();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await act(async () => void vi.advanceTimersByTime(1600));
+    post.mockClear();
+    send({ type: "deviceTest", state: "started", remaining: 59 });
+    expect(post).toHaveBeenCalledWith({ action: "deviceTestLeave" });
+    expect(screen.queryByText("Preview page")).toBeNull();
   });
 
   it("shows one line and stays when refused", async () => {

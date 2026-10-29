@@ -17,7 +17,7 @@ import {
   CANVAS_NO_SCOPE_HINT,
   type ExternalSettingsValue,
 } from "../components/teacher/externalValidation";
-import { errorText, eventLabel } from "../components/teacher/util";
+import { eventLabel } from "../components/teacher/util";
 import { startErrorMessage } from "../components/student/StartCodeForm";
 import { ApiError } from "../api/client";
 import { setToken } from "../api/client";

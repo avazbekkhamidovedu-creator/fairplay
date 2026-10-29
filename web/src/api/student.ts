@@ -97,7 +97,7 @@ async function setupRequest<T>(bearer: string | null, path: string, body?: unkno
 
 export const setupApi = {
   /** Step 1: who the student is, checked against the class list (setup token). */
-  identify: (setupToken: string, input: { first_name: string; last_name: string; netid: string }) =>
+  identify: (setupToken: string, input: { first_name: string; last_name: string; netid: string; access_code?: string }) =>
     setupRequest<SetupIdentifyResponse>(setupToken, "/api/setup/identify", input),
   /** Step 2: the student's own login (identity token, single use) → the normal login response. */
   account: (identityToken: string, input: { username: string; password: string; password2: string }) =>
