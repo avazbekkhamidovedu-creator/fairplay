@@ -13,6 +13,7 @@ import { BatteryIcon, LockIcon } from "../../components/student/icons";
 import { LogoMark } from "../../components/ui/Icon";
 import { batteryTone, useBattery } from "../../lib/battery";
 import * as bridge from "../../lib/bridge";
+import { resumeInfo, welcomeBack } from "../../lib/resumeState";
 import "../../styles/student.css";
 
 /** Under this level (and not charging) the page asks the student to plug in first. */
@@ -150,6 +151,7 @@ export default function BeforeStartPage() {
     return <Navigate to={`/student/exam/${encodeURIComponent(exam.attempt.attempt_id)}`} replace />;
 
   const name = exam ? examName(exam.course, exam.title) : "Your exam";
+  const resume = exam?.access_code ? resumeInfo() : null;
   const tone = battery ? batteryTone(battery) : "ok";
   const lowForStart = !!battery && !battery.charging && battery.level < START_BATTERY_WARN;
   const locked = step === "code" || step === "leaving";
@@ -171,7 +173,7 @@ export default function BeforeStartPage() {
       {step === "rules" && (
         <main className="stu-center">
           <section className="stu-card stu-start-card" aria-labelledby="before-h">
-            <span className="stu-eyebrow">Before you start</span>
+            <span className="stu-eyebrow">{resume ? "Welcome back" : "Before you start"}</span>
             <h1 id="before-h">{name}</h1>
             {exam && (
               <p className="stu-muted" style={{ margin: 0 }}>
@@ -195,7 +197,15 @@ export default function BeforeStartPage() {
               </li>
               {exam?.access_code ? (
                 <li>
-                  <b>Then start the exam.</b> You are signed in with your code, so there is no start code to type. The timer starts when you start.
+                  {resume ? (
+                    <>
+                      <b>Then resume the exam.</b> {welcomeBack(resume.name)} Your timer keeps running from where it was.
+                    </>
+                  ) : (
+                    <>
+                      <b>Then start the exam.</b> You are signed in with your code, so there is no start code to type. The timer starts when you start.
+                    </>
+                  )}
                 </li>
               ) : (
                 <li>
@@ -307,10 +317,12 @@ export default function BeforeStartPage() {
       {locked && (
         <main className="stu-center">
           <section className="stu-card stu-start-card stu-code-card" aria-labelledby="code-h">
-            <h1 id="code-h">{exam?.access_code ? "Start the exam" : "Enter the start code"}</h1>
+            <h1 id="code-h">{exam?.access_code ? (resume ? "Resume the exam" : "Start the exam") : "Enter the start code"}</h1>
             <p className="stu-muted" style={{ margin: 0 }}>
               {exam?.access_code
-                ? "The exam and the timer start when you press the button."
+                ? resume
+                  ? welcomeBack(resume.name)
+                  : "The exam and the timer start when you press the button."
                 : "Your teacher reads it out in the room. The exam and the timer start when the code is right."}
             </p>
             {exam?.access_code ? (

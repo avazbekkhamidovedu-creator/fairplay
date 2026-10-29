@@ -6,6 +6,7 @@ import { DeviceCheckRun, ReadinessChecks, readinessOk, useReadiness } from "../.
 import { CheckIcon } from "../../components/student/icons";
 import "../../styles/student.css";
 import { useStudentExams } from "./useStudentExams";
+import { resumeInfo, welcomeBack } from "../../lib/resumeState";
 import { downloadPackage } from "../../lib/offline";
 import { MaterialsUpload } from "../../components/student/MaterialsUpload";
 
@@ -16,6 +17,8 @@ export default function CheckInPage() {
   const { exams, error } = useStudentExams();
   const readiness = useReadiness();
   const exam = exams?.find((e) => e.id === examId) ?? null;
+  const resume = resumeInfo();
+  const resuming = !!exam?.access_code && resume !== null;
   const ready = readinessOk(readiness);
   // Slice 6: keep an encrypted copy of the exam so a Wi-Fi drop at start does not stop anyone.
   const [offlineReady, setOfflineReady] = useState(false);
@@ -84,10 +87,12 @@ export default function CheckInPage() {
         <section className="stu-checkin-card" aria-labelledby="c2-h">
           <div className="stu-step-head">
             <span className="stu-step-num" aria-hidden="true">2</span>
-            <h2 id="c2-h">{exam.access_code ? "Start" : "Start code"}</h2>
+            <h2 id="c2-h">{resuming ? "Resume" : exam.access_code ? "Start" : "Start code"}</h2>
           </div>
           <p className="stu-hint" style={{ margin: 0, lineHeight: 1.5 }}>
-            {exam.access_code
+            {resuming
+              ? welcomeBack(resume.name)
+              : exam.access_code
               ? "When your teacher opens the exam: read the rules, lock this computer, then start. You are signed in with your code."
               : "When your teacher opens the exam: read the rules, lock this computer, then type the code."}
           </p>
@@ -97,7 +102,7 @@ export default function CheckInPage() {
               className="stu-btn primary lg"
               onClick={() => navigate(`/student/exams/${encodeURIComponent(exam.id)}/start`)}
             >
-              Start exam
+              {resuming ? "Resume exam" : "Start exam"}
             </button>
           </div>
           {offlineReady && (

@@ -147,6 +147,10 @@ type Phase =
   // sample exam: the app refused the lock for this attempt (offer to start again)
   | "trialEnded";
 
+export function isLmsAttempt(a: { source?: string; external_kind?: string | null } | null | undefined): boolean {
+  return a?.source === "dkuoj" || a?.external_kind === "canvas";
+}
+
 export interface DoneState {
   receipt: string;
   submitted_at: string;
@@ -156,6 +160,8 @@ export interface DoneState {
   total?: number;
   /** Audit W-05: why the page stopped (shown on the done page). */
   notice?: string;
+  /** Canvas or DKU OJ exam: the grade comes from there (decides the wording on the done page). */
+  lms?: boolean;
   /** 2026-10-22: the sample exam: the done page waits for the unlock, then goes home. */
   trial?: "stopped" | "finished";
 }
@@ -359,7 +365,7 @@ function ExamTakingInner() {
         submittingRef.current = false;
         const total = attempt?.questions.length;
         const answered = attempt ? attempt.questions.filter((qq) => sent[qq.id] !== undefined).length : undefined;
-        finish({ receipt: res.receipt, submitted_at: res.submitted_at, title: attempt?.title ?? "", answered, total });
+        finish({ receipt: res.receipt, submitted_at: res.submitted_at, title: attempt?.title ?? "", answered, total, lms: isLmsAttempt(attempt) });
       } catch (e) {
         submittingRef.current = false;
         // Audit W-05: a 4xx the student can't fix by waiting is final. 409/404 (already

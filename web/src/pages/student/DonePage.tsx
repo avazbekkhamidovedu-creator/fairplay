@@ -2,14 +2,12 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import * as bridge from "../../lib/bridge";
 import { studentApi } from "../../api/client";
-import { clockTime, shortDate } from "../../components/student/format";
 import { CheckIcon } from "../../components/student/icons";
 import { HandInSignOut } from "../../components/student/HandInSignOut";
-import { useStudentGradesOn } from "../../lib/features";
 import { StudentLayout } from "../../components/student/StudentLayout";
 import { TrialExit } from "../../components/student/TrialExit";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
-import type { DoneState } from "./ExamTakingPage";
+import { isLmsAttempt, type DoneState } from "./ExamTakingPage";
 
 export default function DonePage() {
   const location = useLocation();
@@ -91,9 +89,18 @@ function StillLocked() {
 function ExamDone({ fromState }: { fromState: DoneState | null }) {
   const { attemptId = "" } = useParams();
   const [info, setInfo] = useState<DoneState | null>(fromState?.receipt ? fromState : null);
-  const [missing, setMissing] = useState(false);
+  const [lms, setLms] = useState(fromState?.lms ?? false);
   const pending = useUnlockPending();
-  const gradesOn = useStudentGradesOn();
+
+  useEffect(() => {
+    if (fromState?.lms !== undefined) return;
+    Promise.resolve()
+      .then(() => studentApi.getAttempt(attemptId))
+      .then(
+        (a) => setLms(isLmsAttempt(a)),
+        () => undefined,
+      );
+  }, [attemptId, fromState]);
 
   useEffect(() => {
     if (info) return;
@@ -103,23 +110,11 @@ function ExamDone({ fromState }: { fromState: DoneState | null }) {
         const exam = list.find((e) => e.attempt?.attempt_id === attemptId);
         if (exam?.attempt?.receipt) {
           setInfo({ receipt: exam.attempt.receipt, submitted_at: exam.attempt.submitted_at ?? "", title: exam.title });
-        } else setMissing(true);
+        }
       },
-      () => setMissing(true),
+      () => undefined,
     );
   }, [attemptId, info]);
-
-  const at = clockTime(info?.submitted_at);
-  const day = shortDate(info?.submitted_at);
-  let reached = "Your exam reached the server.";
-  if (info && at) {
-    if (info.total !== undefined && info.answered !== undefined) {
-      reached =
-        info.answered === info.total
-          ? `All ${info.total} answers reached the server at ${at}.`
-          : `Your exam (${info.answered} of ${info.total} questions answered) reached the server at ${at}.`;
-    } else reached = `Your exam reached the server ${day ? `on ${day} ` : ""}at ${at}.`;
-  }
 
   return (
     <StudentLayout>
@@ -128,22 +123,19 @@ function ExamDone({ fromState }: { fromState: DoneState | null }) {
           <span className="stu-done-check" aria-hidden="true">
             <CheckIcon size={28} color="currentColor" />
           </span>
-          <h1 id="done-h">Submitted</h1>
+          <h1 id="done-h">Congratulations, your exam is submitted.</h1>
           {info?.title && <p className="stu-done-title">{info.title}</p>}
           {fromState?.notice && (
             <p className="stu-alert warn" role="status" style={{ margin: 0 }}>
               {fromState.notice}
             </p>
           )}
-          <p className="stu-done-text">{reached}</p>
-          <div className="stu-receipt">
-            <span>Your receipt code</span>
-            <span className="code" data-testid="receipt">
-              {info?.receipt ?? (missing ? "—" : "…")}
-            </span>
-          </div>
-          {missing && <p className="stu-muted stu-small">The receipt could not be loaded. It is also shown under Exams, Past.</p>}
-          <p className="stu-done-foot">Your laptop unlocks now.{gradesOn && " Grades appear in Grades when your teacher releases them."}</p>
+          <p className="stu-done-text" data-testid="done-grade-note">
+            {lms
+              ? "You will receive your grade on Canvas. If you have a question about your exam, please ask your professor."
+              : "Your professor will share your grade."}
+          </p>
+          <p className="stu-done-foot">Your laptop unlocks now.</p>
           {pending && bridge.isLocked() && <StillLocked />}
           <HandInSignOut />
           <Link to="/student" className="stu-btn" style={{ marginTop: 12 }}>

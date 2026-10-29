@@ -19,6 +19,7 @@ import FeedbackPage from "./FeedbackPage";
 import StudentPracticePage from "./PracticePage";
 import ExternalExamPage from "./ExternalExamPage";
 import ExternalDonePage from "./ExternalDonePage";
+import HomeworkPage from "./HomeworkPage";
 
 const DeviceTestPage = lazy(() => import("./DeviceTestPage"));
 
@@ -44,6 +45,7 @@ export default function StudentRoutes() {
       <Route path="practice/:setId" element={<RequireAuth role="student"><FeatureGate feature="practice" fallback="/student"><StudentPracticePage /></FeatureGate></RequireAuth>} />
       {/* 2026-10-13: the class link a teacher shares (works signed in or not). */}
       <Route path="join/:code" element={<LegacyGate><JoinLinkPage /></LegacyGate>} />
+      <Route path="homework" element={<HomeworkPage />} />
       <Route path="device-test" element={<Suspense fallback={null}><DeviceTestPage /></Suspense>} />
       <Route path="*" element={<Navigate to="/student" replace />} />
     </Routes>

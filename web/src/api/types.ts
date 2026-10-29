@@ -71,6 +71,7 @@ export interface LoginResponse {
   token: string;
   role: Role;
   name: string;
+  resume?: boolean;
 }
 
 /** Bridge v2 §4: a class login answers with a short-lived setup token instead of a session. */
@@ -1510,6 +1511,8 @@ export interface CodeLoginPrompt {
   netid: string;
   exam_title: string;
   confirm_token: string;
+  /** true: the student already has an attempt in progress; nothing is started again. */
+  resume?: boolean;
 }
 export interface StudentExamSummary {
   /** true: students enter this exam with a per-student code (no start code; online only). */

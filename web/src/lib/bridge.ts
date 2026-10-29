@@ -18,6 +18,8 @@ export interface NativeState {
   update?: AppUpdate;
   /** 2026-10-29: the app can run the "Try the exam screen" lock preview (missing = no). */
   deviceTest?: boolean;
+  /** 2026-10-30: the app can open the separate homework login window (missing = no). */
+  homeworkLogin?: boolean;
 }
 
 export type DeviceTestEnd = "leave" | "timeout" | "refused" | "error";
@@ -28,6 +30,24 @@ export interface DeviceTestMessage {
   state: "started" | "ended";
   reason?: DeviceTestEnd;
   remaining?: number;
+}
+
+/** The app's answer to openHomeworkLogin: the ticket from DKU OJ, a cancel, or an error. */
+export interface HomeworkLoginResultMessage {
+  type: "homeworkLoginResult";
+  state?: string;
+  ticket?: string;
+  cancelled?: boolean;
+  error?: string;
+}
+
+/** What the app needs to open the DKU OJ sign-in (POST /api/homework/login/start). */
+export interface HomeworkLoginParams {
+  state: string;
+  start_url: string;
+  allowed_hosts: string[];
+  finish_url: string;
+  resume_paths: string[];
 }
 
 /** A newer release the Mac app found and verified it can install ({action:"installUpdate"}). */
@@ -41,6 +61,7 @@ export type NativeMessage =
   | { type: "lockFailed"; reason: string }
   | { type: "unlocked" }
   | DeviceTestMessage
+  | HomeworkLoginResultMessage
   /** 2026-10-23: "preunlock" refused (an exam is attached to the lock). */
   | { type: "preunlockRefused" }
   /** Audit 2026-10-12: the app unlocks only once the server confirms the hand-in. */
@@ -131,6 +152,8 @@ type OutMessage =
   | { action: "installUpdate" }
   | { action: "deviceTestStart"; seconds: number }
   | { action: "deviceTestLeave" }
+  | ({ action: "openHomeworkLogin" } & HomeworkLoginParams)
+  | { action: "clearHomeworkLogin" }
   | { action: "openDownloadPage" };
 
 /** S5: what the app seals when the submit at time-up failed. answers_json is the exact
@@ -250,6 +273,7 @@ function stateOf(d: NativeState): NativeState {
   if (typeof d.sealed_pending === "boolean") out.sealed_pending = d.sealed_pending;
   if (typeof d.prelock === "boolean") out.prelock = d.prelock;   // 2026-10-23
   if (d.deviceTest === true) out.deviceTest = true;
+  if (d.homeworkLogin === true) out.homeworkLogin = true;
   const update = parseUpdate((d as { update?: unknown }).update);
   if (update) out.update = update;
   return out;
@@ -308,6 +332,34 @@ export function onDeviceTest(listener: (msg: DeviceTestMessage) => void): () => 
   return onNative((m) => {
     if (m.type === "deviceTest") listener(m);
   });
+}
+
+/** True inside an app that said (in its state) it can open the homework login window. */
+export function homeworkLoginSupported(): boolean {
+  return isNative() && getNativeState()?.homeworkLogin === true;
+}
+
+/** Ask the app to open the separate, non-locking DKU OJ login window. Its answer is a
+ *  homeworkLoginResult message. Returns false when the app can't (nothing is sent). */
+export function openHomeworkLogin(p: HomeworkLoginParams): boolean {
+  if (!homeworkLoginSupported()) return false;
+  post({
+    action: "openHomeworkLogin",
+    state: p.state,
+    start_url: p.start_url,
+    allowed_hosts: [...p.allowed_hosts],
+    finish_url: p.finish_url,
+    resume_paths: [...p.resume_paths],
+  });
+  return true;
+}
+
+/** Sign-out: the app clears the login window's cookies and data. Nothing is sent to an app
+ *  without homework login support. */
+export function clearHomeworkLogin(): boolean {
+  if (!homeworkLoginSupported()) return false;
+  post({ action: "clearHomeworkLogin" });
+  return true;
 }
 
 /** Ask the Mac app to open DOWNLOAD_PAGE in the browser (the exam window only shows the

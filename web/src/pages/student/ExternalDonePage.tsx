@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError, studentApi } from "../../api/client";
 import * as bridge from "../../lib/bridge";
+import { isLmsAttempt } from "./ExamTakingPage";
 import { useForwardNativeEvents } from "../../lib/useForwardNativeEvents";
 import "../../styles/external.css";
 
@@ -19,6 +20,7 @@ export default function ExternalDonePage() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
   const titleRef = useRef("");
+  const lmsRef = useRef(false);
 
   const submit = useCallback(async () => {
     if (timerRef.current) {
@@ -32,7 +34,7 @@ export default function ExternalDonePage() {
       bridge.unlock();
       navigate(`/student/done/${encodeURIComponent(attemptId)}`, {
         replace: true,
-        state: { receipt: res.receipt, submitted_at: res.submitted_at, title: titleRef.current },
+        state: { receipt: res.receipt, submitted_at: res.submitted_at, title: titleRef.current, lms: lmsRef.current },
       });
     } catch (e) {
       if (!aliveRef.current) return;
@@ -54,6 +56,7 @@ export default function ExternalDonePage() {
     // Best effort: the title makes the receipt page nicer; submitting does not wait for it.
     studentApi.getAttempt(attemptId).then(
       (a) => {
+        lmsRef.current = isLmsAttempt(a);
         titleRef.current = a.course ? `${a.course} · ${a.title}` : a.title;
       },
       () => undefined,

@@ -7,6 +7,7 @@ import type { StudentExamSummary } from "../api/types";
 import { CodeExamStart } from "../components/student/CodeExamStart";
 import { UpcomingExamCard } from "../components/student/ExamCard";
 import * as bridge from "../lib/bridge";
+import { rememberResume, resumeInfo } from "../lib/resumeState";
 import { keepDeviceCheck } from "../lib/pendingDeviceCheck";
 import StudentLogin from "../pages/student/StudentLogin";
 import { countdownText, opensInMs, startsMessage } from "../lib/earlyCode";
@@ -86,6 +87,7 @@ afterEach(() => {
   bridge._resetBridgeForTests();
   keepDeviceCheck(null);
   vi.unstubAllGlobals();
+  rememberResume(false, "");
 });
 
 function renderLogin() {
@@ -260,6 +262,33 @@ describe("student sign-in with an access code", () => {
     expect(getToken("student")).toBe("SESSION-TOK");
   });
 
+  it("a student with an attempt in progress sees resume wording and the flag is carried on", async () => {
+    const user = userEvent.setup();
+    reply("/api/student/code-login", { status: 200, body: { ...PROMPT, resume: true } });
+    reply("/api/student/code-login/confirm", { status: 200, body: { ...SESSION, resume: true } });
+    renderLogin();
+    await enter(user, "K7M2QX");
+    await screen.findByTestId("code-who");
+    expect(screen.getByTestId("code-resume").textContent).toBe("Welcome back, Avazbek. Your answers are saved. Continue where you stopped.");
+    expect(screen.queryByRole("button", { name: "Confirm and continue" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Resume exam" }));
+    await screen.findByText("Student home");
+    expect(resumeInfo()).toEqual({ name: "Avazbek Khamidov" });
+  });
+
+  it("without resume the confirm screen keeps its wording and nothing is carried on", async () => {
+    const user = userEvent.setup();
+    reply("/api/student/code-login", { status: 200, body: { ...PROMPT, resume: false } });
+    reply("/api/student/code-login/confirm", { status: 200, body: SESSION });
+    renderLogin();
+    await enter(user, "K7M2QX");
+    await screen.findByTestId("code-who");
+    expect(screen.queryByTestId("code-resume")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Confirm and continue" }));
+    await screen.findByText("Student home");
+    expect(resumeInfo()).toBeNull();
+  });
+
   it("an expired confirmation sends the student back to the code boxes with the reason", async () => {
     const user = userEvent.setup();
     reply("/api/student/code-login", { status: 200, body: PROMPT });
@@ -424,6 +453,17 @@ describe("starting an exam entered with a code", () => {
     await user.click(screen.getByRole("button", { name: "Start exam" }));
     await screen.findByText("Exam page");
     expect(called("/api/student/exams/e_1/start")[0]!.body).toEqual({ start_code: "" });
+  });
+
+  it("says Resume exam when the student is resuming", async () => {
+    delete (window as unknown as { webkit?: unknown }).webkit;
+    const user = userEvent.setup();
+    rememberResume(true, "Avazbek Khamidov");
+    reply("/api/student/exams/e_1/start", { status: 200, body: VIEW });
+    renderStart();
+    expect(screen.queryByRole("button", { name: "Start exam" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Resume exam" }));
+    await screen.findByText("Exam page");
   });
 
   it("before the teacher opens the exam it says so", async () => {

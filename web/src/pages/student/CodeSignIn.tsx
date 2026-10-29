@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { ApiError, TooEarlyError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
 import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
+import { HomeworkLink } from "../../components/code-signin/HomeworkLink";
 import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
 import { TryExamScreenDialog } from "../../components/code-signin/TryExamScreenDialog";
 import { UpdateCard, useSignInUpdate } from "../../components/code-signin/UpdatePrompt";
 import { AppVersion } from "../../components/AppVersion";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import * as bridge from "../../lib/bridge";
+import { rememberResume, welcomeBack } from "../../lib/resumeState";
 import { countdownText, opensInMs, startsMessage } from "../../lib/earlyCode";
 import { keepDeviceCheck, sendPendingDeviceCheck } from "../../lib/pendingDeviceCheck";
 import { useLegacyStudentUi } from "../../lib/legacyStudentUi";
@@ -102,6 +104,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
     try {
       const res = await codeLoginApi.confirm(prompt.confirm_token);
       setToken("student", res.token);
+      rememberResume(res.resume ?? prompt.resume, res.name);
       await sendPendingDeviceCheck();
       navigate("/student", { replace: true });
     } catch (err) {
@@ -175,6 +178,11 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
                 You can look at every exam. Nothing can be started.
               </p>
             )}
+            {prompt.netid && prompt.resume && (
+              <p className="cs-sub" data-testid="code-resume">
+                {welcomeBack(prompt.first_name)}
+              </p>
+            )}
             <p className="cs-exam">Exam: {prompt.exam_title}</p>
             {error && (
               <p className="cs-error" role="alert">
@@ -183,7 +191,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
             )}
             <div className="cs-actions">
               <button type="button" className="cs-btn cs-btn-primary" onClick={() => void confirm()} disabled={busy}>
-                {busy ? "Signing in…" : prompt.netid ? "Confirm and continue" : "Continue"}
+                {busy ? "Signing in…" : prompt.netid ? (prompt.resume ? "Resume exam" : "Confirm and continue") : "Continue"}
               </button>
               <button type="button" className="cs-btn cs-btn-secondary" onClick={notMe} disabled={busy}>
                 Not me
@@ -231,6 +239,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
                 </button>
               </p>
             )}
+            <HomeworkLink />
           </section>
         )}
       </main>
