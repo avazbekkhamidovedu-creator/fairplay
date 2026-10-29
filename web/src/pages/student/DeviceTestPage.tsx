@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import type { AnswerMap, AnswerValue, StudentQuestion } from "../../api/types";
-import { LogoMark, Wordmark } from "../../components/ui/Icon";
+import { LogoMark } from "../../components/ui/Icon";
 import { AnswerInput } from "../../components/student/AnswerInput";
 import { ArrowLeftIcon, ArrowRightIcon, ChevronIcon, CloseIcon } from "../../components/student/icons";
 import * as bridge from "../../lib/bridge";
@@ -83,53 +83,72 @@ function DeviceTest() {
     });
   const answeredCount = SAMPLE.filter((s) => answers[s.id] !== undefined).length;
 
+  const ask =
+    q.type === "mcq" ? "Choose the right option" : q.type === "code" ? "Write your code" : "Your answer";
+
   return (
-    <div className="stu stu-exam" data-testid="device-test">
-      <header className="app-header">
-        <div className="app-header-inner">
-          <span className="brand">
-            <LogoMark size={30} />
-            <Wordmark />
-          </span>
-          <span className="header-spacer" />
-          <span role="timer" aria-live="off" data-testid="device-test-countdown">
+    <div className="stu stu-exam exam-d xd-fill" data-testid="device-test">
+      <header className="stu-lockbar">
+        <div className="stu-lb-left">
+          <LogoMark size={28} title="FairPlay" />
+          <div className="stu-lockbar-title">
+            <small className="c">Device test</small>
+            <span className="t">Sample exam</span>
+          </div>
+        </div>
+        <div className="stu-lb-center">
+          <span className="stu-timer" role="timer" aria-live="off" data-testid="device-test-countdown">
             Leaves automatically in {clock(remaining)}
           </span>
-          <button type="button" className="stu-btn primary lg" onClick={leave}>
+        </div>
+        <div className="stu-lb-right">
+          <button type="button" className="stu-btn primary" onClick={leave}>
             Leave
           </button>
         </div>
       </header>
-      <div className="stu-alert warn" role="status" data-testid="device-test-banner">
+      <div className="stu-alert warn xd-preview-note" role="status" data-testid="device-test-banner">
         Preview: nothing here is saved or graded
       </div>
 
-      <main className="xd-card" aria-labelledby="question-prompt" data-testid="exam-card">
+      <main className={`xd-card${q.type === "code" ? " code" : ""}`} aria-labelledby="question-prompt" data-testid="exam-card">
         <div className="xd-left">
-          <div className="xd-qmeta">
-            <span className="xd-eyebrow" aria-hidden="true">
-              Question {current + 1}
-            </span>
-            <span className="sr-only">
-              Question {current + 1} of {SAMPLE.length}
-            </span>
+          <div className="xd-left-body">
+            <div className="xd-qmeta">
+              <span className="xd-eyebrow" aria-hidden="true">
+                Question {current + 1}
+              </span>
+              <span className="sr-only">
+                Question {current + 1} of {SAMPLE.length}
+              </span>
+              <span className="stu-qhead-pts">
+                {q.points} {q.points === 1 ? "point" : "points"}
+              </span>
+            </div>
+            <p className="stu-qtitle">Sample questions</p>
+            <h1 id="question-prompt" className="stu-prompt" tabIndex={-1}>
+              {q.prompt}
+            </h1>
           </div>
-          <h1 className="stu-qtitle">Sample questions</h1>
-          <h2 id="question-prompt" className="stu-prompt" tabIndex={-1}>
-            {q.prompt}
-          </h2>
+        </div>
+        <div className="xd-divider" aria-hidden="true">
+          <span />
         </div>
         <div className="xd-right">
+          <h2 className="xd-ask" id="answer-heading">
+            {ask}
+          </h2>
           {q.type === "code" ? (
-            <textarea
-              key={q.id}
-              aria-labelledby="question-prompt"
-              spellCheck={false}
-              rows={12}
-              style={{ width: "100%", fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 14 }}
-              value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
-              onChange={(e) => setAnswer(q.id, e.target.value === "" ? undefined : e.target.value)}
-            />
+            <div className="stu-editor">
+              <textarea
+                key={q.id}
+                aria-labelledby="question-prompt"
+                spellCheck={false}
+                style={{ fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 14, lineHeight: 1.6 }}
+                value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
+                onChange={(e) => setAnswer(q.id, e.target.value === "" ? undefined : e.target.value)}
+              />
+            </div>
           ) : (
             <AnswerInput
               key={q.id}

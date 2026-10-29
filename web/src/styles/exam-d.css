@@ -688,3 +688,12 @@
 .xd-tablist > .xd-tab:first-child {
   flex: none;
 }
+
+/* device test preview: the notice under the top card */
+.exam-d .xd-preview-note {
+  flex: none;
+  padding: 12px 24px;
+  border-radius: 18px;
+  font-weight: 600;
+  text-align: center;
+}
