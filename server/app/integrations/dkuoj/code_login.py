@@ -11,6 +11,9 @@
 
 Failures are counted per IP and per device and answered with 429 + Retry-After. The code
 itself is never stored in an event or a log line.
+
+A valid code for an exam that opens later (more than the 30-minute lead away) answers
+400 {detail: "too_early", starts_at} instead and is not counted as a failure.
 """
 from __future__ import annotations
 
@@ -31,7 +34,7 @@ from ...routes_auth import client_ip
 from ...schemas import ClientProofIn
 from ...security import ADMIN_SCOPE, make_token
 from ...store import get_store
-from ...timeutil import utcnow
+from ...timeutil import iso, utcnow
 from . import access_codes, admin_test
 from .models import ExamAccessCode
 from .setup import add_event, make_kind_token, parse_kind_token
@@ -157,14 +160,18 @@ async def _pick(session: AsyncSession, secret: str, code: str, device: str | Non
     if not found:
         return None, None, "unknown"
     now = utcnow()
-    usable, why = [], "revoked"
+    usable, why, early = [], "revoked", None
     for row, e in found:
         if row.revoked_at is not None:
             continue
         if not await access_codes.in_window(session, e, now):
             why = "outside_window"
+            if early is None and access_codes.not_yet_open(e, now):
+                early = (row, e)
             continue
         usable.append((row, e))
+    if not usable and early is not None:
+        return early[0], early[1], "too_early"
     if not usable:
         return found[0][0], found[0][1], why
     mine = [x for x in usable if device and x[0].bound_device == device]
@@ -196,6 +203,11 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
             and not await _freed(session, row.exam_id, row.netid):
         await _second_device(session, e, row, device)
         reason = "second_device"
+    if reason == "too_early":
+        await _audit(session, e, "access_code_failed", row.netid, f"exam {e.id}: outside_window")
+        log.info("access code refused (too_early) from %s device %s", ip, (device or "-")[:8])
+        return JSONResponse({"detail": "too_early", "starts_at": iso(e.scheduled_at)}, status_code=400,
+                            headers={"Cache-Control": "no-store"})
     if reason is not None:
         await _count_failure(store, counters)
         if row is not None and reason in ("revoked", "outside_window"):

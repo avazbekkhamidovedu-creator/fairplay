@@ -146,6 +146,12 @@ async def in_window(session: AsyncSession, e: Exam, now: datetime) -> bool:
     return e.scheduled_at is not None and now >= e.scheduled_at - WINDOW_LEAD
 
 
+def not_yet_open(e: Exam, now: datetime) -> bool:
+    """A scheduled draft exam whose codes start working later than now."""
+    return (e.status == "draft" and e.delivery != "paper" and e.scheduled_at is not None
+            and now < e.scheduled_at - WINDOW_LEAD)
+
+
 async def matches(session: AsyncSession, secret: str, code: str) -> list[tuple[ExamAccessCode, Exam]]:
     """Every row with this code (revoked ones too) on a draft or live exam, newest exam first."""
     h = code_hmac(secret, code)

@@ -119,6 +119,48 @@ def test_every_bad_code_gets_the_same_answer(oj, ready):
     assert (r.status_code, r.json()) == (400, NOT_VALID)
 
 
+def test_too_early_code_says_when_the_exam_starts(oj, ready):
+    start = (utcnow() + timedelta(hours=2)).replace(microsecond=0)
+    patch_exam(oj, scheduled_at=start)
+    r = enter(oj, ready["alice"], DEV_A)
+    assert r.status_code == 400
+    assert r.json() == {"detail": "too_early", "starts_at": start.isoformat(timespec="milliseconds") + "Z"}
+    assert r.headers["cache-control"] == "no-store"
+    assert db(oj, lambda s: s.scalar(select(ExamAccessCode.used_at).where(ExamAccessCode.netid == "alice"))) is None
+    audit = db(oj, _events("access_code_failed"))
+    assert audit and all(n == "alice" and d.endswith(": outside_window") for n, d in audit)
+    soon(oj, 29)
+    assert enter(oj, ready["alice"], DEV_A).status_code == 200
+
+
+def test_too_early_is_not_counted_as_a_failure(oj, ready):
+    patch_exam(oj, scheduled_at=utcnow() + timedelta(hours=2))
+    for _ in range(40):
+        assert enter(oj, ready["alice"], DEV_A).json()["detail"] == "too_early"
+    soon(oj)
+    assert enter(oj, ready["alice"], DEV_A).status_code == 200
+
+
+def test_only_a_valid_code_hears_the_start_time(oj, ready):
+    patch_exam(oj, scheduled_at=utcnow() + timedelta(hours=2))
+
+    async def revoke(s):
+        await s.execute(update(ExamAccessCode).where(ExamAccessCode.netid == "carol").values(revoked_at=utcnow()))
+        await s.commit()
+    db(oj, revoke)
+    for code in ("AAAAAA", "12", ready["carol"]):
+        r = enter(oj, code)
+        assert (r.status_code, r.json()) == (400, NOT_VALID), code
+    patch_exam(oj, scheduled_at=None)
+    r = enter(oj, ready["alice"])
+    assert (r.status_code, r.json()) == (400, NOT_VALID)
+    patch_exam(oj, scheduled_at=utcnow() - timedelta(days=2), status="closed")
+    r = enter(oj, ready["alice"])
+    assert (r.status_code, r.json()) == (400, NOT_VALID)
+    patch_exam(oj, scheduled_at=utcnow() + timedelta(hours=2), status="live")
+    assert enter(oj, ready["alice"]).status_code == 200
+
+
 def test_code_of_another_exam_is_refused(oj, ready):
     async def second(s):
         e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
@@ -279,7 +321,8 @@ def test_code_window(oj, fields, ok):
     r = enter(oj, code)
     assert r.status_code == (200 if ok else 400), r.text
     if not ok:
-        assert r.json() == NOT_VALID
+        too_early = fields.get("scheduled_at") == "plus" and fields["minutes"] > 30 and "status" not in fields
+        assert r.json() == ({"detail": "too_early", "starts_at": r.json().get("starts_at")} if too_early else NOT_VALID)
 
 
 def test_start_needs_no_start_code_for_the_bound_device_and_only_when_live(oj, ready):
