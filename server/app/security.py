@@ -183,7 +183,7 @@ async def current_principal(request: Request) -> Principal:
     cur = await _current_user(uid)
     if cur is None or cur[0] != role or cur[1] != ver:
         raise HTTPException(401, "Signed out. Please sign in again.")
-    if scope and scope != ADMIN_SCOPE and await scope_over(uid, scope):
+    if scope and scope not in (ADMIN_SCOPE, HOMEWORK_SCOPE) and await scope_over(uid, scope):
         raise HTTPException(401, "Signed out. Please sign in again.")
     return Principal(uid, role, scope)
 
@@ -197,6 +197,8 @@ async def require_teacher(p: Principal = Depends(current_principal)) -> Principa
 
 
 ADMIN_SCOPE = "admin_test"
+HOMEWORK_SCOPE = "homework"
+HOMEWORK_TTL_S = 8 * 3600
 ADMIN_TESTER_USER = "admin-tester"
 _ADMIN_PATHS = ("/api/student/exams",)
 SCOPED_AFTER_HANDIN_S = 300
@@ -244,6 +246,8 @@ async def forget_scope(uid: int, exam_id: str) -> None:
 async def require_student(request: Request, p: Principal = Depends(current_principal)) -> Principal:
     if p.role != "student":
         raise HTTPException(403, "Student role required")
+    if p.scope == HOMEWORK_SCOPE:
+        raise HTTPException(403, "This sign-in is for homework only.")
     if p.scope == ADMIN_SCOPE:
         if request.method != "GET" or request.url.path.rstrip("/") not in _ADMIN_PATHS:
             raise HTTPException(403, "This sign-in is for one exam. Use a new code for another exam.")
@@ -253,4 +257,11 @@ async def require_student(request: Request, p: Principal = Depends(current_princ
         m = _EXAM_PATH.match(path)
         if (m and m.group(1) != p.scope) or path.startswith(_UNSCOPED_PATHS):
             raise HTTPException(403, "This sign-in is for one exam. Use a new code for another exam.")
+    return p
+
+
+async def require_homework(p: Principal = Depends(current_principal)) -> Principal:
+    """A homework sign-in, or a plain student sign-in (no exam scope)."""
+    if p.role != "student" or p.scope not in ("", HOMEWORK_SCOPE):
+        raise HTTPException(403, "Homework sign-in required")
     return p

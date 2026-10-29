@@ -168,6 +168,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(integrations_router)
     for r in integration_registry.routers():
         app.include_router(r)
+    if settings.homework_login:
+        from .routes_homework import router as homework_router
+        app.include_router(homework_router)
     if settings.feature("scan"):
         from .routes_scan import router as scan_router  # slice 6 D: Scan & Grade (paper exams)
         app.include_router(scan_router)
@@ -181,6 +184,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # browser_demo: only with FAIRPLAY_BROWSER_GATE=off; the web then stands in for the app's bridge
         out = {"ok": True, "demo_logins": settings.demo_logins, "features": list(settings.features) + (["legacy_student_ui"] if settings.legacy_student_ui else []),
                "student_grades": settings.student_grades}
+        from .integrations import homework_login
+        out["homework_login"] = homework_login.health(settings)
         if settings.browser_gate == "off":
             out["browser_demo"] = True
         return out

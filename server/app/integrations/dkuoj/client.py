@@ -246,6 +246,14 @@ class DkuojClient:
         return self._json(await self.request("GET", path,
                                              attempts=1, timeout=timeout))
 
+    async def redeem_app_login(self, ticket: str, verifier: str, timeout: float = 10.0) -> tuple[int, dict | None]:
+        """POST app-login/redeem (homework sign-in): (200, {netid, first_name, last_name,
+        email}) or (404 unknown / used / expired ticket | 409 verifier mismatch, None). One
+        try: a ticket works once, so a repeat after a lost answer could only fail."""
+        resp = await self.request("POST", "app-login/redeem", json={"ticket": ticket, "verifier": verifier},
+                                  attempts=1, ok=(200, 404, 409), timeout=timeout, max_bytes=MAX_SMALL_BYTES)
+        return (200, self._json(resp)) if resp.status_code == 200 else (resp.status_code, None)
+
     async def results(self, key: str, changed_since: str | None, page: int = 1) -> dict:
         params: dict = {"page": page}
         if changed_since:

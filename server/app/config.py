@@ -172,6 +172,15 @@ class Settings:
     # absolute integrity-report links. Unset: the links are sent as paths (/teacher/exams/...).
     public_url: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_PUBLIC_URL", "").strip().rstrip("/"))
 
+    # Homework sign-in (app/integrations/homework_login.py): "" = off, "dkuoj" = the DKU OJ web
+    # sign-in in the app's web view. HOMEWORK_LOGIN_HOSTS: extra sign-in hosts the web view may
+    # open (comma list); HOMEWORK_LOGIN_RESUME_PATHS: paths on the provider the web view may
+    # return to after the sign-in.
+    homework_login: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_HOMEWORK_LOGIN", "").strip().lower())
+    homework_login_hosts: list[str] = field(default_factory=lambda: _list("HOMEWORK_LOGIN_HOSTS"))
+    homework_login_resume_paths: list[str] = field(
+        default_factory=lambda: _list("HOMEWORK_LOGIN_RESUME_PATHS") or ["/"])
+
     def canvas_min_version(self, platform: str | None) -> str | None:
         p = (platform or "").strip().lower()
         v = {"mac": self.canvas_min_version_mac, "windows": self.canvas_min_version_windows,
@@ -253,6 +262,9 @@ class Settings:
                 "exam-cache invalidation, single-use challenges, code lockouts and the beat "
                 "replay guard. Set REDIS_URL, or run ONE process with FAIRPLAY_SINGLE_PROCESS=1 "
                 "(and WEB_CONCURRENCY=1).")
+        if self.homework_login:
+            from .integrations import homework_login
+            homework_login.check(self)
         self.warn_insecure()
 
     def warn_insecure(self) -> None:

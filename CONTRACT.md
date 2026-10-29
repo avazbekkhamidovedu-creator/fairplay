@@ -1070,3 +1070,34 @@ Codes are made per student and exam (`docs/dkuoj-bridge-v2.md` §12). All three 
 - `GET /api/me` adds `netid` when the account has one.
 - `/api/health` adds `student_grades` (bool, `FAIRPLAY_STUDENT_GRADES`, default off) and lists `legacy_student_ui` in `features` when `FAIRPLAY_LEGACY_STUDENT_UI=1`. With `student_grades` off, `GET /api/student/grades` and `/grades/{id}` answer the same JSON 404 as an unknown path; the web hides Grades and Past. Without `legacy_student_ui` the web hides class joining, course cards and the old home page.
 - `GET .../access-codes.pdf` takes `layout=both|list|slips` (`docs/dkuoj-bridge-v2.md` §12).
+
+## Homework sign-in (DKU OJ web sign-in in the app)
+
+Off unless `FAIRPLAY_HOMEWORK_LOGIN=dkuoj`. It needs the DKU OJ bridge (`DKUOJ_URL`, `DKUOJ_TOKEN`) and
+`DKUOJ_PUBLIC_URL`, the https address students open DKU OJ at (http only for loopback with `FAIRPLAY_DEV=1`);
+otherwise the server refuses to start. Extra settings: `HOMEWORK_LOGIN_HOSTS` (comma list of other hosts the
+web view may open: Duke NetID, Shibboleth, Duo; default empty) and `HOMEWORK_LOGIN_RESUME_PATHS` (default `/`).
+When off, the routes below answer 404.
+
+- `GET /api/health` gains `homework_login`: `null` or `{"provider": "dkuoj", "label": "DKU OJ"}`.
+- `POST /api/homework/login/start` `{}` -> `{state, start_url, allowed_hosts[], finish_url, resume_paths[], expires_at}`.
+  `state` is 32 random bytes (base64url, 43 chars), kept 10 minutes with a 32-byte verifier that never leaves the
+  server. `start_url` = `<DKUOJ_PUBLIC_URL>/fairplay/app-login/?state=S&challenge=b64url(sha256(verifier))`,
+  `finish_url` = `<DKUOJ_PUBLIC_URL>/fairplay/app-login/done`. `allowed_hosts` = the DKU OJ host + `HOMEWORK_LOGIN_HOSTS`.
+  20 per minute per IP (429). No auth.
+- The web view opens `start_url`. DKU OJ signs the student in, mints a one-time ticket (60 s) and sends the view to
+  `finish_url#ticket=T&state=S`. The app reads both from the fragment.
+- `POST /api/homework/login/finish` `{state, ticket}` -> `{token, name, netid, expires_at}`. No auth. The state is
+  deleted on first use. 400 = state or ticket unknown / used / expired / not matching (one message for all);
+  403 = no DKU OJ classes, or a teacher account; 429 = more than 10 per minute per IP or 20 per hour per NetID;
+  503 = DKU OJ unreachable. Creates `oj:<netid>` (unusable password, `set_up_at` NULL) when the NetID has no account.
+- `GET /api/homework/me` -> `{name, netid}`. Accepts a homework token or a plain student token; an exam-scoped or
+  admin-test token gets 403.
+- The token has scope `homework`, role student, 8 hours. Every route that needs `require_student` (all of
+  `/api/student/*`, exams, attempts, materials, offline, practice, classes) answers 403 to it. It does not set up
+  an account, cannot call `/api/setup/*` and does not touch `DKUOJ_SETUP_ACCESS_CODE`.
+
+DKU OJ side (fp -> oj signed, `docs/dkuoj-bridge-v2.md` §1): `POST /api/fairplay/v1/app-login/redeem`
+`{ticket, verifier}` -> 200 `{netid, first_name, last_name, email}`; 404 ticket unknown, used or older than 60 s;
+409 `base64url(sha256(verifier))` is not the `challenge` the ticket was minted with. The ticket is spent by any
+answer except 404. FairPlay then calls `GET /api/fairplay/v1/students/<netid>/classes`.
