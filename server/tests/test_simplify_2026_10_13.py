@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 
-from .conftest import SAMPLE_EXAM, login
+from .conftest import SAMPLE_EXAM, add_members_directly, login
 
 pytestmark = pytest.mark.no_default_class
 BODY = {k: v for k, v in SAMPLE_EXAM.items() if k != "class_id"}
@@ -52,8 +52,8 @@ def test_class_marks_list_members_and_only_that_class(client):
     t = login(client, "teacher")
     a = client.post("/api/classes", json={"name": "A"}, headers=t).json()
     b = client.post("/api/classes", json={"name": "B"}, headers=t).json()
-    client.post(f"/api/classes/{a['id']}/members", json={"usernames": ["alice", "bob"]}, headers=t)
-    client.post(f"/api/classes/{b['id']}/members", json={"usernames": ["carol"]}, headers=t)
+    add_members_directly(client, a["id"], ["alice", "bob"])
+    add_members_directly(client, b["id"], ["carol"])
     ea = client.post("/api/exams", json={**BODY, "class_id": a["id"]}, headers=t).json()
     eb = client.post("/api/exams", json={**BODY, "class_id": b["id"]}, headers=t).json()
     for e in (ea, eb):
@@ -63,7 +63,7 @@ def test_class_marks_list_members_and_only_that_class(client):
     assert sorted(s["username"] for s in g["students"]) == ["alice", "bob"]
     # a class with no open exam still lists its students
     c = client.post("/api/classes", json={"name": "C"}, headers=t).json()
-    client.post(f"/api/classes/{c['id']}/members", json={"usernames": ["carol"]}, headers=t)
+    add_members_directly(client, c["id"], ["carol"])
     g = client.get(f"/api/gradebook?class_id={c['id']}", headers=t).json()
     assert g["exams"] == [] and [s["username"] for s in g["students"]] == ["carol"]
     # someone else's class: not found

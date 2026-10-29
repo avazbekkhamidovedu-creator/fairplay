@@ -75,9 +75,10 @@ class AnswerIn(BaseModel):
 
 
 # ---------------------------------------------------------------- helpers
-async def _students(session: AsyncSession, usernames: list[str]) -> dict[str, User]:
-    rows = (await session.scalars(select(User).where(User.username.in_(usernames),
-                                                     User.role == "student"))).all()
+async def _students(session: AsyncSession, usernames: list[str], teacher_id: int) -> dict[str, User]:
+    from .routes_scan import teacher_student_ids
+    rows = (await session.scalars(select(User).where(User.username.in_(usernames), User.role == "student",
+                                                     User.id.in_(teacher_student_ids(teacher_id))))).all()
     return {u.username: u for u in rows}
 
 
@@ -143,9 +144,12 @@ def _editable(s: PracticeSet) -> None:
 @router.get("/students")
 async def practice_students(p: Principal = Depends(require_teacher),
                             session: AsyncSession = Depends(get_session)):
-    """Every student with their topic scores and weak topics (computed here from graded answers)."""
+    """The teacher's own students (class and course members, anyone who took their exams) with their
+    topic scores and weak topics (computed here from graded answers)."""
+    from .routes_scan import teacher_student_ids
     exams = await teacher_exams(session, p.user_id)
-    students = (await session.scalars(select(User).where(User.role == "student").order_by(User.name))).all()
+    students = (await session.scalars(select(User).where(
+        User.role == "student", User.id.in_(teacher_student_ids(p.user_id))).order_by(User.name))).all()
     stats = await topic_stats_by_student(session, p.user_id, None, exams)
     topic_count: dict[str, int] = {}
     for s in _sources(exams, []):
@@ -191,7 +195,7 @@ async def practice_generate(body: GenerateIn, p: Principal = Depends(require_tea
 
 
 async def _generate(body: GenerateIn, names: list[str], p: Principal, session: AsyncSession) -> dict:
-    users = await _students(session, names)
+    users = await _students(session, names, p.user_id)
     exams = await teacher_exams(session, p.user_id)
     stats = await topic_stats_by_student(session, p.user_id, [u.id for u in users.values()], exams)
     req_topics = [t for t in dict.fromkeys(norm_topic(t) for t in (body.topics or [])) if t]

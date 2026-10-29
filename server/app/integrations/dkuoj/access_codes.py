@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,6 +101,11 @@ async def _ensure(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
             row = ExamAccessCode(exam_id=exam.id, netid=u.netid, first_name=first, last_name=last, code_hmac=h,
                                  code_sealed=secretbox.seal(secret, code), created_at=utcnow())
             session.add(row)
+        elif row.revoked_at is not None:
+            code, h = _new_code(secret, taken)      # back on the list: a revoked code never comes back
+            row.code_hmac, row.code_sealed = h, secretbox.seal(secret, code)
+            row.first_name, row.last_name = first, last
+            row.created_at, row.revoked_at, row.used_at, row.bound_device = utcnow(), None, None, None
         else:
             row.first_name, row.last_name = first, last
             code = secretbox.open_(secret, row.code_sealed)
@@ -123,6 +128,14 @@ async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) ->
     row.created_at, row.revoked_at, row.used_at, row.bound_device = utcnow(), None, None, None
     await session.commit()
     return True
+
+
+async def revoke_missing(session: AsyncSession, exam_id: str, netids: set[str]) -> int:
+    """Revoke the codes of students who are no longer on the exam's list (no commit)."""
+    q = update(ExamAccessCode).where(ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None))
+    if netids:
+        q = q.where(ExamAccessCode.netid.not_in(netids))
+    return (await session.execute(q.values(revoked_at=utcnow()))).rowcount or 0
 
 
 async def lookup(session: AsyncSession, secret: str, exam_id: str, code: str) -> ExamAccessCode | None:

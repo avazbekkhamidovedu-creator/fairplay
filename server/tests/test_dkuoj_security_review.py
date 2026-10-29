@@ -151,7 +151,7 @@ def test_reset_refused_for_an_account_with_fairplay_classes(oj, fake):
     c = oj.post("/api/classes", json={"name": "Native Physics", "term": "F26"}, headers=teacher).json()
     assert oj.post(f"/api/classes/{c['id']}/members", json={"usernames": ["bobli"]},
                    headers=teacher).json()["added"] == 1
-    r = call(oj, "POST", f"{V1}/students/bl642/reset", {"class_id": CLASS_ID}, acting="anyone")
+    r = call(oj, "POST", f"{V1}/students/bl642/reset", {"class_id": CLASS_ID})
     assert r.status_code == 403
     assert r.json()["detail"] == "This account is also used for FairPlay classes; reset it in FairPlay."
     assert oj.get("/api/me", headers=bearer(bob["token"])).status_code == 200      # still Bob's

@@ -158,7 +158,7 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
 
 - **`POST /classes/<class_id>/login`** body `{"class_name": "...", "course_name": "..."}` →
   `{"username": "cs101a-m4tz", "password": "river-cotton-pine-moss-583", "expires_at": "<iso>"}`.
-  Creates a new class login, replacing (and immediately disabling) any previous one for that
+  The acting DKU OJ user must be tied to the class (a teacher of it, an editor of an exam synced for it, or an earlier handler). A new class FairPlay has never seen is open to any non-student acting user; that user is then recorded on it. An unknown class or a student acting user → 403 `{"detail": "You are not linked to this class in FairPlay."}` Creates a new class login, replacing (and immediately disabling) any previous one for that
   class. Username: lower-case course-ish prefix (from class_name, ascii letters/digits, ≤ 8) +
   `-` + 4 random [a-z0-9]; unique. Password: four short random words + 3 digits (≥ 20 chars, about 10^11 choices),
   from a built-in list. Stored as a password hash (sign-in) AND encrypted (2026-10-24, see §1
@@ -167,8 +167,8 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   info `"fairplay class-login password v1"`), 96-bit random nonce, the login's username as
   associated data. Changing the server secret makes the stored copies unreadable (status then
   says `password: null`); sign-in keeps working. Valid 14 days.
-- **`DELETE /classes/<class_id>/login`** → `{"ok": true}` (idempotent).
-- **`GET /classes/<class_id>/status`** → (`Cache-Control: no-store`: it carries a password)
+- **`DELETE /classes/<class_id>/login`** → `{"ok": true}` (idempotent). The acting user must be tied to the class (same check as POST).
+- **`GET /classes/<class_id>/status`** The acting user must be tied to the class (same check as POST). → (`Cache-Control: no-store`: it carries a password)
   ```json
   {"login": {"username": "cs101a-m4tz", "password": "river-cotton-pine-moss-583" | null,
              "created_at": "...", "expires_at": "...", "used": 28, "created_by": "prof_dong" | null} | null,
@@ -196,7 +196,8 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   NetIDs FairPlay doesn't know are shown as "not set up"; an entry not on DKU OJ's roster is
   shown (as a former member) only with `via_this_class: true`.
 - **`POST /students/<netid>/reset`** body `{"class_id": 31}` → `{"ok": true}` (idempotent):
-  the account's own username and password are removed, all its sessions end at once
+  The acting DKU OJ user must be tied to the class (same check as class login endpoints). 
+  The account's own username and password are removed, all its sessions end at once
   (token version bump), `set_up` becomes false. Attempts, answers and results stay.
   DKU OJ allows it only for a NetID on the class's live roster, or one FairPlay reports with
   `via_this_class: true`, and sends the canonical NetID (the roster username, or FairPlay's).
@@ -212,6 +213,8 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   event (`student_reset` / `student_reset_refused`, with the acting user).
 
 ### Exam control (key = DKU OJ assignment key)
+
+For exams FairPlay has not synced yet, an empty `acting_user` or a student account → 403 `{"detail": "You are not linked to this class in FairPlay."}` (the exam will be listed once synced).
 
 - **`GET /exams/<key>`** → the FairPlay tab's data:
   ```json
@@ -256,8 +259,8 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   `{"calculator": "off|scientific|graphing" | null, "open_book": bool | null, "strong_lock": bool | null,
   "resume_needs_approval": bool | null, "upload_opens_days": 0..7 | null, "review": "<level>",
   "websites": ["docs.python.org", "https://duke.app.box.com/folder/0", "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}] | null}`
-  → GET shape. Editor-checked like the other exam endpoints (403). §11: an assignment FairPlay
-  has not synced yet → the settings are KEPT for that key (pending, applied at its first sync;
+  → GET shape. Editor-checked like the other exam endpoints (403). An assignment FairPlay
+  has not synced yet requires a named non-student acting user (same check as above). §11: settings KEPT for that key (pending, applied at its first sync;
   answer: the not-synced shape whose `settings` are FairPlay's defaults with the pending ones;
   key longer than 56 characters → 400; more than 2000 keys pending → 429; pending settings older
   than 180 days are dropped). After the first student started (or closed): `review` still
@@ -310,14 +313,11 @@ App/web flow (all on the FairPlay server; the app shows the FairPlay web pages):
    calls). Expired / stopped class login → 401 "This class login has expired. Ask your professor
    for a new one."
 2. `POST /api/setup/identify` (Authorization: Bearer <setup_token>) body
-   `{"first_name","last_name","netid"}` → FairPlay fetches the class roster from DKU OJ (§2; if
+   `{"first_name","last_name","netid","access_code":""}` → FairPlay fetches the class roster from DKU OJ (§2; if
    unreachable: 503 "Can't check the class list right now, try again in a minute"), then
    requires: the NetID is in it (case-insensitive), first and last name equal after
-   normalisation (trim, collapse spaces, case-fold, strip accents), and that NetID is not set up
-   yet. Success → `{"identity_token": "...", "name": "Bob Li", "netid": "bl642"}` (valid 10
-   minutes, bound to that NetID and that class login). Any failure → 400 with ONE generic
-   message ("This name and NetID are not on the class list, or this NetID is already set up.
-   Check them, or ask your professor.") — never which part was wrong.
+   normalisation (trim, collapse spaces, case-fold, strip accents), that NetID is not set up
+   yet, and (if `DKUOJ_SETUP_ACCESS_CODE` is not `"off"`) the student's own exam access code (if issued, or always if the setting is `"always"`). `access_code` is optional in the body; if required but missing: `400 "Enter the access code from your own exam sheet to set up your account."` If given but wrong: `400 "That access code does not match this NetID."` Success → `{"identity_token": "...", "name": "Bob Li", "netid": "bl642"}` (valid 10 minutes, bound to that NetID and that class login). Any failure → 400 with ONE generic message ("This name and NetID are not on the class list, or this NetID is already set up. Check them, or ask your professor.") for identity/name/NetID errors — never which part was wrong; access code errors return their own messages.
    Limits: 5 tries a minute per setup token. 5 failed tries in an hour for the same typed NetID
    (normalised: trimmed, lower case) on one class login → that NetID is refused for the rest of
    the hour, with the same generic message. Failed tries for 40 DIFFERENT NetIDs in an hour on
@@ -327,6 +327,7 @@ App/web flow (all on the FairPlay server; the app shows the FairPlay web pages):
    Signing in with the class login itself (`POST /api/auth/login`) has no per-username lockout
    (a whole lab shares that username, often behind one NAT): per IP, after 60 wrong class-login
    passwords in 5 minutes wrong ones get 429; the right password is always accepted.
+   `DKUOJ_SETUP_ACCESS_CODE` (env var): `"issued"` (default, a NetID already with an exam access code must give one), `"always"` (every set-up must give one; codes must be printed first), or `"off"` (codes are never checked; no new codes issued to the class).
 3. `POST /api/setup/account` (Bearer <identity_token>) body `{"username","password","password2"}`
    → username 3–32 of [a-z0-9._-], unique (409 "That username is taken"); password (2026-10-24,
    the FairPlay web set-up shows the same rules as you type): at least 10 characters with at

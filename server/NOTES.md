@@ -114,6 +114,7 @@ python3 loadtest/loadtest.py --base http://127.0.0.1:8100 --students 5000 --exam
 
 ## Settings for production
 
+- **Secrets**: `PROCTORA_SECRET`, `FAIRPLAY_SECRET`, `FAIRPLAY_APP_KEY` and `DKUOJ_TOKEN` are hidden from the config's `repr()` output (they never appear in logs or debug prints). `FAIRPLAY_ADMIN_TEST_CODE` if set must be at least 12 random characters, or the server refuses to start.
 - **uvicorn**: one worker per vCPU (`WEB_CONCURRENCY`), `--proxy-headers --forwarded-allow-ips <nginx>` (Dockerfile does this), `--timeout-keep-alive 75` (longer than nginx's upstream keep-alive), `--backlog 4096`, `--no-access-log`. Always behind nginx or a load balancer: laptops connect to nginx, uvicorn only sees nginx's few kept-alive connections (direct, 5,000 laptops overflowed uvicorn's accept queue in test C).
 - **Pools per worker**: `DB_POOL_SIZE=5`, `DB_MAX_OVERFLOW=10` (the database is only touched by saves, events, starts and the live room: a few connections per worker are busy at a time). Budget: containers × workers × 15 < Postgres `max_connections` (the server refuses to start otherwise, `FAIRPLAY_DB_MAX_CONNECTIONS`). 12 workers = 180 → `max_connections=300` per school; for 3+ schools on one Postgres lower the overflow (`DB_MAX_OVERFLOW=5`) or add PgBouncer. `REDIS_MAX_CONNECTIONS` (200 per worker) is plenty; requests beyond it wait.
 - **`FAIRPLAY_MAX_INFLIGHT`** (128 per worker): API requests in progress at once; the rest wait in line. Sign-in and uploads are not counted.

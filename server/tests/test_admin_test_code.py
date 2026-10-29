@@ -15,7 +15,7 @@ from .test_access_code_login import NOT_VALID, URL, confirm, enter
 from .test_dkuoj_bridge import db, oj_settings, run
 from .test_dkuoj_bridge_v2 import fake  # noqa: F401  (fixture)
 
-DUMMY = "QZ7M4K2X"
+DUMMY = "QZ7M4K2XR9TD"
 SECRET_START = "STARTSECRET"
 SECRET_PROMPT = "PROMPT-SECRET-TEXT"
 SECRET_KEY = "KEY-SECRET-INDEX"
@@ -77,8 +77,8 @@ def test_right_code_confirms_then_issues_a_scoped_student_token(adm):
 
 
 def test_code_is_normalised_like_access_codes(adm):
-    assert enter(adm, "qz7m-4k2x").status_code == 200
-    assert enter(adm, " qz7m 4k2x ").status_code == 200
+    assert enter(adm, "qz7m-4k2x-r9td").status_code == 200
+    assert enter(adm, " qz7m 4k2x r9td ").status_code == 200
 
 
 def test_token_lives_at_most_four_hours(adm):

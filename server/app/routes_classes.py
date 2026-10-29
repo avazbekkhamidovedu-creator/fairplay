@@ -174,11 +174,16 @@ async def new_code(class_id: int, p: Principal = Depends(require_teacher),
 @teacher_router.post("/{class_id}/members")
 async def add_members(class_id: int, body: MembersIn, p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
-    """Add students by username (pasted list). Unknown names and teachers are reported."""
+    """Add students by username (pasted list). Only students this teacher already works with
+    (their classes, courses, exam lists) can be added; every other name, whether it exists on
+    the server or not, comes back in `unknown` so usernames cannot be probed. New students join
+    with the class code."""
+    from .routes_scan import teacher_student_ids
     c = await _own_class(session, class_id, p)
     wanted = list(dict.fromkeys(u.strip() for u in body.usernames if u.strip()))
     found = dict((await session.execute(
-        select(User.username, User.id).where(User.username.in_(wanted), User.role == "student"))).all())
+        select(User.username, User.id).where(User.username.in_(wanted), User.role == "student",
+                                             User.id.in_(teacher_student_ids(p.user_id))))).all())
     have = set((await session.execute(
         select(ClassMember.user_id).where(ClassMember.class_id == c.id))).scalars())
     new = [found[u] for u in wanted if u in found and found[u] not in have]

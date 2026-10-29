@@ -3,7 +3,7 @@ from sqlalchemy import delete, select
 
 from app.integrations.dkuoj import access_codes
 from app.integrations.dkuoj.models import ExamAccessCode, OjRosterEntry
-from app.models import Exam
+from app.models import Exam, User
 
 from .test_dkuoj_bridge import KEY, db, run
 from .test_dkuoj_bridge_v2 import V1, call, fake, oj  # noqa: F401  (fixtures)
@@ -256,3 +256,38 @@ def test_concurrent_creation_and_collision(oj, monkeypatch):
     monkeypatch.setattr(access_codes, "generate_code", lambda: next(queue))
     got = codes_of(oj)
     assert sorted(got.values()) == ["AAAAAA", "BBBBBB", "CCCCCC", "DDDDDD"]
+
+
+def _resync(c, fake, roster):
+    from datetime import timedelta
+    from app.timeutil import iso, utcnow
+    fake.roster = roster
+    fake.listing_updated = iso(utcnow() + timedelta(seconds=5))
+    run(c, now=utcnow() + timedelta(seconds=10))
+
+
+def _revoked(c):
+    async def q(s):
+        return sorted((await s.execute(select(ExamAccessCode.netid).where(
+            ExamAccessCode.revoked_at.is_not(None)))).scalars())
+    return db(c, q)
+
+
+def test_roster_sync_that_drops_a_student_revokes_the_code(oj, fake):
+    run(oj)
+    before = codes_of(oj)
+    full = list(fake.roster)
+    _resync(oj, fake, [p for p in full if p["username"] != "carol"])
+    assert _revoked(oj) == ["carol"]
+
+    async def lookup(s):
+        e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
+        return (await access_codes.lookup(s, secret(oj), e.id, before["carol"]),
+                await access_codes.lookup(s, secret(oj), e.id, before["alice"]))
+    gone, kept = db(oj, lookup)
+    assert gone is None and kept is not None
+
+    _resync(oj, fake, full)
+    after = codes_of(oj)
+    assert after["carol"] != before["carol"] and after["alice"] == before["alice"]
+    assert _revoked(oj) == []

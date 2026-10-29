@@ -112,7 +112,8 @@ MAX_TEACHER_STUDENTS = 5000
 
 def teacher_student_ids(teacher_id: int):
     """Audit L-11 (and S-03): the students a teacher works with -- members of their
-    classes, of their linked LMS courses, and anyone who took one of their exams.
+    classes, of their linked LMS courses, anyone who took one of their exams, and the
+    students on the lists of their exams (picked here or sent by the DKU OJ bridge).
     Never every student on the server."""
     from .models import CourseLink, LmsConnection, SchoolClass
     in_class = (select(ClassMember.user_id).join(SchoolClass, SchoolClass.id == ClassMember.class_id)
@@ -122,7 +123,13 @@ def teacher_student_ids(teacher_id: int):
                  .where(LmsConnection.teacher_id == teacher_id))
     took = (select(Attempt.student_id).join(Exam, Exam.id == Attempt.exam_id)
             .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
-    return in_class.union(in_course, took)
+    picked = (select(ExamRoster.user_id).join(Exam, Exam.id == ExamRoster.exam_id)
+              .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
+    from .integrations.dkuoj.models import OjEditor, OjRosterEntry
+    bridge = (select(OjRosterEntry.user_id).join(Exam, Exam.id == OjRosterEntry.exam_id)
+              .outerjoin(OjEditor, OjEditor.exam_id == Exam.id)
+              .where(or_(Exam.teacher_id == teacher_id, OjEditor.user_id == teacher_id)))
+    return in_class.union(in_course, took, picked, bridge)
 
 
 async def _all_students(session: AsyncSession, teacher_id: int) -> list[User]:
@@ -243,10 +250,11 @@ async def put_roster(exam_id: str, body: RosterIn, p: Principal = Depends(requir
     users = []
     if wanted:
         users = list((await session.execute(
-            select(User).where(User.username.in_(wanted), User.role == "student"))).scalars())
+            select(User).where(User.username.in_(wanted), User.role == "student",
+                               User.id.in_(teacher_student_ids(p.user_id))))).scalars())
         missing = sorted(set(wanted) - {u.username for u in users})
         if missing:
-            raise HTTPException(422, "Unknown students: " + ", ".join(missing[:10]))
+            raise HTTPException(422, "Not your students: " + ", ".join(missing[:10]))
     await session.execute(delete(ExamRoster).where(ExamRoster.exam_id == e.id))
     for u in users:
         session.add(ExamRoster(exam_id=e.id, user_id=u.id))

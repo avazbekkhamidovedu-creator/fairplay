@@ -118,8 +118,22 @@ def make_class(c, teacher_headers, name="Demo class", members=DEMO_STUDENTS):
     assert k.status_code == 201, k.text
     k = k.json()
     if members:
-        c.post(f"/api/classes/{k['id']}/members", json={"usernames": list(members)}, headers=teacher_headers)
+        add_members_directly(c, k["id"], list(members))
     return k
+
+
+def add_members_directly(c, class_id, usernames):
+    """Members the add-by-username route would refuse (students the teacher has no tie to yet)."""
+    from sqlalchemy import select
+    from app.db import get_database
+    from app.models import ClassMember, User
+
+    async def go():
+        async with get_database().sessionmaker() as s:
+            for uid in (await s.execute(select(User.id).where(User.username.in_(usernames)))).scalars():
+                s.add(ClassMember(class_id=class_id, user_id=uid))
+            await s.commit()
+    c.portal.call(go)
 
 
 @pytest.fixture(autouse=True)

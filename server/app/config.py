@@ -72,6 +72,9 @@ def _canvas_min_version(name: str, default: str) -> str:
     return value
 
 
+MIN_ADMIN_TEST_CODE = 12
+
+
 @dataclass
 class Settings:
     database_url: str = field(default_factory=lambda: async_db_url(os.environ.get(
@@ -80,7 +83,8 @@ class Settings:
     # Token/LMS sealing secret. Empty -> resolved at startup by check_secure(): a random
     # secret persisted under data/ in dev (FAIRPLAY_DEV=1), otherwise the server refuses to start.
     secret: str = field(default_factory=lambda: os.environ.get("PROCTORA_SECRET")
-                        or os.environ.get("FAIRPLAY_SECRET") or "")
+                        or os.environ.get("FAIRPLAY_SECRET") or "",
+                        repr=False)
     # FAIRPLAY_DEV=1: local laptop demo (Run Server.command). Relaxes the startup checks only.
     dev: bool = field(default_factory=lambda: _flag("FAIRPLAY_DEV", False))
     # Audit #1-#3: exams can only be started from the FairPlay app (signed proof) and every
@@ -91,7 +95,7 @@ class Settings:
     browser_gate: str = field(default_factory=lambda: (
         os.environ.get("FAIRPLAY_BROWSER_GATE", "headers").strip().lower() or "headers"))
     # HMAC keys compiled into the Mac app (comma-separated; several = key rotation).
-    app_keys: list[str] = field(default_factory=lambda: _list("FAIRPLAY_APP_KEY"))
+    app_keys: list[str] = field(default_factory=lambda: _list("FAIRPLAY_APP_KEY"), repr=False)
     # Extra browser origins allowed to call the API (the UI itself is same-origin).
     cors_origins: list[str] = field(default_factory=lambda: _list("FAIRPLAY_CORS_ORIGINS"))
     token_ttl_s: int = 43200                 # teachers: 12 h
@@ -221,6 +225,10 @@ class Settings:
                     "or set FAIRPLAY_DEV=1 for a local demo.")
             self.secret = _dev_secret(os.path.dirname(self.uploads_dir))
             log.warning("FAIRPLAY_DEV=1: using a random local secret stored in data/secret.key")
+        if self.admin_test_code and len(self.admin_test_code) < MIN_ADMIN_TEST_CODE:
+            raise RuntimeError(
+                f"FAIRPLAY_ADMIN_TEST_CODE is too short ({len(self.admin_test_code)} chars). Use at least "
+                f"{MIN_ADMIN_TEST_CODE} random characters, or unset it.")
         if not self.app_keys:
             if self.dev:
                 self.app_keys = [DEV_APP_KEY]

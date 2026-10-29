@@ -133,12 +133,29 @@ def test_too_early_code_says_when_the_exam_starts(oj, ready):
     assert enter(oj, ready["alice"], DEV_A).status_code == 200
 
 
-def test_too_early_is_not_counted_as_a_failure(oj, ready):
+def test_too_early_is_counted_like_a_failure(oj, ready):
     patch_exam(oj, scheduled_at=utcnow() + timedelta(hours=2))
-    for _ in range(40):
+    for _ in range(5):
         assert enter(oj, ready["alice"], DEV_A).json()["detail"] == "too_early"
-    soon(oj)
-    assert enter(oj, ready["alice"], DEV_A).status_code == 200
+    r = enter(oj, ready["alice"], DEV_A)
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1
+    assert enter(oj, ready["alice"], DEV_B).json()["detail"] == "too_early"
+
+
+def test_too_early_has_no_name_or_netid(oj, ready):
+    patch_exam(oj, scheduled_at=utcnow() + timedelta(hours=2))
+    r = enter(oj, ready["alice"], DEV_A)
+    assert set(r.json()) == {"detail", "starts_at"}
+    assert "alice" not in r.text.lower()
+
+
+def test_too_early_on_another_device_is_generic_and_flagged(oj, ready):
+    assert sign_in(oj, ready["alice"], DEV_A)
+    patch_exam(oj, scheduled_at=utcnow() + timedelta(hours=2), status="draft")
+    r = enter(oj, ready["alice"], DEV_B)
+    assert (r.status_code, r.json()) == (400, NOT_VALID)
+    assert db(oj, _events("access_code_second_device"))
+    assert enter(oj, ready["alice"], DEV_A).json()["detail"] == "too_early"
 
 
 def test_only_a_valid_code_hears_the_start_time(oj, ready):
@@ -401,3 +418,62 @@ def test_the_app_only_gate_covers_the_code_endpoints(tmp_path, static_dir, fake)
             r = c.request(method, path, headers=browser, json={})
             assert (r.status_code, r.json()) == (404, {"detail": "Not Found"}), path
             assert c.request(method, path, headers=app, json={}).status_code != 404, path
+
+
+def test_network_of_groups_ipv6_by_64():
+    from app.integrations.dkuoj.code_login import network_of
+    assert network_of("2001:db8:1:2:aaaa:bbbb:cccc:dddd") == network_of("2001:db8:1:2::1") == "2001:db8:1:2::/64"
+    assert network_of("2001:db8:1:3::1") != network_of("2001:db8:1:2::1")
+    assert network_of("::ffff:10.1.2.3") == "10.1.2.3"
+    assert network_of("10.1.2.3") == "10.1.2.3" and network_of("testclient") == "testclient"
+
+
+def test_ipv6_64_shares_one_failure_limit(oj, ready, monkeypatch):
+    from app.integrations.dkuoj import code_login
+    n = iter(range(1, 1000))
+    monkeypatch.setattr(code_login, "client_ip", lambda request: f"2001:db8:5:6:{next(n):x}::1")
+    for _ in range(30):
+        assert enter(oj, "AAAAAA").status_code == 400
+    assert enter(oj, ready["alice"]).status_code == 429
+    monkeypatch.setattr(code_login, "client_ip", lambda request: "2001:db8:7:7::1")
+    assert enter(oj, ready["alice"]).status_code == 200
+
+
+def test_global_failure_budget_spans_all_addresses(oj, ready, monkeypatch):
+    from app.integrations.dkuoj import code_login
+    monkeypatch.setattr(code_login, "GLOBAL_LIMITS", ((12, 600, 60), (50, 3600, 300)))
+    n = iter(range(1, 1000))
+    monkeypatch.setattr(code_login, "client_ip", lambda request: f"10.0.{next(n) // 250}.{next(n) % 250}")
+    for _ in range(12):
+        assert enter(oj, "AAAAAA").status_code == 400
+    r = enter(oj, ready["alice"])
+    assert r.status_code == 429 and 1 <= int(r.headers["Retry-After"]) <= 600
+    assert r.json()["detail"]["code"] == "too_many_codes"
+
+
+def test_a_big_class_with_typos_stays_under_the_global_budget(oj, ready, monkeypatch):
+    from app.integrations.dkuoj import code_login
+    n = iter(range(1, 100000))
+    monkeypatch.setattr(code_login, "client_ip", lambda request: f"10.{next(n) % 250}.{next(n) % 250}.1")
+    for _ in range(40):
+        assert enter(oj, "AAAAAA").status_code == 400
+    assert enter(oj, ready["alice"]).status_code == 200
+    assert code_login.GLOBAL_LIMITS[0][0] >= 300 and code_login.GLOBAL_LIMITS[1][0] >= 1000
+
+
+def test_global_window_slides(oj, ready, monkeypatch):
+    import asyncio
+    from app.integrations.dkuoj import code_login
+    from app.store import MemoryStore
+    monkeypatch.setattr(code_login, "GLOBAL_LIMITS", ((3, 600, 60),))
+    store = MemoryStore()
+
+    async def go():
+        t = [1_000_000.0]
+        monkeypatch.setattr(code_login.time, "time", lambda: t[0])
+        for _ in range(3):
+            await code_login._count_failure(store, [])
+        assert await code_login._global_wait(store, t[0]) >= 1
+        t[0] += 601
+        assert await code_login._global_wait(store, t[0]) == 0
+    asyncio.run(go())

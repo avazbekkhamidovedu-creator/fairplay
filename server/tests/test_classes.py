@@ -43,6 +43,10 @@ def test_teacher_creates_class_and_students_join(client):
 
 def test_add_and_remove_members_by_username(client):
     t = login(client, "teacher")
+    first = client.post("/api/classes", json={"name": "Intro"}, headers=t).json()
+    for who in ("alice", "bob"):       # students the teacher already works with: they joined a class
+        assert client.post("/api/student/classes/join", json={"code": _code(first)},
+                           headers=login(client, who)).status_code == 200
     k = client.post("/api/classes", json={"name": "Math"}, headers=t).json()
     r = client.post(f"/api/classes/{k['id']}/members", json={"usernames": ["alice", "bob", "nobody", "teacher", "alice"]},
                     headers=t).json()

@@ -50,8 +50,8 @@ def is_loopback(host: str) -> bool:
 @dataclass
 class DkuojConfig:
     url: str = ""
-    token: str = ""               # the token FairPlay signs with (the first of `tokens`)
-    tokens: list[str] = field(default_factory=list)    # every token a DKU OJ call may be signed with
+    token: str = field(default="", repr=False)               # the token FairPlay signs with (the first of `tokens`)
+    tokens: list[str] = field(default_factory=list, repr=False)    # every token a DKU OJ call may be signed with
     sync_seconds: int = 30
     delivery_rps: int = 10
     auth_retry_hours: int = 6     # 401 / 403 / 404 on a hand-in are retried this long, then dead

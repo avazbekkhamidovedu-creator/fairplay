@@ -134,10 +134,52 @@ async def sync_ping(call: BridgeCall = Depends(signed_call)):
     return {"ok": True, "queued": queued}
 
 
+NOT_CLASS_STAFF = "You are not linked to this class in FairPlay."
+
+
+async def _class_exam_ids(session: AsyncSession, class_id: int) -> list[str]:
+    since = utcnow() - timedelta(days=EXAM_LINK_DAYS)
+    exams = (await session.execute(select(Exam.id, Exam.external_meta).where(
+        Exam.source == "dkuoj", or_(Exam.status != "closed", Exam.updated_at >= since)))).all()
+    return [eid for eid, meta in exams
+            if any(isinstance(c, dict) and c.get("id") == class_id for c in (meta or {}).get("classes") or [])]
+
+
+async def _require_class_staff(session: AsyncSession, class_id: int, call: BridgeCall) -> None:
+    """The acting DKU OJ user must be tied to the class. A class FairPlay knows (a mirror
+    class, an exam of it, a login or log entry made by someone) admits only its owner, an
+    editor of one of its exams, or someone who already acted on it. A class FairPlay has
+    never seen is open to any acting user that is not a student account (the first login
+    is how a class reaches FairPlay); that user is then recorded on it."""
+    acting = (call.acting_user or "").strip()
+    if not acting:
+        raise HTTPException(403, NOT_CLASS_STAFF)
+    who = await _user_by_netid(session, acting, role="teacher")
+    if who is not None and who.role == "student":
+        raise HTTPException(403, NOT_CLASS_STAFF)
+    teacher = who if who is not None and who.role == "teacher" else None
+    mirror = (await session.execute(select(SchoolClass.teacher_id).where(
+        SchoolClass.external_ref == f"dkuoj:{class_id}"))).scalars().all()
+    if teacher is not None and teacher.id in mirror:
+        return
+    exam_ids = await _class_exam_ids(session, class_id)
+    if teacher is not None and exam_ids and (await session.execute(select(OjEditor.id).where(
+            OjEditor.exam_id.in_(exam_ids), OjEditor.user_id == teacher.id).limit(1))).first():
+        return
+    made = set((await session.execute(select(ClassLogin.created_by).where(ClassLogin.class_id == class_id))).scalars())
+    acted = set((await session.execute(select(ClassLoginEvent.actor).where(
+        ClassLoginEvent.class_id == class_id))).scalars())
+    if acting in made or acting in acted:
+        return
+    if mirror or exam_ids or (made | acted) - {None, ""}:
+        raise HTTPException(403, NOT_CLASS_STAFF)
+
+
 # ---------------------------------------------------------------- class logins / students
 @router.post("/classes/{class_id}/login")
 async def class_login_create(class_id: int, request: Request, call: BridgeCall = Depends(signed_call),
                              session: AsyncSession = Depends(get_session)):
+    await _require_class_staff(session, class_id, call)
     class_name = _str(call.data, "class_name") or f"Class {class_id}"
     course_name = _str(call.data, "course_name")
     cl, password = await create_class_login(session, request.app.state.settings, class_id, class_name,
@@ -150,6 +192,7 @@ async def class_login_create(class_id: int, request: Request, call: BridgeCall =
 @router.delete("/classes/{class_id}/login")
 async def class_login_delete(class_id: int, call: BridgeCall = Depends(signed_call),
                              session: AsyncSession = Depends(get_session)):
+    await _require_class_staff(session, class_id, call)
     n = await disable_logins(session, class_id, "stopped", utcnow())
     if n:
         await add_event(session, class_id, "login_stopped", actor=call.acting_user)
@@ -210,11 +253,7 @@ async def class_user_ids(session: AsyncSession, class_id: int, netids: set[str] 
     ids |= set((await session.execute(select(ClassMember.user_id).join(
         SchoolClass, SchoolClass.id == ClassMember.class_id).where(
         SchoolClass.external_ref == f"dkuoj:{class_id}"))).scalars())
-    since = utcnow() - timedelta(days=EXAM_LINK_DAYS)
-    exams = (await session.execute(select(Exam.id, Exam.external_meta).where(
-        Exam.source == "dkuoj", or_(Exam.status != "closed", Exam.updated_at >= since)))).all()
-    mine = [eid for eid, meta in exams
-            if any(isinstance(c, dict) and c.get("id") == class_id for c in (meta or {}).get("classes") or [])]
+    mine = await _class_exam_ids(session, class_id)
     if mine:
         ids |= set((await session.execute(select(OjRosterEntry.user_id).where(
             OjRosterEntry.exam_id.in_(mine)))).scalars())
@@ -227,6 +266,7 @@ async def class_status(class_id: int, request: Request, call: BridgeCall = Depen
     """The class's login (with its password: the professor may copy it again), the login
     history (newest first, at most HISTORY_MAX, the active one included) and its students.
     no-store: the answer carries a password."""
+    await _require_class_staff(session, class_id, call)
     now = utcnow()
     logins = (await session.execute(select(ClassLogin).where(ClassLogin.class_id == class_id)
                                     .order_by(ClassLogin.id.desc()).limit(HISTORY_MAX))).scalars().all()
@@ -275,6 +315,7 @@ async def student_reset(netid: str, call: BridgeCall = Depends(signed_call),
     class_id = call.data.get("class_id")
     if not isinstance(class_id, int) or isinstance(class_id, bool):
         raise HTTPException(400, "class_id must be a number")
+    await _require_class_staff(session, class_id, call)
     netid = netid.strip()[:64]
     u = await _user_by_netid(session, netid)
     if u is None:
@@ -322,6 +363,15 @@ async def _editor_exam(session: AsyncSession, key: str, call: BridgeCall, requir
     if not allowed:
         raise HTTPException(403, NOT_EDITOR)
     return e
+
+
+async def _require_not_student(session: AsyncSession, call: BridgeCall) -> None:
+    """An exam not synced yet has no editors to check. The acting user must at least be named
+    and must not be a student account."""
+    acting = (call.acting_user or "").strip()
+    who = await _user_by_netid(session, acting, role="teacher") if acting else None
+    if not acting or (who is not None and who.role == "student"):
+        raise HTTPException(403, NOT_EDITOR)
 
 
 def _num(x) -> int | float:
@@ -484,6 +534,7 @@ async def _view(session: AsyncSession, e: Exam) -> JSONResponse:
 async def exam_get(key: str, call: BridgeCall = Depends(signed_call), session: AsyncSession = Depends(get_session)):
     e = await _editor_exam(session, key, call, required=False)
     if e is None:
+        await _require_not_student(session, call)
         return JSONResponse(_not_synced(await _pending(session, key)), headers={"Cache-Control": "no-store"})
     return await _view(session, e)
 
@@ -702,6 +753,7 @@ async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
     sent, ov = _settings_body(call.data, key)
     e = await _exam_by_key(session, key)
     if e is None:
+        await _require_not_student(session, call)
         pending = await _store_pending(session, key, sent, ov)
         log.info("DKU OJ exam %s (not synced yet): FairPlay settings %s kept by %s", key, ", ".join(sent),
                  call.acting_user)
