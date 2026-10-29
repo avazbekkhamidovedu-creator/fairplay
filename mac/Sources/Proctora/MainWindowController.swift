@@ -67,6 +67,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     private lazy var deviceTest = DeviceTestSession(clock: { ProcessInfo.processInfo.systemUptime }, effects: self)
     private var deviceTestTimer: Timer?
     private var deviceTestTapOn = false
+    private let homework = HomeworkLoginCoordinator()
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -374,6 +375,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         DebugLog.log("bridge", "page -> app: \(action)")
 
+        if ["lock", "prelock", "session", "openExternal", "quitApps", "deviceTestStart"].contains(action) { homework.dismiss() }
         if ["lock", "prelock", "session", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
 
         switch action {
@@ -386,6 +388,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                                             fromExamPage: fromExamPage, websiteExam: external.isActive))
         case "deviceTestLeave":
             deviceTest.end(.leave)
+        case "openHomeworkLogin":
+            let lock = LockdownController.shared
+            homework.open(body: body, busy: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil || external.isActive,
+                          deviceTestRunning: deviceTest.isRunning) { [weak self] in self?.send($0) }
+        case "clearHomeworkLogin":
+            homework.clear()
         case "flushEvents":
             flushEventQueue()
         case "fileRefused":
@@ -628,7 +636,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                                     "platform": "mac",
                                     "sealed_pending": Sealed.hasPending,
                                     "prelock": LockdownController.shared.isPreLock,
-                                    "deviceTest": true]
+                                    "deviceTest": true,
+                                    "homeworkLogin": true]
         // 2026-10-22: a newer release the app can install (Updater.swift); never while locked.
         if let update = Updater.shared.available, !LockdownController.shared.isLocked {
             state["update"] = ["version": update.version]

@@ -525,6 +525,7 @@ final class ExamViewController: UIViewController, LockSurface,
     // MARK: - Device test (preview of the exam screen: no lock, no network, no attempt)
 
     private var deviceTestImmersive = false
+    private let homework = HomeworkLoginCoordinator()
     private var deviceTestTimer: Timer?
     private var deviceTestObservers: [NSObjectProtocol] = []
 
@@ -582,6 +583,7 @@ final class ExamViewController: UIViewController, LockSurface,
             && originPort == (server.port ?? defaultPort(server.scheme))
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         if action == "deviceTestStart" {
+            homework.dismiss()
             let lock = LockdownController.shared
             deviceTest.start(seconds: body["seconds"], context: DeviceTestContext(
                 fromServerPage: fromServer,
@@ -593,10 +595,18 @@ final class ExamViewController: UIViewController, LockSurface,
         if action == "log" { return }
         DebugLog.log("bridge", "page -> app: \(action)")
         if ["lock", "session", "prelock", "openExternal"].contains(action) { deviceTest.end(.leave) }
+        if ["lock", "session", "prelock", "openExternal"].contains(action) { homework.dismiss() }
 
         switch action {
         case "deviceTestLeave":
             deviceTest.end(.leave)
+        case "openHomeworkLogin":
+            let lock = LockdownController.shared
+            homework.open(body: body, busy: lock.isLocked || lock.lockInFlight || lock.preLockInFlight
+                                            || AppSession.shared.exam != nil || external.isActive,
+                          deviceTestRunning: deviceTest.isRunning, from: self) { [weak self] in self?.send($0) }
+        case "clearHomeworkLogin":
+            homework.clear()
         case "hello":
             sendState()
         case "flushEvents":
@@ -789,7 +799,7 @@ final class ExamViewController: UIViewController, LockSurface,
         send(["type": "state", "locked": LockdownController.shared.isLocked, "trusted": true,
               "version": Config.version, "app_version": Config.version, "platform": "ipad",
               "sealed_pending": Sealed.hasPending, "prelock": LockdownController.shared.isPreLock,
-              "deviceTest": true])
+              "deviceTest": true, "homeworkLogin": true])
     }
 
     private var eventsReady = false
