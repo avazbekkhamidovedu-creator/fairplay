@@ -49,10 +49,16 @@ class Database:
                 await conn.execute(text("SELECT pg_advisory_xact_lock(724001)"))
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(_add_missing_columns)
+            await conn.run_sync(_upgrade_delivery_unique)
             await conn.run_sync(_clear_legacy_canvas_codes)
 
     async def dispose(self) -> None:
         await self.engine.dispose()
+
+
+def _upgrade_delivery_unique(conn) -> None:
+    from .integrations.outbox import _upgrade_unique
+    _upgrade_unique(conn)
 
 
 def _clear_legacy_canvas_codes(conn) -> None:

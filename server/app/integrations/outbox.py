@@ -1,8 +1,6 @@
 """Generic outbox helpers (rows of integrations.models.ExternalDelivery)."""
 from __future__ import annotations
 
-import asyncio
-
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,8 +10,6 @@ from .models import ExternalDelivery
 
 REOPENED = "attempt_reopened"
 UQ = "uq_delivery_attempt_revision"
-_schema_ready = False
-_schema_lock = asyncio.Lock()
 
 
 async def enqueue(session: AsyncSession, source: str, aid: str, exam_id: str, now) -> None:
@@ -84,10 +80,11 @@ def _upgrade_unique(conn) -> None:
         return
     old = [n for n, cols in have.items() if cols == ["attempt_id"]]
     if conn.dialect.name == "postgresql":
+        conn.execute(text("SET LOCAL lock_timeout = '15s'"))
+        conn.execute(text(f"ALTER TABLE {table.name} ADD CONSTRAINT {UQ} UNIQUE (attempt_id, revision)"))
         for n in old:
             conn.execute(text(f'ALTER TABLE {table.name} DROP CONSTRAINT IF EXISTS "{n}"'))
             conn.execute(text(f'DROP INDEX IF EXISTS "{n}"'))
-        conn.execute(text(f"ALTER TABLE {table.name} ADD CONSTRAINT {UQ} UNIQUE (attempt_id, revision)"))
         return
     if not old:
         conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {UQ} ON {table.name} (attempt_id, revision)"))
@@ -104,16 +101,4 @@ def _upgrade_unique(conn) -> None:
 
 
 async def ensure_revision_schema(session: AsyncSession) -> None:
-    """Called before the first reopen of this process; a no-op once the table is current."""
-    global _schema_ready
-    if _schema_ready:
-        return
-    async with _schema_lock:
-        if _schema_ready:
-            return
-        conn = await session.connection()
-        if conn.dialect.name == "postgresql":
-            await conn.execute(text("SELECT pg_advisory_xact_lock(724002)"))
-        await conn.run_sync(_upgrade_unique)
-        await session.commit()
-        _schema_ready = True
+    """Kept for callers: the table is upgraded at startup (Database.create_all), never during a request."""
