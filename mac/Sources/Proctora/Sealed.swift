@@ -75,13 +75,34 @@ enum Sealed {
     /// What to do with a file after an upload answer.
     enum Outcome: Equatable { case done, keep, reject }
 
-    static func outcome(status: Int?) -> Outcome {
+    static func outcome(status: Int?, borrowed: Bool = false) -> Outcome {
+        if borrowed, let status, status != 200, status < 500 { return .keep }
         switch status {
         case 200?: return .done
         case nil, 401?, 403?, 408?, 429?: return .keep      // offline, token expired, busy
         case let s? where s >= 500: return .keep
         default: return .reject                             // the server said no: keep a copy aside
         }
+    }
+
+    static func tokenUserId(_ token: String?) -> String? {
+        guard let token, let head = token.split(separator: ".", omittingEmptySubsequences: false).first else { return nil }
+        var b64 = head.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        b64 += String(repeating: "=", count: (4 - b64.count % 4) % 4)
+        guard let data = Data(base64Encoded: b64), let text = String(data: data, encoding: .utf8),
+              let uid = text.split(separator: ":", omittingEmptySubsequences: false).first,
+              (1...18).contains(uid.count), uid.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return String(uid)
+    }
+
+    /// The page token is used only for the user the file was sealed by. `borrowed` means a
+    /// token the file does not vouch for, so no answer from it may set the file aside.
+    static func chooseToken(page: String?, stored: String?) -> (token: String, matches: Bool, borrowed: Bool) {
+        let own = stored ?? ""
+        guard let page, !page.isEmpty else { return (own, false, false) }
+        if own.isEmpty { return (page, false, true) }
+        if let a = tokenUserId(page), a == tokenUserId(own) { return (page, true, false) }
+        return (own, false, false)
     }
 
     // MARK: - Upload
@@ -127,10 +148,10 @@ enum Sealed {
             DebugLog.log("sealed", "unreadable sealed file \(url.lastPathComponent): set aside")
             moveAside(url); done(.reject); return
         }
-        let useToken = token ?? (file["token"] as? String) ?? ""
-        Net.request("POST", path: "api/student/attempts/\(aid)/sealed-submit", token: useToken, appSession: nil,
+        let pick = chooseToken(page: token, stored: file["token"] as? String)
+        Net.request("POST", path: "api/student/attempts/\(aid)/sealed-submit", token: pick.token, appSession: nil,
                     body: ["payload": payload, "answers_json": answers, "proof": proof]) { status, json in
-            let o = outcome(status: status)
+            let o = outcome(status: status, borrowed: pick.borrowed)
             DebugLog.log("sealed", "upload \(aid): HTTP \(status.map(String.init) ?? "none") -> \(o)")
             switch o {
             case .done:
@@ -140,9 +161,9 @@ enum Sealed {
                 DebugLog.log("sealed", "server refused \(aid): \(json ?? [:])")
             case .keep:
                 // A fresh token from the page next time: remember it in the file.
-                if let token, token != (file["token"] as? String) {
+                if pick.matches, pick.token != (file["token"] as? String) {
                     var f = file
-                    f["token"] = token
+                    f["token"] = pick.token
                     if let d = try? JSONSerialization.data(withJSONObject: f) { try? d.write(to: url, options: .atomic) }
                 }
             }

@@ -812,6 +812,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             decisionHandler(.cancel)
             return
         }
+        if external.isCanvas, !(navigationAction.targetFrame?.isMainFrame ?? true), !isServerURL(url),
+           external.allows(url), external.blocksExamHostFrame(url) {
+            DebugLog.log("web", "frame BLOCKED (canvas scope): \(url.host ?? "")\(url.path)")
+            decisionHandler(.cancel)
+            return
+        }
         if ownLocalPage || isServerURL(url) || external.allows(url) {
             if external.isCanvas, !(navigationAction.targetFrame?.isMainFrame ?? true) {
                 external.checkFrameFinish(url)

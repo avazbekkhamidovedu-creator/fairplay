@@ -266,7 +266,7 @@ enum SystemChecks {
 
     /// From CGWindowListCopyWindowInfo: on-screen windows of other processes whose layer is
     /// at or above ours (our locked window sits at the maximum level, so only a window at
-    /// that same level can be drawn over it), visible and bigger than a few points.
+    /// that same level can be drawn over it), and visible, whatever their size.
     static func overlays(in list: [[String: Any]], myPid: pid_t, myLevel: Int) -> [Overlay] {
         var out: [Overlay] = []
         for w in list {
@@ -274,10 +274,6 @@ enum SystemChecks {
                   let layer = (w[kCGWindowLayer as String] as? NSNumber)?.intValue, layer >= myLevel else { continue }
             let alpha = (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
             guard alpha > 0.01 else { continue }
-            if let b = w[kCGWindowBounds as String] as? [String: Any] {
-                let wd = (b["Width"] as? NSNumber)?.doubleValue ?? 0, ht = (b["Height"] as? NSNumber)?.doubleValue ?? 0
-                guard wd >= 20, ht >= 20 else { continue }
-            }
             let owner = (w[kCGWindowOwnerName as String] as? String) ?? "pid \(pid)"
             if !out.contains(where: { $0.pid == pid }) { out.append(Overlay(pid: pid, owner: owner)) }
         }
@@ -309,7 +305,11 @@ enum SystemChecks {
         guard inputSourceAllowed(id) else { return false }
         guard let bPtr = TISGetInputSourceProperty(src, kTISPropertyBundleID) else { return true }
         let bundleId = Unmanaged<CFString>.fromOpaque(bPtr).takeUnretainedValue() as String
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return true }
+        return inputMethodBundleIsApple(NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId))
+    }
+
+    static func inputMethodBundleIsApple(_ url: URL?) -> Bool {
+        guard let url else { return false }
         return url.path.hasPrefix("/System/")
     }
 

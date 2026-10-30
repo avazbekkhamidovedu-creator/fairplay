@@ -85,6 +85,7 @@ final class ExternalExamController {
     private var sendingEvents = false
     private var finishing = false
     private var finishWork: DispatchWorkItem?
+    private var lastMainCommit: URL?
     private var finishFromPopup = false
     private var popupObservation: NSKeyValueObservation?
     private var popupView: WKWebView?
@@ -198,6 +199,7 @@ final class ExternalExamController {
 
         stopTimers()
         finishWork?.cancel(); finishWork = nil
+        lastMainCommit = nil
         closePopup()
         finishing = false
         phase = .lobby
@@ -291,16 +293,22 @@ final class ExternalExamController {
     /// exam finishes if the same attempt is still running.
     func checkFrameFinish(_ url: URL) {
         guard let session, session.canvas, !finishing, finishWork == nil, allows(url),
-              finishHit(url, session: session) else { return }
+              mainFrameOnExamItem(session), finishHit(url, session: session) else { return }
         let aid = session.attemptId
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.finishWork = nil
-            guard let current = self.session, current.attemptId == aid, !self.finishing, self.armed else { return }
+            guard let current = self.session, current.attemptId == aid, !self.finishing, self.armed,
+                  self.mainFrameOnExamItem(current) else { return }
             self.finish(reason: "finish_url")
         }
         finishWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    private func mainFrameOnExamItem(_ session: Session) -> Bool {
+        guard let scope = session.scope, let url = webView?.url ?? lastMainCommit else { return false }
+        return CanvasNavigation.isUnderItem(url, scope: scope)
     }
 
     func isFinishPage(_ url: URL) -> Bool {
@@ -310,7 +318,7 @@ final class ExternalExamController {
 
     private func finishHit(_ url: URL, session: Session) -> Bool {
         if session.canvas {
-            return armed && CanvasFinish.matches(url, regex: session.finishRegex)
+            return armed && CanvasFinish.matches(url, regex: session.finishRegex, scope: session.scope)
         }
         if let needle = session.finishContains { return url.absoluteString.contains(needle) }
         return false
@@ -487,7 +495,7 @@ final class ExternalExamController {
     /// `mainFrame` false for frames inside a page: the restricted Canvas browser applies to
     /// main-frame navigations only.
     func childAllows(_ url: URL, mainFrame: Bool = true) -> Bool {
-        isCanvas && (CanvasPolicy.isBlank(url) || (allows(url) && (!mainFrame || !blocksMainFrame(url))))
+        isCanvas && (CanvasPolicy.isBlank(url) || (allows(url) && !(mainFrame ? blocksMainFrame(url) : blocksExamHostFrame(url))))
     }
 
     /// During a Canvas exam no page may open any page of the exam server: it could end the exam or
@@ -505,6 +513,10 @@ final class ExternalExamController {
     func blocksMainFrame(_ url: URL) -> Bool {
         guard let session, session.canvas, let scope = session.scope else { return false }
         return CanvasNavigation.decide(url: url, examHost: examHost, scope: scope, phase: phase) == .block
+    }
+
+    func blocksExamHostFrame(_ url: URL) -> Bool {
+        url.host?.lowercased() == examHost && blocksMainFrame(url)
     }
 
     func allowsMainFrame(_ url: URL) -> Bool {
@@ -564,6 +576,7 @@ final class ExternalExamController {
     func canvasCommitted(_ url: URL?) {
         guard let session, session.canvas, let url, url.scheme?.lowercased() == "https" else { return }
         guard let scope = session.scope else { return }
+        lastMainCommit = url
         if CanvasNavigation.isSignIn(url: url, examHost: examHost) { signInSeen = true }
         if !firstCommitSeen {
             firstCommitSeen = true

@@ -219,7 +219,6 @@ enum CanvasNavigation {
             if inCourse(segs, scope), segs.count >= 3, openBookRoots.contains(segs[2]) {
                 return isDownload(segs) ? .block : .allow
             }
-            if segs.first == "files" { return isDownload(segs) ? .block : .allow }
             return .block
         }
     }
@@ -500,6 +499,16 @@ enum CanvasFinish {
             contexts[contexts.count - 1] = Item(kind: kind, open: q.open)
             i = q.present ? q.next : i + length
         }
+        return true
+    }
+
+    /// A finish page under /courses/ must belong to the exam's own course and item. Pages on other
+    /// paths (New Quizzes frames) are tied to the exam by the main-frame check instead.
+    static func matches(_ url: URL, regex: NSRegularExpression?, scope: CanvasScope?) -> Bool {
+        guard matches(url, regex: regex) else { return false }
+        guard let scope else { return true }
+        guard let segs = CanvasNavigation.segments(url) else { return false }
+        if segs.first == "courses" { return CanvasNavigation.isUnderItem(segs, scope: scope) }
         return true
     }
 
