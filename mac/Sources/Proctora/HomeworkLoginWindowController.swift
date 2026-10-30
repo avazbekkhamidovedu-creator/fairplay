@@ -1,41 +1,52 @@
 import AppKit
 import WebKit
 
-/// Owns the one homework sign-in window (HomeworkLogin.swift has the rules). MainWindowController
-/// only forwards the two bridge actions to `open` / `clear` and calls `dismiss` when an exam starts.
+/// Owns the one homework sign-in panel (HomeworkLogin.swift has the rules). The panel is a view INSIDE
+/// the main window, above the page web view and below the blocking and permission screens.
+/// MainWindowController forwards the two bridge actions to `open` / `clear`, tells it when a cover
+/// is up (`setHeld`) and calls `dismiss` when a lock, session or device test starts.
 final class HomeworkLoginCoordinator {
-    private var window: HomeworkLoginWindowController?
+    private var panel: HomeworkLoginPanel?
+    private var held = false
 
-    func open(body: [String: Any], busy: Bool, deviceTestRunning: Bool, send: @escaping ([String: Any]) -> Void) {
-        let state = body["state"] as? String
-        if let text = HomeworkLogin.refusal(examActive: busy, deviceTestRunning: deviceTestRunning) {
-            send(HomeworkLogin.message(state: state, outcome: .failed(text)))
-            return
-        }
-        guard window == nil else {
-            window?.bringToFront()
-            send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
-            return
-        }
-        guard let login = HomeworkLogin(body: body) else {
-            send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
-            return
-        }
-        let controller = HomeworkLoginWindowController(login: login) { [weak self] outcome in
-            self?.window = nil
-            if let outcome { send(login.message(for: outcome)) }
-        }
-        window = controller
-        controller.show()
+    var isOpen: Bool { panel != nil }
+
+    func setHeld(_ on: Bool) {
+        held = on
+        panel?.isHidden = on
+        if !on { panel?.focusPage() }
     }
 
-    /// Sign-out: close the window without an answer and wipe its data store.
-    func clear() { window?.end(nil); window = nil }
+    func open(body: [String: Any], busy: Bool, deviceTestRunning: Bool, container: NSView?, above: NSView?,
+              send: @escaping ([String: Any]) -> Void) {
+        let state = body["state"] as? String
+        let login = HomeworkLogin(body: body)
+        switch HomeworkPanelPolicy.open(examActive: busy, deviceTestRunning: deviceTestRunning,
+                                        panelOpen: panel != nil, parsed: login != nil && container != nil) {
+        case .refuse(let text):
+            send(HomeworkLogin.message(state: state, outcome: .failed(text)))
+            return
+        case .start:
+            break
+        }
+        guard let login, let container else { return }
+        let view = HomeworkLoginPanel(login: login, frame: container.bounds) { [weak self] outcome in
+            self?.panel = nil
+            if let outcome { send(login.message(for: outcome)) }
+        }
+        container.addSubview(view, positioned: .above, relativeTo: above)
+        panel = view
+        view.isHidden = held
+        view.begin()
+    }
+
+    /// Sign-out: close the panel without an answer and wipe its data store.
+    func clear() { panel?.end(nil); panel = nil }
 
     func dismiss() { clear() }
 }
 
-final class HomeworkLoginWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
+final class HomeworkLoginPanel: NSView, WKNavigationDelegate, WKUIDelegate {
 
     private var login: HomeworkLogin
     private var webView: ExamWebView?
@@ -44,23 +55,19 @@ final class HomeworkLoginWindowController: NSWindowController, NSWindowDelegate,
     private let noteLabel = NSTextField(labelWithString: "")
     private var completion: ((HomeworkLogin.Outcome?) -> Void)?
 
-    init(login: HomeworkLogin, completion: @escaping (HomeworkLogin.Outcome?) -> Void) {
+    init(login: HomeworkLogin, frame: NSRect, completion: @escaping (HomeworkLogin.Outcome?) -> Void) {
         self.login = login
         self.completion = completion
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 720),
-                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                           backing: .buffered, defer: false)
-        win.title = "Sign in to DKU OJ"
-        win.isReleasedWhenClosed = false
-        win.minSize = NSSize(width: 400, height: 480)
-        super.init(window: win)
-        win.delegate = self
-        build(in: win)
+        super.init(frame: frame)
+        autoresizingMask = [.width, .height]
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        build()
     }
 
     required init?(coder: NSCoder) { nil }
 
-    private func build(in win: NSWindow) {
+    private func build() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -84,59 +91,53 @@ final class HomeworkLoginWindowController: NSWindowController, NSWindowDelegate,
         noteLabel.textColor = .systemRed
         noteLabel.alignment = .right
         noteLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let strip = NSStackView(views: [hostLabel, noteLabel])
+        let close = NSButton(title: "Close", target: self, action: #selector(closePressed))
+        close.bezelStyle = .rounded
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let strip = NSStackView(views: [hostLabel, spacer, noteLabel, close])
         strip.orientation = .horizontal
         strip.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         strip.wantsLayer = true
         strip.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
 
-        let content = NSView()
         for v in [strip, wv] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(v)
+            addSubview(v)
         }
         NSLayoutConstraint.activate([
-            strip.topAnchor.constraint(equalTo: content.topAnchor),
-            strip.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            strip.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            strip.topAnchor.constraint(equalTo: topAnchor),
+            strip.leadingAnchor.constraint(equalTo: leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: trailingAnchor),
             wv.topAnchor.constraint(equalTo: strip.bottomAnchor),
-            wv.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            wv.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            wv.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            wv.leadingAnchor.constraint(equalTo: leadingAnchor),
+            wv.trailingAnchor.constraint(equalTo: trailingAnchor),
+            wv.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        win.contentView = content
     }
 
-    func show() {
-        window?.center()
-        showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    func begin() {
         hostLabel.stringValue = HomeworkLogin.displayHost(login.startURL)
         webView?.load(URLRequest(url: login.startURL))
+        focusPage()
     }
 
-    func bringToFront() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
+    func focusPage() { window?.makeFirstResponder(webView) }
 
-    /// Close, wipe the data store and answer once. nil = no answer (sign-out, exam start).
+    @objc private func closePressed() { end(.cancelled) }
+
+    /// Leave, wipe the data store and answer once. nil = no answer (sign-out, exam start).
     func end(_ outcome: HomeworkLogin.Outcome?) {
         let done = completion
         completion = nil
-        window?.delegate = nil
         webView?.navigationDelegate = nil
         webView?.uiDelegate = nil
         webView?.stopLoading()
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
         webView?.removeFromSuperview()
         webView = nil
-        window?.close()
+        removeFromSuperview()
         done?(outcome)
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        if completion != nil { end(.cancelled) }
     }
 
     private func show(note: String) { noteLabel.stringValue = note }

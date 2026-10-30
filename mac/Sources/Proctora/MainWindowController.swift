@@ -377,7 +377,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         DebugLog.log("bridge", "page -> app: \(action)")
 
-        if ["lock", "prelock", "session", "openExternal", "quitApps", "deviceTestStart"].contains(action) { homework.dismiss() }
+        if HomeworkPanelPolicy.closes(on: action) { homework.dismiss() }
         if ["prelock", "openExternal", "quitApps", "seal"].contains(action) { box.close() }
         if action == "session", (body["attempt_id"] as? String) != AppSession.shared.exam?.attemptId { box.close() }
         if ["lock", "prelock", "session", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
@@ -395,7 +395,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         case "openHomeworkLogin":
             let lock = LockdownController.shared
             homework.open(body: body, busy: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil || external.isActive,
-                          deviceTestRunning: deviceTest.isRunning) { [weak self] in self?.send($0) }
+                          deviceTestRunning: deviceTest.isRunning, container: window?.contentView, above: webView) { [weak self] in self?.send($0) }
         case "clearHomeworkLogin":
             homework.clear()
         case "open_box":
@@ -1314,7 +1314,11 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         updateBoxHold()
     }
 
-    private func updateBoxHold() { box.setHeld(blockingView != nil || permissionView != nil) }
+    private func updateBoxHold() {
+        let covered = HomeworkPanelPolicy.hidden(blockingShown: blockingView != nil, permissionShown: permissionView != nil)
+        box.setHeld(covered)
+        homework.setHeld(covered)
+    }
 
     @objc private func blockingButtonPressed() {
         blockingAction?()

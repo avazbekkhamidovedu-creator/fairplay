@@ -2,44 +2,63 @@ import UIKit
 import WebKit
 import FairPlayCore
 
-/// The homework sign-in sheet (FairPlayCore HomeworkLogin has the rules). ExamViewController only
-/// forwards the two bridge actions to `open` / `clear` and calls `dismiss` when an exam starts.
+/// Owns the one homework sign-in panel (FairPlayCore HomeworkLogin has the rules). The panel is a view
+/// INSIDE the exam screen, above the page web view and below the blocking screen and privacy cover.
+/// ExamViewController forwards the two bridge actions to `open` / `clear`, tells it when a cover is
+/// up (`setHeld`) and calls `dismiss` when a lock, session or device test starts.
 @MainActor
 final class HomeworkLoginCoordinator {
-    private weak var sheet: HomeworkLoginViewController?
+    private var panel: HomeworkLoginPanel?
+    private var held = false
 
-    func open(body: [String: Any], busy: Bool, deviceTestRunning: Bool, from presenter: UIViewController,
-              send: @escaping ([String: Any]) -> Void) {
-        let state = body["state"] as? String
-        if let text = HomeworkLogin.refusal(examActive: busy, deviceTestRunning: deviceTestRunning) {
-            send(HomeworkLogin.message(state: state, outcome: .failed(text)))
-            return
-        }
-        guard sheet == nil else {
-            send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
-            return
-        }
-        guard let login = HomeworkLogin(body: body) else {
-            send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
-            return
-        }
-        let vc = HomeworkLoginViewController(login: login) { outcome in
-            if let outcome { send(login.message(for: outcome)) }
-        }
-        sheet = vc
-        presenter.present(vc, animated: true)
+    var isOpen: Bool { panel != nil }
+
+    func setHeld(_ on: Bool) {
+        held = on
+        panel?.isHidden = on
     }
 
-    /// Sign-out or an exam starting: close the sheet without an answer and wipe its data store.
+    func open(body: [String: Any], busy: Bool, deviceTestRunning: Bool, container: UIView, above: UIView,
+              top: NSLayoutYAxisAnchor, raise: () -> Void, send: @escaping ([String: Any]) -> Void) {
+        let state = body["state"] as? String
+        let login = HomeworkLogin(body: body)
+        switch HomeworkPanelPolicy.open(examActive: busy, deviceTestRunning: deviceTestRunning,
+                                        panelOpen: panel != nil, parsed: login != nil) {
+        case .refuse(let text):
+            send(HomeworkLogin.message(state: state, outcome: .failed(text)))
+            return
+        case .start:
+            break
+        }
+        guard let login else { return }
+        let view = HomeworkLoginPanel(login: login) { [weak self] outcome in
+            self?.panel = nil
+            if let outcome { send(login.message(for: outcome)) }
+        }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.insertSubview(view, aboveSubview: above)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: top),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        raise()
+        panel = view
+        view.isHidden = held
+        view.begin()
+    }
+
+    /// Sign-out or an exam starting: close the panel without an answer and wipe its data store.
     func clear() {
-        sheet?.end(nil)
-        sheet = nil
+        panel?.end(nil)
+        panel = nil
     }
 
     func dismiss() { clear() }
 }
 
-final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
+final class HomeworkLoginPanel: UIView, WKNavigationDelegate, WKUIDelegate {
 
     private var login: HomeworkLogin
     private var webView: WKWebView?
@@ -47,22 +66,18 @@ final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate,
     private let hostLabel = UILabel()
     private let noteLabel = UILabel()
     private var completion: ((HomeworkLogin.Outcome?) -> Void)?
-    private var ended = false
 
     init(login: HomeworkLogin, completion: @escaping (HomeworkLogin.Outcome?) -> Void) {
         self.login = login
         self.completion = completion
-        super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .fullScreen
+        super.init(frame: .zero)
+        backgroundColor = .systemBackground
+        build()
     }
 
     required init?(coder: NSCoder) { nil }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-        guard !ended else { return }
-
+    private func build() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -102,42 +117,36 @@ final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate,
 
         for v in [strip, wv] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(v)
+            addSubview(v)
         }
         NSLayoutConstraint.activate([
-            strip.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            strip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            strip.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor),
+            strip.leadingAnchor.constraint(equalTo: leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: trailingAnchor),
             wv.topAnchor.constraint(equalTo: strip.bottomAnchor),
-            wv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            wv.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            wv.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            wv.leadingAnchor.constraint(equalTo: leadingAnchor),
+            wv.trailingAnchor.constraint(equalTo: trailingAnchor),
+            wv.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        wv.load(URLRequest(url: login.startURL))
     }
 
-    /// Close, wipe the data store and answer once. nil = no answer (sign-out, exam start).
+    func begin() {
+        guard let webView else { return }
+        webView.load(URLRequest(url: login.startURL))
+    }
+
+    /// Leave, wipe the data store and answer once. nil = no answer (sign-out, exam start).
     func end(_ outcome: HomeworkLogin.Outcome?) {
         let done = completion
         completion = nil
-        ended = true
         webView?.navigationDelegate = nil
         webView?.uiDelegate = nil
         webView?.stopLoading()
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
         webView?.removeFromSuperview()
         webView = nil
-        if !isBeingDismissed { dismissSheet() }
+        removeFromSuperview()
         if let done { done(outcome) }
-    }
-
-    /// A dismiss during the present transition is ignored by UIKit: wait for the transition, then dismiss.
-    private func dismissSheet(attempt: Int = 0) {
-        if isBeingPresented, attempt < 30 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.dismissSheet(attempt: attempt + 1) }
-            return
-        }
-        presentingViewController?.dismiss(animated: true)
     }
 
     private func handle(_ nav: HomeworkLogin.Navigation) -> Bool {
@@ -211,10 +220,5 @@ final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         decisionHandler(.deny)
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if isBeingDismissed || presentingViewController == nil { end(.cancelled) }
     }
 }

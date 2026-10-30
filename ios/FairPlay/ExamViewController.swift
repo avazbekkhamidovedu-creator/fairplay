@@ -597,7 +597,7 @@ final class ExamViewController: UIViewController, LockSurface,
         if action == "log" { return }
         DebugLog.log("bridge", "page -> app: \(action)")
         if ["lock", "session", "prelock", "openExternal"].contains(action) { deviceTest.end(.leave) }
-        if ["lock", "session", "prelock", "openExternal"].contains(action) { homework.dismiss() }
+        if HomeworkPanelPolicy.closes(on: action) { homework.dismiss() }
         if ["prelock", "openExternal", "seal"].contains(action) { box.close() }
         if action == "session", (body["attempt_id"] as? String) != AppSession.shared.exam?.attemptId { box.close() }
 
@@ -608,7 +608,8 @@ final class ExamViewController: UIViewController, LockSurface,
             let lock = LockdownController.shared
             homework.open(body: body, busy: lock.isLocked || lock.lockInFlight || lock.preLockInFlight
                                             || AppSession.shared.exam != nil || external.isActive,
-                          deviceTestRunning: deviceTest.isRunning, from: self) { [weak self] in self?.send($0) }
+                          deviceTestRunning: deviceTest.isRunning, container: shield.content, above: webView,
+                          top: bar.bottomAnchor, raise: { self.raiseCovers() }) { [weak self] in self?.send($0) }
         case "clearHomeworkLogin":
             homework.clear()
         case "open_box":
@@ -1366,7 +1367,11 @@ final class ExamViewController: UIViewController, LockSurface,
         updateBoxHold()
     }
 
-    private func updateBoxHold() { box.setHeld(blockingView != nil || privacyCover != nil) }
+    private func updateBoxHold() {
+        let covered = HomeworkPanelPolicy.hidden(blockingShown: blockingView != nil, privacyShown: privacyCover != nil)
+        box.setHeld(covered)
+        homework.setHeld(covered)
+    }
 
     private func raiseCovers() {
         shield.content.bringSubviewToFront(bar)
