@@ -54,7 +54,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let lock = LockdownController.shared
         lock.surface = vc
-        lock.onUnlocked = { [weak vc] in vc?.send(["type": "unlocked"]) }
+        lock.onUnlocked = { [weak vc] in vc?.closeBox(); vc?.send(["type": "unlocked"]) }
         lock.onLockPending = { [weak vc] in vc?.send(["type": "lockPending", "reason": "assessment_prompt"]) }
         EventLog.shared.onEvent = { [weak vc] type, detail, time in vc?.sendEvent(type: type, detail: detail, time: time) }
         AppSession.shared.onStatus = { [weak vc] status in vc?.handleServerStatus(status) }

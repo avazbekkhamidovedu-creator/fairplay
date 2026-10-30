@@ -69,6 +69,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     private var deviceTestTimer: Timer?
     private var deviceTestTapOn = false
     private let homework = HomeworkLoginCoordinator()
+    private let box = BoxCoordinator()
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -377,6 +378,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         DebugLog.log("bridge", "page -> app: \(action)")
 
         if ["lock", "prelock", "session", "openExternal", "quitApps", "deviceTestStart"].contains(action) { homework.dismiss() }
+        if ["prelock", "openExternal", "quitApps"].contains(action) { box.close() }
         if ["lock", "prelock", "session", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
 
         switch action {
@@ -395,6 +397,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                           deviceTestRunning: deviceTest.isRunning) { [weak self] in self?.send($0) }
         case "clearHomeworkLogin":
             homework.clear()
+        case "open_box":
+            let lock = LockdownController.shared
+            box.open(body: body, locked: lock.isLocked, preLock: lock.isPreLock,
+                     hasAttempt: AppSession.shared.exam?.attemptId != nil, container: window?.contentView) { [weak self] in self?.send($0) }
+        case "close_box":
+            box.close { [weak self] in self?.send($0) }
         case "rememberSave", "rememberUnlock", "rememberForget":
             let lock = LockdownController.shared
             remember.handle(action: action, body: body,
@@ -644,6 +652,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                                     "prelock": LockdownController.shared.isPreLock,
                                     "deviceTest": true,
                                     "homeworkLogin": true,
+                                    "boxSupported": true,
                                     "homeworkRemember": remember.stateValue]
         // 2026-10-22: a newer release the app can install (Updater.swift); never while locked.
         if let update = Updater.shared.available, !LockdownController.shared.isLocked {
@@ -1340,7 +1349,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func deviceTestNotify(_ message: [String: Any]) { send(message) }
 
     /// Emergency exit or safety unlock while a website exam is open: leave it without submitting.
+    func closeBox() { box.close() }
+
     func endExternalIfActive() {
+        box.close()
         external.abort()
     }
 

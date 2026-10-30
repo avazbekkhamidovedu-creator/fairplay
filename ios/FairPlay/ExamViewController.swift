@@ -526,6 +526,7 @@ final class ExamViewController: UIViewController, LockSurface,
 
     private var deviceTestImmersive = false
     private let homework = HomeworkLoginCoordinator()
+    private let box = BoxCoordinator()
     private var deviceTestTimer: Timer?
     private var deviceTestObservers: [NSObjectProtocol] = []
 
@@ -597,6 +598,7 @@ final class ExamViewController: UIViewController, LockSurface,
         DebugLog.log("bridge", "page -> app: \(action)")
         if ["lock", "session", "prelock", "openExternal"].contains(action) { deviceTest.end(.leave) }
         if ["lock", "session", "prelock", "openExternal"].contains(action) { homework.dismiss() }
+        if ["prelock", "openExternal"].contains(action) { box.close() }
 
         switch action {
         case "deviceTestLeave":
@@ -608,6 +610,12 @@ final class ExamViewController: UIViewController, LockSurface,
                           deviceTestRunning: deviceTest.isRunning, from: self) { [weak self] in self?.send($0) }
         case "clearHomeworkLogin":
             homework.clear()
+        case "open_box":
+            let lock = LockdownController.shared
+            box.open(body: body, locked: lock.isLocked, preLock: lock.isPreLock || lock.preLockInFlight,
+                     hasAttempt: AppSession.shared.exam?.attemptId != nil, container: view) { [weak self] in self?.send($0) }
+        case "close_box":
+            box.close { [weak self] in self?.send($0) }
         case "rememberSave", "rememberUnlock", "rememberForget":
             let lock = LockdownController.shared
             remember.handle(action: action, body: body,
@@ -801,11 +809,13 @@ final class ExamViewController: UIViewController, LockSurface,
     }
     private var goneCheck = GoneCheck()
 
+    func closeBox() { box.close() }
+
     func sendState() {
         send(["type": "state", "locked": LockdownController.shared.isLocked, "trusted": true,
               "version": Config.version, "app_version": Config.version, "platform": "ipad",
               "sealed_pending": Sealed.hasPending, "prelock": LockdownController.shared.isPreLock,
-              "deviceTest": true, "homeworkLogin": true, "homeworkRemember": remember.stateValue])
+              "deviceTest": true, "homeworkLogin": true, "boxSupported": true, "homeworkRemember": remember.stateValue])
     }
 
     private var eventsReady = false
