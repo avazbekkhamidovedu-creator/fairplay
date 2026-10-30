@@ -215,7 +215,6 @@ public enum CanvasNavigation {
             if inCourse(segs, scope), segs.count >= 3, openBookRoots.contains(segs[2]) {
                 return isDownload(segs) ? .block : .allow
             }
-            if segs.first == "files" { return isDownload(segs) ? .block : .allow }
             return .block
         }
     }
@@ -351,15 +350,20 @@ public struct CanvasBrowser {
     public var isLockedIn: Bool { phase == .quiz && finishUsable }
 
     public func isFinish(_ url: URL, regex: NSRegularExpression?) -> Bool {
-        finishArmedNow && CanvasFinish.matches(url, regex: regex)
+        finishArmedNow && CanvasFinish.matches(url, regex: regex, scope: scope)
     }
 
     public mutating func disarm(keepingOn current: URL?, regex: NSRegularExpression?) {
-        if let current, armed, CanvasFinish.matches(current, regex: regex) { return }
+        if let current, armed, CanvasFinish.matches(current, regex: regex, scope: scope) { return }
         armed = false
     }
 
     public var finishArmedNow: Bool { armed }
+
+    public func isUnderExamItem(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return CanvasNavigation.isUnderItem(url, scope: scope)
+    }
 
     public func allows(_ url: URL) -> Bool { CanvasPolicy.allows(url, rules: rules) }
 
@@ -369,8 +373,12 @@ public struct CanvasBrowser {
 
     public func allowsMainFrame(_ url: URL) -> Bool { allows(url) && !blocksMainFrame(url) }
 
+    public func blocksExamHostFrame(_ url: URL) -> Bool {
+        url.host?.lowercased() == examHost && blocksMainFrame(url)
+    }
+
     public func childAllows(_ url: URL, mainFrame: Bool = true) -> Bool {
-        CanvasPolicy.isBlank(url) || (allows(url) && (!mainFrame || !blocksMainFrame(url)))
+        CanvasPolicy.isBlank(url) || (allows(url) && !(mainFrame ? blocksMainFrame(url) : blocksExamHostFrame(url)))
     }
 
     public func blockDetail(_ url: URL) -> String {
@@ -694,6 +702,16 @@ public enum CanvasFinish {
             contexts[contexts.count - 1] = Item(kind: kind, open: q.open)
             i = q.present ? q.next : i + length
         }
+        return true
+    }
+
+    /// A finish page under /courses/ must belong to the exam's own course and item. Pages on other
+    /// paths (New Quizzes frames) are tied to the exam by the main-frame check instead.
+    public static func matches(_ url: URL, regex: NSRegularExpression?, scope: CanvasScope?) -> Bool {
+        guard matches(url, regex: regex) else { return false }
+        guard let scope else { return true }
+        guard let segs = CanvasNavigation.segments(url) else { return false }
+        if segs.first == "courses" { return CanvasNavigation.isUnderItem(segs, scope: scope) }
         return true
     }
 

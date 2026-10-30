@@ -933,6 +933,11 @@ final class ExamViewController: UIViewController, LockSurface,
                 decisionHandler(.cancel)
                 return
             }
+            if !mainFrame, external.allows(url), external.blocksExamHostFrame(url) {
+                DebugLog.log("web", "frame BLOCKED (canvas scope): \(url.host ?? "")\(url.path)")
+                decisionHandler(.cancel)
+                return
+            }
             if mainFrame, external.allows(url), external.blocksMainFrame(url) {
                 DebugLog.log("web", "navigation BLOCKED (canvas scope): \(url.host ?? "")\(url.path)")
                 external.reportBlocked(url)

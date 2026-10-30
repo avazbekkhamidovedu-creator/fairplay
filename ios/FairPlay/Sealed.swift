@@ -91,10 +91,10 @@ enum Sealed {
             DebugLog.log("sealed", "unreadable sealed file \(url.lastPathComponent): set aside")
             moveAside(url); done(); return
         }
-        let useToken = token ?? (file["token"] as? String) ?? ""
-        Net.request("POST", path: "api/student/attempts/\(aid)/sealed-submit", token: useToken, appSession: nil,
+        let pick = SealedFormat.chooseToken(page: token, stored: file["token"] as? String)
+        Net.request("POST", path: "api/student/attempts/\(aid)/sealed-submit", token: pick.token, appSession: nil,
                     body: ["payload": payload, "answers_json": answers, "proof": proof]) { status, _ in
-            let o = SealedFormat.outcome(status: status)
+            let o = SealedFormat.outcome(status: status, borrowed: pick.borrowed)
             DebugLog.log("sealed", "upload \(aid): HTTP \(status.map(String.init) ?? "none") -> \(o)")
             switch o {
             case .done:
@@ -102,9 +102,9 @@ enum Sealed {
             case .reject:
                 moveAside(url)
             case .keep:
-                if let token, token != (file["token"] as? String) {
+                if pick.matches, pick.token != (file["token"] as? String) {
                     var f = file
-                    f["token"] = token
+                    f["token"] = pick.token
                     if let d = try? JSONSerialization.data(withJSONObject: f) {
                         try? d.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                     }

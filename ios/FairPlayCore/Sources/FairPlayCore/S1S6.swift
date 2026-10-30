@@ -25,10 +25,31 @@ public enum SealedFormat {
             && (try? JSONSerialization.jsonObject(with: Data(json.utf8))) is [String: Any]
     }
 
+    public static func tokenUserId(_ token: String?) -> String? {
+        guard let token, let head = token.split(separator: ".", omittingEmptySubsequences: false).first else { return nil }
+        var b64 = head.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        b64 += String(repeating: "=", count: (4 - b64.count % 4) % 4)
+        guard let data = Data(base64Encoded: b64), let text = String(data: data, encoding: .utf8),
+              let uid = text.split(separator: ":", omittingEmptySubsequences: false).first,
+              (1...18).contains(uid.count), uid.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return String(uid)
+    }
+
+    /// The page token is used only for the user the file was sealed by. `borrowed` means a
+    /// token the file does not vouch for, so no answer from it may set the file aside.
+    public static func chooseToken(page: String?, stored: String?) -> (token: String, matches: Bool, borrowed: Bool) {
+        let own = stored ?? ""
+        guard let page, !page.isEmpty else { return (own, false, false) }
+        if own.isEmpty { return (page, false, true) }
+        if let a = tokenUserId(page), a == tokenUserId(own) { return (page, true, false) }
+        return (own, false, false)
+    }
+
     public enum Outcome: Equatable { case done, keep, reject }
 
     /// After an upload answer: done (delete), keep (retry later), reject (set aside).
-    public static func outcome(status: Int?) -> Outcome {
+    public static func outcome(status: Int?, borrowed: Bool = false) -> Outcome {
+        if borrowed, let status, status != 200, status < 500 { return .keep }
         switch status {
         case 200?: return .done
         case nil, 401?, 403?, 408?, 429?: return .keep      // offline, token expired, busy

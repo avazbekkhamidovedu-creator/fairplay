@@ -170,14 +170,15 @@ final class ExternalExamController {
 
     func checkFrameFinish(_ url: URL) {
         guard let session, session.canvas, !finishing, finishTimer == nil, allows(url),
-              finishHit(url, session: session) else { return }
+              browser?.isUnderExamItem(webView?.url) == true, finishHit(url, session: session) else { return }
         let aid = session.attemptId
         let timer = Timer(timeInterval: 2, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.finishTimer = nil
                 guard let current = self.session, current.attemptId == aid, !self.finishing,
-                      self.browser?.finishArmedNow == true else { return }
+                      self.browser?.finishArmedNow == true,
+                      self.browser?.isUnderExamItem(self.webView?.url) == true else { return }
                 self.finish(reason: "finish_url")
             }
         }
@@ -336,6 +337,8 @@ final class ExternalExamController {
     }
 
     func blocksMainFrame(_ url: URL) -> Bool { browser?.blocksMainFrame(url) ?? false }
+
+    func blocksExamHostFrame(_ url: URL) -> Bool { browser?.blocksExamHostFrame(url) ?? false }
 
     func reportBlocked(_ url: URL) {
         if let detail = browser?.recordBlocked(url) { EventLog.shared.record("blocked_navigation", detail) }

@@ -266,13 +266,14 @@ import Foundation
     @Test func openBookAddsCourseMaterialOnly() {
         for path in ["/courses/123/pages", "/courses/123/pages/week-1", "/courses/123/modules",
                      "/courses/123/modules/items/5", "/courses/123/files", "/courses/123/files/77",
-                     "/courses/123/files/folder/a/b", "/courses/123/wiki/page", "/files/77", "/files/77/preview",
+                     "/courses/123/files/folder/a/b", "/courses/123/wiki/page",
                      "/courses/123/pages/", "/courses/123/quizzes/456/take"] {
             #expect(decide(path, .quiz, openBook: true) == .allow, "\(path)")
             let closed: CanvasNavigation.Decision = path.contains("quizzes") ? .allow : .block
             #expect(decide(path, .quiz, openBook: false) == closed, "\(path)")
         }
-        for path in ["/courses/123/files/77/download", "/files/77/download", "/courses/123/files/77/download/x",
+        for path in ["/courses/123/files/77/download", "/files/77/download", "/files", "/files/77", "/files/77/preview",
+                     "/files/folder/users_1", "/files/folder/courses_999", "/files/folder/groups_7", "/courses/123/files/77/download/x",
                      "/courses/12/pages/x", "/courses/1234/modules", "/courses/999/files/1", "/courses/123/pagesx",
                      "/courses/123/modulesx/1", "/courses/123/filesx", "/courses/123/grades", "/courses/123/users",
                      "/courses/123/discussion_topics", "/courses/123/quizzes", "/courses/123/assignments",
