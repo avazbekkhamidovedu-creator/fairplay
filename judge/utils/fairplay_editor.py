@@ -1,5 +1,6 @@
 """FairPlay in the assignment editor and on the assignment page; the exam settings are stored in FairPlay."""
 import logging
+import re
 
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
@@ -9,8 +10,8 @@ from judge.utils.fairplay import FAIRPLAY_CALCULATOR_CHOICES, FAIRPLAY_REVIEW_CH
 
 __all__ = [
     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
-    'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
-    'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
+    'BOX_CHANGE_REFUSED', 'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
+    'fairplay_box_error', 'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
     'parse_fairplay_payload', 'push_settings', 'websites_text',
 ]
 
@@ -26,6 +27,8 @@ DEFAULT_SETTINGS = {
 MAX_WEBSITE_LINES = 100
 MAX_WEBSITE_LENGTH = 2100
 MAX_UPLOAD_DAYS = 7
+BOX_LINK_RE = re.compile(r'https://duke(?:\.app)?\.box\.com/s/[A-Za-z0-9_-]+', re.IGNORECASE)
+BOX_CHANGE_REFUSED = _('The Duke Box folder cannot be changed after students have started.')
 
 
 def _bool(value):
@@ -59,6 +62,17 @@ def clean_settings(raw, partial=False):
         if any(len(line) > MAX_WEBSITE_LENGTH for line in lines):
             raise ValidationError(_('Allowed websites: a line is too long.'))
         out['websites'] = lines
+    if 'box_link' in raw:
+        link = raw['box_link']
+        if link is None:
+            link = ''
+        if not isinstance(link, str):
+            raise ValidationError(_('Duke Box shared folder link: use a link like https://duke.box.com/s/...'))
+        link = link.strip()
+        if link and not BOX_LINK_RE.fullmatch(link):
+            raise ValidationError(_('Duke Box shared folder link: use a shared link like '
+                                    'https://duke.box.com/s/... or https://duke.app.box.com/s/...'))
+        out['box_link'] = link
     if 'upload_opens_days' in raw or not partial:
         try:
             days = int(raw.get('upload_opens_days') or 0)
@@ -112,6 +126,8 @@ def editor_settings(fp_settings):
     days = _int(fp_settings.get('upload_opens_days'), DEFAULT_SETTINGS['upload_opens_days'])
     out['upload_opens_days'] = days if 0 <= days <= MAX_UPLOAD_DAYS else DEFAULT_SETTINGS['upload_opens_days']
     out['websites'] = websites_text(fp_settings)
+    if isinstance(fp_settings.get('box_link'), str) and fp_settings['box_link'].strip():
+        out['box_link'] = fp_settings['box_link'].strip()
     out['websites_blocked'] = [
         {'site': str(item.get('site') or ''), 'reason': str(item.get('reason') or '')}
         for item in fp_settings.get('websites_blocked') or [] if isinstance(item, dict) and item.get('site')
@@ -144,7 +160,7 @@ def parse_fairplay_payload(contest, payload, restricted):
         if plan.want and not was_on and not fairplay_enabled():
             plan.want = None
     if payload.get('fairplay_settings') is not None and fairplay_enabled():
-        plan.settings = clean_settings(payload['fairplay_settings'])
+        plan.settings = clean_settings(payload['fairplay_settings'], partial=True)
     return plan
 
 
@@ -187,15 +203,43 @@ class FairPlayEditLock:
             raise ValidationError(_("The problems can't be changed now."))
 
 
+def open_exam_values(contest, acting_user=None):
+    """The saved allowed websites and Duke Box link for the form; empty when FairPlay cannot say."""
+    from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
+    empty = {'websites': [], 'box_link': ''}
+    try:
+        view = FairPlayClient(acting_user=acting_user).exam(contest.key, read_timeout=QUICK_READ_TIMEOUT)
+    except FairPlayError:
+        return empty
+    settings = editor_settings(view.get('settings') if isinstance(view, dict) else None)
+    return {'websites': [line for line in settings['websites'].splitlines() if line.strip()],
+            'box_link': settings.get('box_link', '')}
+
+
 def fairplay_editor_context(request, contest, restricted):
     on = is_fairplay_exam(contest) if contest is not None else False
-    return {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on}
+    context = {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on, 'fairplay_open_exam': None}
+    if fairplay_enabled() and 'fairplay_settings' not in restricted:
+        context['fairplay_open_exam'] = (open_exam_values(contest, request.user.username) if on
+                                         else {'websites': [], 'box_link': ''})
+    return context
 
 
 class FairPlaySaveResult:
 
-    def __init__(self, warnings=(), not_saved=None, settings=None):
-        self.warnings, self.not_saved, self.settings = list(warnings), not_saved, settings
+    def __init__(self, warnings=(), not_saved=None, settings=None, status=None):
+        self.warnings, self.not_saved, self.settings, self.status = list(warnings), not_saved, settings, status
+
+
+def fairplay_box_error(result):
+    """The message for a refused Duke Box link, or None for any other outcome."""
+    if result.not_saved is None or not (result.settings and 'box_link' in result.settings):
+        return None
+    if result.status == 409:
+        return BOX_CHANGE_REFUSED
+    if result.status == 400 and str(result.not_saved).startswith('box_link:'):
+        return str(result.not_saved)
+    return None
 
 
 def fairplay_save_settings(acting_user, contest, plan, old_key=None):
@@ -220,7 +264,7 @@ def fairplay_save_settings(acting_user, contest, plan, old_key=None):
     try:
         view = push_settings(contest.key, settings, acting_user=acting_user)
     except FairPlayError as e:
-        return FairPlaySaveResult(not_saved=e.detail, settings=settings)
+        return FairPlaySaveResult(not_saved=e.detail, settings=settings, status=e.status)
     blocked = editor_settings((view or {}).get('settings') if isinstance(view, dict) else None)['websites_blocked']
     if not blocked:
         return FairPlaySaveResult()

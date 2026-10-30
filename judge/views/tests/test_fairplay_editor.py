@@ -10,7 +10,7 @@ from django.utils import timezone
 from judge.models import Contest, ContestTag
 from judge.models.tests.util import create_user
 from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_clean_admin_form, is_fairplay_exam
-from judge.utils.fairplay_client import FairPlayUnreachable
+from judge.utils.fairplay_client import FairPlayError, FairPlayUnreachable
 from judge.utils.fairplay_delivery import deliver_submission
 from judge.utils.fairplay_package import iso
 from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, grant, set_fairplay
@@ -74,10 +74,10 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         self.assertIn('name="exam_lock" value="none"', html)
         self.assertIn('id="id_seb_required"', html)
         self.assertIn('id="id_fairplay_required" checked', html)
+        self.assertIn('id="id_fairplay_open_exam"', html)
         for gone in ('fairplay-panel', 'fairplay_calculator', 'All optional', 'FairPlay holds this exam',
                      'also used elsewhere', 'not reachable', 'fairplay-edit-locked', 'fairplay-shared-warning'):
             self.assertNotIn(gone, html)
-        self.fp.exam.assert_not_called()
 
     def test_no_standing_text_when_fairplay_is_down(self):
         self.fp.exam.side_effect = FairPlayUnreachable()
@@ -399,3 +399,128 @@ class FairPlayBoxTestCase(FairPlayDataMixin, TestCase):
             reverse('contest_fairplay_live', args=['fpexam'])
         with self.assertRaises(Resolver404):
             resolve('/contest/fpexam/fairplay-live')
+
+
+BOX = 'https://duke.box.com/s/abc123XYZ'
+OPEN_EXAM = {'websites': ['docs.python.org', 'Notes https://example.org/n'], 'box_link': BOX}
+
+
+@FAIRPLAY_ON
+class FairPlayOpenExamTestCase(FairPlayEditorMixin, TestCase):
+    def page(self, name='contest_edit', args=('fpexam',)):
+        return self.client.get(reverse(name, args=list(args))).content.decode()
+
+    def test_panel_is_off_by_default(self):
+        self.fp.exam.return_value = {'synced': True, 'status': 'draft', 'settings': {'websites': []}}
+        html = self.page()
+        self.assertIn('id="fp-open-exam"', html)
+        self.assertIn('id="id_fairplay_open_exam"', html)
+        self.assertNotIn('id="id_fairplay_open_exam" checked', html)
+        self.assertIn('id="id_fairplay_box_link"', html)
+        self.assertIn('name="fairplay_websites"', html)
+        self.assertRegex(html, r'data-initial=\'\{"box_link": "", "websites": \[\]\}\'')
+        self.assertNotIn('open_book', html.split('id="fp-open-exam"')[1].split('id="cheat-seb-section"')[0])
+
+    def test_create_page_has_a_hidden_empty_panel(self):
+        html = self.page('contest_create', ())
+        self.assertIn('id="fp-open-exam"', html)
+        self.assertRegex(html, r'id="fp-open-exam"[^>]*style="display:none;"')
+        self.assertNotIn('id="id_fairplay_open_exam" checked', html)
+        self.fp.exam.assert_not_called()
+
+    def test_panel_absent_unless_fairplay_is_offered(self):
+        set_fairplay(self.exam, False)
+        with self.settings(FAIRPLAY_TOKEN='', FAIRPLAY_URL=''):
+            self.assertNotIn('id="fp-open-exam"', self.page())
+            self.assertNotIn('id="fp-open-exam"', self.page('contest_create', ()))
+
+    def test_panel_hidden_when_another_lock_is_chosen(self):
+        set_fairplay(self.exam, False)
+        html = self.page()
+        self.assertRegex(html, r'id="fp-open-exam"[^>]*style="display:none;"')
+        self.fp.exam.assert_not_called()
+
+    def test_saved_values_show_again(self):
+        self.fp.exam.return_value = {'synced': True, 'status': 'draft', 'settings': {
+            'websites': ['docs.python.org'], 'websites_input': ['docs.python.org', 'Notes https://example.org/n'],
+            'box_link': BOX}}
+        html = self.page()
+        self.assertIn('id="id_fairplay_open_exam" checked', html)
+        self.assertIn('>docs.python.org\nNotes https://example.org/n</textarea>', html)
+        self.assertIn('value="%s"' % BOX, html)
+
+    def test_panel_empty_when_fairplay_is_down(self):
+        self.fp.exam.side_effect = FairPlayUnreachable()
+        html = self.page()
+        self.assertIn('id="fp-open-exam"', html)
+        self.assertNotIn('id="id_fairplay_open_exam" checked', html)
+
+    def test_save_sends_websites_and_box_link_only(self):
+        response = self.save(fairplay_settings=OPEN_EXAM)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['ok'])
+        self.fp.set_settings.assert_called_once_with('fpexam', {
+            'websites': ['docs.python.org', 'Notes https://example.org/n'], 'box_link': BOX}, read_timeout=3)
+
+    def test_app_box_host_accepted_and_open_book_untouched(self):
+        link = 'https://duke.app.box.com/s/tok-en_9'
+        self.assertEqual(self.save(fairplay_settings={'websites': [], 'box_link': link}).status_code, 200)
+        self.assertEqual(self.fp.set_settings.call_args.args[1], {'websites': [], 'box_link': link})
+
+    def test_off_clears_what_was_saved(self):
+        self.assertEqual(self.save(fairplay_settings={'websites': [], 'box_link': ''}).status_code, 200)
+        self.assertEqual(self.fp.set_settings.call_args.args[1], {'websites': [], 'box_link': ''})
+
+    def test_invalid_links_are_refused_before_saving(self):
+        for link in ('http://duke.box.com/s/abc', 'https://duke.box.com/folder/123', 'https://evil.box.com/s/abc',
+                     'https://duke.box.com.evil.org/s/abc', 'https://duke.box.com/s/', 'duke.box.com/s/abc',
+                     'https://duke.box.com/s/abc?x=1', 'https://duke.box.com/s/abc def', ['x'], 5):
+            self.fp.set_settings.reset_mock()
+            response = self.save(name='Renamed', fairplay_settings={'websites': [], 'box_link': link})
+            self.assertEqual(response.status_code, 400, link)
+            self.assertIn('Duke Box shared folder link', response.json()['error'])
+            self.fp.set_settings.assert_not_called()
+            self.assertNotEqual(self.reload_exam().name, 'Renamed')
+
+    def test_refused_link_message_is_shown(self):
+        self.fp.set_settings.side_effect = FairPlayError('box_link: that folder is not shared with the link', 400)
+        response = self.save(fairplay_settings=OPEN_EXAM)
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertFalse(data['ok'])
+        self.assertTrue(data['saved'])
+        self.assertEqual(data['field'], 'fairplay_box_link')
+        self.assertEqual(data['error'], 'box_link: that folder is not shared with the link')
+        self.assertEqual(data['redirect'], reverse('contest_edit', args=['fpexam']))
+
+    def test_changed_link_after_start_is_refused_with_a_plain_message(self):
+        self.fp.set_settings.side_effect = FairPlayError('exam already started', 409)
+        data = self.save(fairplay_settings=OPEN_EXAM).json()
+        self.assertFalse(data['ok'])
+        self.assertEqual(data['error'], 'The Duke Box folder cannot be changed after students have started.')
+        self.assertEqual(data['field'], 'fairplay_box_link')
+
+    def test_other_failures_stay_silent(self):
+        for error in (FairPlayError('boom', 500), FairPlayError('websites: bad', 400), FairPlayUnreachable()):
+            self.fp.set_settings.side_effect = error
+            data = self.save(fairplay_settings=OPEN_EXAM).json()
+            self.assertTrue(data['ok'])
+        self.fp.set_settings.side_effect = FairPlayError('exam already started', 409)
+        self.assertTrue(self.save(fairplay_settings={'websites': ['a.org']}).json()['ok'])
+
+    def test_box_link_is_not_logged(self):
+        self.fp.set_settings.side_effect = FairPlayError('box_link: refused %s' % BOX, 400)
+        with self.assertLogs('judge.fairplay', level='WARNING') as logs:
+            self.save(fairplay_settings=OPEN_EXAM)
+        self.assertNotIn('abc123XYZ', ' '.join(logs.output))
+
+    def test_new_key_carries_the_box_link(self):
+        self.before_the_window()
+        self.fp.exam.return_value = {'synced': True, 'status': 'draft', 'settings': {'websites': [], 'box_link': BOX}}
+        self.assertEqual(self.save(key='fpexam2').status_code, 200)
+        self.assertEqual(self.fp.set_settings.call_args.args[1]['box_link'], BOX)
+
+    def test_older_settings_keep_working(self):
+        response = self.save(fairplay_settings=EDITOR_SETTINGS)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertNotIn('box_link', self.fp.set_settings.call_args.args[1])
