@@ -6,10 +6,12 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { AnswerValue, CodeLanguage, CodeLanguageOption, StudentQuestion } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
-import { LANGUAGE_LABEL, DEFAULT_TIME_LIMIT_MS, canRunInBrowser, isCodeLanguage, resolveLanguage } from "../../lib/code/languages";
+import { LANGUAGE_LABEL, DEFAULT_TIME_LIMIT_MS, canRun, canRunRemotely, isCodeLanguage, resolveLanguage } from "../../lib/code/languages";
 import { codeDrafts, currentLanguage, isCodeAnswer, saveCodeDraft, sourceFor } from "../../lib/answerTypes";
 import { fmtSeconds, type RunResult } from "../../lib/code/runner";
 import { getRunner } from "../../lib/code/runners";
+import { RemoteRunner } from "../../lib/code/remoteRunner";
+import { useServerRunnerLanguages } from "../../lib/code/useServerRunner";
 import { STATUS_LABEL, runTests, type TestOutcome } from "../../lib/code/runTests";
 
 interface Props {
@@ -77,6 +79,7 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
   const langOptions = question.languages ?? [];
   const multi = langOptions.length > 0;
   const [langKey, setLangKey] = useState(() => currentLanguage(langOptions, value)?.key ?? "");
+  useServerRunnerLanguages();
   const langOption = multi ? (langOptions.find((l) => l.key === langKey) ?? langOptions[0]!) : null;
   const runLang: CodeLanguage | null = langOption
     ? langOption.runner && isCodeLanguage(langOption.runner)
@@ -87,7 +90,8 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
   const label = langOption ? langOption.name : LANGUAGE_LABEL[lang];
   const samples = question.tests ?? [];
   const writeOnly = !!question.write_only;
-  const runnable = !writeOnly && runLang !== null && canRunInBrowser(runLang);
+  const runnable = !writeOnly && runLang !== null && canRun(runLang);
+  const remote = runnable && runLang !== null && canRunRemotely(runLang);
   const limit = question.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS;
   const key = memoryKey(attemptId, question.id);
   const mem = memory.get(key);
@@ -132,8 +136,24 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
     onChange(src.trim() === "" ? undefined : { language: key, source: src });
   };
 
+  const remoteRef = useRef<RemoteRunner | null>(null);
+  useEffect(
+    () => () => {
+      remoteRef.current?.dispose();
+      remoteRef.current = null;
+    },
+    [],
+  );
+
   async function runner() {
     if (!runLang) return null;
+    if (canRunRemotely(runLang)) {
+      if (remoteRef.current?.language !== runLang) {
+        remoteRef.current?.dispose();
+        remoteRef.current = new RemoteRunner(runLang, attemptId, question.id);
+      }
+      return remoteRef.current;
+    }
     const r = getRunner(runLang);
     if (!r) return null;
     const x = await r;
@@ -268,6 +288,11 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
             </span>
           )}
           <span className="stu-cq-meta">Time limit {fmtSeconds(limit)}</span>
+          {remote && (
+            <span className="stu-cq-meta" data-testid="code-remote-hint">
+              Runs on the exam server
+            </span>
+          )}
           <span className="stu-spacer" />
           <span className="stu-cq-meta" id={`code-keys-${question.id}`}>
             Tab indents · Esc then Tab leaves the editor

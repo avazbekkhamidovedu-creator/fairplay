@@ -41,7 +41,7 @@ describe("language registry", () => {
       expect(canRunInBrowser(l)).toBe(true);
     }
     for (const l of ["c", "cpp", "java"] as const) {
-      expect(LANGUAGE_RUNTIME[l]).toBe("none");
+      expect(LANGUAGE_RUNTIME[l]).toBe("remote");
       expect(canRunInBrowser(l)).toBe(false);
     }
     expect(runnableLanguages()).toEqual(["python", "javascript", "typescript", "sql"]);

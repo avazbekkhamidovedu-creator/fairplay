@@ -8,10 +8,12 @@
 // never overwrites a grade entered while it runs: it checks the page's latest items and the
 // server's queue right before saving each answer.
 import { useEffect, useRef, useState } from "react";
-import { ApiError, teacherApi } from "../../api/client";
-import type { CodeTest, GradingItem, GradingQuestion } from "../../api/types";
+import { useParams } from "react-router-dom";
+import { ApiError, NetworkError, teacherApi } from "../../api/client";
+import type { CodeTest, GradingItem, GradingQuestion, TeacherRunTestsResponse } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
-import { DEFAULT_TIME_LIMIT_MS, LANGUAGE_LABEL, canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
+import { DEFAULT_TIME_LIMIT_MS, LANGUAGE_LABEL, canRun, canRunRemotely, resolveLanguage } from "../../lib/code/languages";
+import { useServerRunnerLanguages } from "../../lib/code/useServerRunner";
 import { fmtSeconds } from "../../lib/code/runner";
 import { createRunner } from "../../lib/code/runners";
 import { RunnerPool, gradingPoolSize } from "../../lib/code/runnerPool";
@@ -29,7 +31,7 @@ export interface CodeScore {
 }
 
 export function canAutoRun(q: Pick<GradingQuestion, "type" | "language" | "tests">): boolean {
-  return q.type === "code" && canRunInBrowser(resolveLanguage(q.language)) && (q.tests?.length ?? 0) > 0;
+  return q.type === "code" && canRun(resolveLanguage(q.language)) && (q.tests?.length ?? 0) > 0;
 }
 
 /** Resolves like `p`, or rejects with TestsAborted as soon as the signal is aborted. */
@@ -46,6 +48,72 @@ function unlessAborted<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
+export const MSG_RUNNER_DOWN = "The code runner is not available right now. This answer was left ungraded: try again later or grade it by hand.";
+
+/** At most this many answers wait on the server runner at once. */
+export const REMOTE_CONCURRENCY = 3;
+let remoteBusy = 0;
+const remoteWaiting: Array<() => void> = [];
+async function remoteSlot<T>(job: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  while (remoteBusy >= REMOTE_CONCURRENCY) {
+    await unlessAborted(new Promise<void>((res) => remoteWaiting.push(res)), signal);
+  }
+  remoteBusy += 1;
+  try {
+    return await job();
+  } finally {
+    remoteBusy -= 1;
+    remoteWaiting.splice(0).forEach((wake) => wake());
+  }
+}
+
+function remoteStatus(s: TeacherRunTestsResponse["tests"][number]["status"]): TestOutcome["status"] {
+  if (s === "ok") return "fail";
+  return s === "time_limit" ? "timeout" : "error";
+}
+
+/** Maps the teacher run-tests answer to the same outcomes the browser runners give. */
+export function outcomesOfRemote(q: GradingQuestion, res: TeacherRunTestsResponse): TestOutcome[] {
+  const defs = q.tests ?? [];
+  if (res.status === "compile_error") {
+    return defs.map((t, i) => ({
+      index: i, status: "error", input: t.input, expected: t.expected, stdout: "",
+      stderr: res.compile_output || "Compile error.", timeMs: 0, visible: t.visible, points: t.points,
+    }));
+  }
+  return res.tests.map((t) => {
+    const d = defs[t.index];
+    return {
+      index: t.index,
+      status: t.passed ? "pass" : remoteStatus(t.status),
+      input: d?.input ?? "",
+      expected: d?.expected ?? "",
+      stdout: t.stdout,
+      stderr: t.stderr,
+      timeMs: t.time_ms,
+      visible: t.visible,
+      points: t.points,
+    } satisfies TestOutcome;
+  });
+}
+
+async function scoreRemote(q: GradingQuestion, code: string, examId: string, onProgress?: (o: TestOutcome[]) => void, signal?: AbortSignal): Promise<CodeScore> {
+  let res: TeacherRunTestsResponse;
+  try {
+    res = await remoteSlot(() => teacherApi.runCodeTests(examId, q.question_id, code, signal), signal);
+  } catch (e) {
+    if (isAborted(e) || signal?.aborted) throw new TestsAborted();
+    if (e instanceof NetworkError || (e instanceof ApiError && (e.status === 429 || e.status >= 500))) throw new Error(MSG_RUNNER_DOWN);
+    throw e;
+  }
+  if (signal?.aborted) throw new TestsAborted();
+  if (res.status === "internal_error") throw new Error(MSG_RUNNER_DOWN);
+  const outcomes = outcomesOfRemote(q, res);
+  onProgress?.(outcomes);
+  const s = scoreOutcomes(outcomes, q.points);
+  return { points: s.points, comment: testSummary(outcomes), outcomes };
+}
+
 /** Runs one answer against all its tests in a runner of its own. With a signal, aborting
  *  stops the program at once (the runner is disposed) and rejects with TestsAborted. */
 export async function scoreCode(
@@ -54,9 +122,11 @@ export async function scoreCode(
   onProgress?: (o: TestOutcome[]) => void,
   signal?: AbortSignal,
   pool?: RunnerPool,
+  examId = "",
 ): Promise<CodeScore> {
   if (signal?.aborted) throw new TestsAborted();
   const lang = resolveLanguage(q.language);
+  if (canRunRemotely(lang)) return scoreRemote(q, code, examId, onProgress, signal);
   let r: Runner | null;
   if (pool) r = await unlessAborted(pool.acquire(), signal);
   else r = createRunner(lang);
@@ -86,11 +156,16 @@ export function CodeAnswerPanel({
   question,
   code,
   onScored,
+  examId: examIdProp,
 }: {
   question: GradingQuestion;
   code: string;
   onScored: (score: CodeScore) => void;
+  examId?: string;
 }) {
+  useServerRunnerLanguages();
+  const { id: routeExam = "" } = useParams();
+  const examId = examIdProp ?? routeExam;
   const lang = resolveLanguage(question.language);
   const tests = question.tests ?? [];
   const hidden = tests.filter((t) => !t.visible).length;
@@ -118,7 +193,7 @@ export function CodeAnswerPanel({
     setProblem(null);
     setOutcomes([]);
     try {
-      const s = await scoreCode(question, code, (o) => !ac.signal.aborted && setOutcomes(o), ac.signal);
+      const s = await scoreCode(question, code, (o) => !ac.signal.aborted && setOutcomes(o), ac.signal, undefined, examId);
       if (ac.signal.aborted) return;
       setOutcomes(s.outcomes);
       onScored(s);
@@ -170,7 +245,7 @@ export function CodeAnswerPanel({
           <CodeEditor key={code} initialValue={code} language={lang} readOnly label="Student's code" />
         </div>
       )}
-      {!canRunInBrowser(lang) && !blank && (
+      {!canRun(lang) && !blank && (
         <p className="t-small t-muted" style={{ margin: 0 }}>
           {LANGUAGE_LABEL[lang]} cannot run inside FairPlay yet. Read the code and enter the score.
         </p>
@@ -237,6 +312,7 @@ export function BulkCodeRun({
     const q = byId.get(it.question_id);
     return q && canAutoRun(q) && !it.grade && !isBlankAnswer(it.answer);
   });
+  useServerRunnerLanguages();
   const [asking, setAsking] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -272,7 +348,8 @@ export function BulkCodeRun({
     const t0 = Date.now();
     const list = [...todo];
     const pools = new Map<string, RunnerPool>();
-    const size = Math.min(gradingPoolSize(), list.length);
+    const hasRemote = list.some((it) => canRunRemotely(resolveLanguage(byId.get(it.question_id)?.language)));
+    const size = Math.min(Math.max(gradingPoolSize(), hasRemote ? REMOTE_CONCURRENCY : 0), list.length);
     const poolFor = (q: GradingQuestion) => {
       const lang = resolveLanguage(q.language);
       let p = pools.get(lang);
@@ -294,7 +371,7 @@ export function BulkCodeRun({
         return;
       }
       try {
-        const s = await scoreCode(q, String(it.answer ?? ""), undefined, ac.signal, poolFor(q));
+        const s = await scoreCode(q, String(it.answer ?? ""), undefined, ac.signal, canRunRemotely(resolveLanguage(q.language)) ? undefined : poolFor(q), examId);
         if (ac.signal.aborted) return;
         // graded by hand while the tests ran (here or in another tab): keep that grade
         if (gradedNow(it)) {

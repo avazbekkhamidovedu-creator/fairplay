@@ -8,6 +8,7 @@ import type { CodeLanguage } from "../../api/types";
 import { JsRunner } from "./jsRunner";
 import { canRunInBrowser } from "./languages";
 import { PythonRunner } from "./pythonRunner";
+import { loadServerRunner } from "./useServerRunner";
 import type { Runner } from "./runner";
 import { SqlRunner } from "./sqlRunner";
 import { TsRunner } from "./tsRunner";
@@ -21,7 +22,7 @@ function create(lang: CodeLanguage): Runner | null {
   if (lang === "javascript") return new JsRunner();
   if (lang === "typescript") return new TsRunner();
   if (lang === "sql") return new SqlRunner();
-  return null; // C, C++, Java: no browser runner (a server runner can plug in here)
+  return null; // C, C++, Java run on the server's runner (remoteRunner.ts), not in the browser
 }
 
 /** The shared runner for a language, or null when it cannot run in the browser. */
@@ -80,6 +81,7 @@ export function prefetchRunner(lang: CodeLanguage): void {
 /** Prepare the runtimes of these languages now (the check-in screen, while the exam is surely
  *  online and the student is reading the rules), instead of waiting for idle time. */
 export function warmUpRunners(languages: CodeLanguage[]): void {
+  void loadServerRunner().catch(() => undefined);
   for (const lang of new Set(languages)) {
     const r = getRunner(lang);
     if (r) void r.then((x) => x.prepare()).catch(() => undefined);

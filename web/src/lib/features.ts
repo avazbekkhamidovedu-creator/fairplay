@@ -5,10 +5,10 @@ import { useEffect, useState } from "react";
 
 export type Feature = "scan" | "lms" | "practice" | "insights" | "legacy_student_ui";
 
-type Health = { features?: unknown; student_grades?: unknown } | null;
+type Health = { features?: unknown; student_grades?: unknown; code_runner?: unknown } | null;
 let health: Promise<Health> | null = null;
 
-function loadHealth(): Promise<Health> {
+export function loadHealth(): Promise<Health> {
   if (!health) {
     health = fetch("/api/health", { headers: { Accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : null))

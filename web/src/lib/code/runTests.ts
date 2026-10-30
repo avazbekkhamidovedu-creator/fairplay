@@ -1,6 +1,7 @@
 // Phase 4: running a program against tests and summing the points of the passed ones.
 import { outputsMatch, sqlOutputsMatch } from "./compare";
 import type { SqlCompare } from "../../api/types";
+import { isBatchRunner } from "./remoteRunner";
 import type { RunResult, Runner } from "./runner";
 
 export interface TestCase {
@@ -83,6 +84,16 @@ export async function runTests(
   const o = sql ? { sqlSetup: opts?.sqlSetup ?? "", sqlCompare: opts?.sqlCompare } : undefined;
   const inputOf = (t: TestCase) => (sql ? o!.sqlSetup! : t.input);
   const out: TestOutcome[] = [];
+  if (isBatchRunner(runner) && !sql) {
+    if (tests.length === 0) return out;
+    // a server runner takes every input in one request
+    if (signal?.aborted) throw new TestsAborted();
+    const results = await runner.runBatch(code, tests.map(inputOf), timeLimitMs);
+    if (signal?.aborted) throw new TestsAborted();
+    results.forEach((r, i) => out.push(outcomeOf(i, tests[i]!, r, o)));
+    onProgress?.([...out]);
+    return out;
+  }
   let onAbort: (() => void) | null = null;
   const aborted = signal
     ? new Promise<never>((_, reject) => {

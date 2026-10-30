@@ -24,27 +24,58 @@ export function resolveLanguage(own: unknown, examDefault?: unknown): CodeLangua
   return isCodeLanguage(examDefault) ? examDefault : "python";
 }
 
-export type LanguageRuntime = "browser" | "none";
+export type LanguageRuntime = "browser" | "remote" | "none";
 
-/** Where a language runs: inside the page ("browser") or nowhere yet ("none": read and grade by hand). */
+/** Where a language runs: inside the page ("browser"), on the exam server's runner ("remote",
+ *  only when the server offers it), or nowhere ("none": read and grade by hand). */
 export const LANGUAGE_RUNTIME: Record<CodeLanguage, LanguageRuntime> = {
   python: "browser",
   javascript: "browser",
   typescript: "browser",
   sql: "browser",
-  c: "none",
-  cpp: "none",
-  java: "none",
+  c: "remote",
+  cpp: "remote",
+  java: "remote",
 };
+
+let serverLanguages: readonly CodeLanguage[] = [];
+const listeners = new Set<() => void>();
+
+/** What /api/health says the server's runner can run (empty: no runner). */
+export function setServerRunnerLanguages(list: readonly unknown[] | null | undefined): void {
+  const next = (Array.isArray(list) ? list : []).filter(isCodeLanguage).filter((l) => LANGUAGE_RUNTIME[l] === "remote");
+  const unique = [...new Set(next)];
+  if (unique.length === serverLanguages.length && unique.every((l, i) => l === serverLanguages[i])) return;
+  serverLanguages = unique;
+  listeners.forEach((f) => f());
+}
+
+export function remoteLanguages(): readonly CodeLanguage[] {
+  return serverLanguages;
+}
+
+export function subscribeRunnerLanguages(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => void listeners.delete(fn);
+}
 
 /** Languages FairPlay can run inside the browser. */
 export function canRunInBrowser(lang: CodeLanguage): boolean {
   return LANGUAGE_RUNTIME[lang] === "browser";
 }
 
+/** Languages the exam server's runner offers right now. */
+export function canRunRemotely(lang: CodeLanguage): boolean {
+  return LANGUAGE_RUNTIME[lang] === "remote" && serverLanguages.includes(lang);
+}
+
+export function canRun(lang: CodeLanguage): boolean {
+  return canRunInBrowser(lang) || canRunRemotely(lang);
+}
+
 /** The languages that can run, in picker order. */
 export function runnableLanguages(): CodeLanguage[] {
-  return CODE_LANGUAGES.filter(canRunInBrowser);
+  return CODE_LANGUAGES.filter(canRun);
 }
 
 /** Help text for the teacher: what the TypeScript runner does and does not check. */

@@ -5,7 +5,8 @@ import type { CodeLanguage, SqlCompare } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
 import { Icon } from "../ui/Icon";
 import { Switch } from "../ui/Switch";
-import { CODE_LANGUAGES, LANGUAGE_LABEL, TS_NOTE, canRunInBrowser } from "../../lib/code/languages";
+import { CODE_LANGUAGES, LANGUAGE_LABEL, TS_NOTE, canRun } from "../../lib/code/languages";
+import { useServerRunnerLanguages } from "../../lib/code/useServerRunner";
 import { MAX_SQL_SETUP_CHARS, newTestRow, testPointsSum, type DraftQuestion, type DraftTest, type QuestionErrors } from "../../pages/teacher/examDraft";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export function CodeQuestionEditor({ q, id, errors: e, onChange, defaultLanguage }: Props) {
+  useServerRunnerLanguages();
   const lang = q.language || defaultLanguage;
   const isSql = lang === "sql";
   const setTest = (key: string, patch: Partial<DraftTest>) =>
@@ -38,14 +40,14 @@ export function CodeQuestionEditor({ q, id, errors: e, onChange, defaultLanguage
           >
             <option value="">Exam default ({LANGUAGE_LABEL[defaultLanguage]})</option>
             {CODE_LANGUAGES.map((l) => (
-              <option key={l} value={l} disabled={!canRunInBrowser(l) && l !== q.language}>
-                {canRunInBrowser(l) ? LANGUAGE_LABEL[l] : `${LANGUAGE_LABEL[l]} (runner coming soon)`}
+              <option key={l} value={l} disabled={!canRun(l) && l !== q.language}>
+                {canRun(l) ? LANGUAGE_LABEL[l] : `${LANGUAGE_LABEL[l]} (runner coming soon)`}
               </option>
             ))}
           </select>
           <span className="hint">Students see the language as a label; they cannot change it.</span>
           {lang === "typescript" && <span className="hint">{TS_NOTE}</span>}
-          {!canRunInBrowser(lang) && (
+          {!canRun(lang) && (
             <span className="hint">
               No runner is available for this language yet: students cannot run code, answers are graded by you
             </span>

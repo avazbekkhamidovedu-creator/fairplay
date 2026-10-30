@@ -9,6 +9,8 @@ import type { AllowedAppOption,
   GradeResponse,
   Gradebook,
   GradingQueue,
+  StudentRunResponse,
+  TeacherRunTestsResponse,
   GradingSummary,
   LiveRoom,
   LoginResult,
@@ -248,6 +250,7 @@ export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -260,8 +263,10 @@ export async function request<T>(
       method,
       headers: withAppHeaders(headers, path),
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
   } catch {
+    if (signal?.aborted) throw Object.assign(new Error("Stopped."), { name: "AbortError" });
     throw new NetworkError();
   }
 
@@ -405,6 +410,10 @@ export const teacherApi = {
   release: (id: string, force = false) =>
     request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/release`, { force }),
   unrelease: (id: string) => request<Exam>("teacher", "POST", `/api/exams/${enc(id)}/unrelease`),
+  /** Runs a coding answer against every test of the question on the exam server's runner (hidden tests stay there). */
+  runCodeTests: (examId: string, questionId: string, source: string, signal?: AbortSignal) =>
+    request<TeacherRunTestsResponse>(
+      "teacher", "POST", `/api/exams/${enc(examId)}/questions/${enc(questionId)}/run-tests`, { source }, signal),
   gradingSummary: () => request<GradingSummary[]>("teacher", "GET", "/api/grading"),
   gradebook: (course = "", classId: number | null = null) =>
     request<Gradebook>("teacher", "GET", `/api/gradebook${gbQuery(course, classId)}`),
@@ -422,6 +431,13 @@ export const teacherApi = {
     if (!res.ok) throw new ApiError(res.status, res.statusText || `Error ${res.status}`);
     return res.blob();
   },
+};
+
+/** The student's Run for C, C++ and Java: one request per batch of stdin inputs. */
+export const codeRunApi = {
+  studentRun: (attemptId: string, questionId: string, source: string, stdins: string[], signal?: AbortSignal) =>
+    request<StudentRunResponse>(
+      "student", "POST", `/api/student/attempts/${enc(attemptId)}/questions/${enc(questionId)}/run`, { source, stdins }, signal),
 };
 
 export const studentApi = {

@@ -1199,6 +1199,44 @@ export type CodeLanguage = "python" | "javascript" | "typescript" | "c" | "cpp" 
 export type SqlCompare = "ordered" | "unordered";
 
 /** One test: stdin in, expected stdout out. Hidden tests (visible false) never reach students. */
+/** GET /api/health "code_runner": null when the server has no runner. */
+export interface CodeRunnerHealth {
+  languages: CodeLanguage[];
+}
+
+export type RunnerCaseStatus = "ok" | "runtime_error" | "time_limit" | "memory_limit" | "output_limit";
+
+/** POST /api/student/attempts/{id}/questions/{qid}/run */
+export interface StudentRunResponse {
+  status: "ok" | "compile_error" | "internal_error";
+  compile_output: string;
+  results: {
+    status: RunnerCaseStatus;
+    stdout: string;
+    stderr: string;
+    time_ms: number;
+    truncated: boolean;
+  }[];
+}
+
+/** POST /api/exams/{id}/questions/{qid}/run-tests */
+export interface TeacherRunTestsResponse {
+  status: "ok" | "compile_error" | "internal_error";
+  compile_output: string;
+  tests: {
+    index: number;
+    visible: boolean;
+    points: number;
+    passed: boolean;
+    status: RunnerCaseStatus;
+    stdout: string;
+    stderr: string;
+    time_ms: number;
+  }[];
+  earned: number;
+  total: number;
+}
+
 export interface CodeTest {
   input: string;
   expected: string;
