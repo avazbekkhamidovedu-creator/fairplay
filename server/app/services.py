@@ -92,6 +92,8 @@ def code_fields(q: dict) -> dict:
                   for t in q.get("tests") or [] if isinstance(t, dict)],
         "write_only": bool(q.get("write_only")),
         "time_limit_ms": int(q.get("time_limit_ms") or DEFAULT_TIME_LIMIT_MS),
+        "sql_setup": q.get("sql_setup") or "",
+        "sql_compare": "ordered" if q.get("sql_compare") == "ordered" else "unordered",
     }
 
 
@@ -106,12 +108,17 @@ def student_question(q: dict, default_language: str | None = None) -> dict:
     if "prompt_format" in tq and tq["type"] == "code" and tq.get("languages"):
         # extended code question: all samples are visible, each language keeps its runner
         tq["tests"] = [{"input": t["input"], "expected": t["expected"]} for t in tq.get("tests") or []]
+        tq.pop("sql_setup", None)
+        tq.pop("sql_compare", None)
         return tq
     if tq["type"] == "code":
         # Phase 4: hidden tests (input and expected output) never reach students, nor their
         # count or points. Visible tests are the samples. The language is resolved here:
         # students see it as a fixed label.
         tq["language"] = code_language(q, default_language)
+        if tq["language"] != "sql":
+            tq.pop("sql_setup", None)
+            tq.pop("sql_compare", None)
         tq["tests"] = [{"input": t["input"], "expected": t["expected"]}
                        for t in tq["tests"] if t["visible"]]
     return tq

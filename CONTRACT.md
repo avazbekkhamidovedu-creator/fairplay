@@ -1224,3 +1224,20 @@ A bad value stops the server at startup with a message.
   so the last write per field wins (DKU OJ pushes only the fields it changed). Clearing removes the override.
 - The teacher exam output carries `box_link` (normalised) to the exam's own teacher only. Students only ever receive
   `tools.box` for a running attempt. A set or clear is logged on `proctora.teacher` with the host only, never the token.
+
+## Coding questions: more languages and SQL (2026-10-30, phase 1)
+
+- Languages are `python`, `javascript`, `typescript`, `c`, `cpp`, `java`, `sql`. They apply to a coding question's
+  `language` and to the exam's `default_language` (default `python`); anything else is a 422. The server still never
+  runs student code: runs happen in the browser (students: visible tests; teachers: all tests on the grading page).
+- Coding questions gain `sql_setup` (string, at most 50,000 characters, default `""`) and `sql_compare`
+  (`"ordered"` or `"unordered"`, default `"unordered"`; any other value is a 422). They are only kept for a SQL
+  question: `language: "sql"`, or `language: null` with the exam's `default_language` `"sql"`. For any other language,
+  and for non-code questions, they are silently dropped on save (the same as the other coding fields on a non-code
+  question) and read back as `""` / `"unordered"` (absent on non-code questions). A PUT that does not send
+  `default_language` resolves a `null` language against the stored default.
+- Teacher view: every coding question carries `sql_setup` and `sql_compare` next to the other coding fields. Posting
+  the teacher view back (copy/duplicate) keeps them.
+- Student view: a SQL question (resolved language `sql`) carries `sql_setup` and `sql_compare`; other questions carry
+  neither. Hidden tests and points stay stripped exactly as before. Answers and grading are unchanged (manual type).
+- DKU OJ questions keep their own language handling (`runner_for` is unchanged and never yields `typescript` or `sql`).

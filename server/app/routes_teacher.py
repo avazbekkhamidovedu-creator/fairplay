@@ -66,6 +66,12 @@ def _questions_from(body: ExamIn) -> list[dict]:
     return out
 
 
+def _without_sql(q: dict) -> dict:
+    if q.get("type") != "code" or q.get("language") is not None:
+        return q
+    return {**q, "sql_setup": "", "sql_compare": "unordered"}
+
+
 def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
     qs = _questions_from(body)
     if body.mode == "external":
@@ -84,6 +90,8 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
               "default_language"):                               # phase 4
         if creating or f in body.model_fields_set:
             setattr(e, f, getattr(body, f))
+    if e.default_language != "sql":
+        e.questions = [_without_sql(q) for q in e.questions]
     if creating or "websites" in body.model_fields_set:
         e.website_links = list(body.website_links)            # 2026-10-24: derived from websites
     # 2026-10-23: no outside apps any more (calculator, materials and websites are built

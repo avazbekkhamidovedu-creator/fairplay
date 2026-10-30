@@ -332,13 +332,15 @@ class RubricItemIn(BaseModel):
 # Tests are {input, expected, visible, points}. Hidden tests never reach students (see
 # services.student_question). The server never runs code: runs happen in the browser
 # (students: visible tests; teachers: all tests on the grading page).
-CODE_LANGUAGES = ("python", "javascript", "c", "cpp", "java")
-CodeLanguage = Literal["python", "javascript", "c", "cpp", "java"]
+CODE_LANGUAGES = ("python", "javascript", "typescript", "c", "cpp", "java", "sql")
+CodeLanguage = Literal["python", "javascript", "typescript", "c", "cpp", "java", "sql"]
+MAX_SQL_SETUP = 50_000
 MAX_CODE_TESTS = 50
 MAX_TEST_TEXT = 20_000
 MAX_STARTER_CODE = 20_000
 DEFAULT_TIME_LIMIT_MS = 2000
-CODE_FIELDS = ("language", "starter_code", "tests", "write_only", "time_limit_ms")
+CODE_FIELDS = ("language", "starter_code", "tests", "write_only", "time_limit_ms",
+               "sql_setup", "sql_compare")
 
 
 class CodeTestIn(BaseModel):
@@ -424,6 +426,9 @@ class QuestionIn(BaseModel):
     tests: list[CodeTestIn] = Field(default_factory=list, max_length=MAX_CODE_TESTS)
     write_only: bool = False
     time_limit_ms: int = Field(default=DEFAULT_TIME_LIMIT_MS, ge=100, le=10_000)
+    # SQL questions only (language "sql", or null with the exam default "sql"); dropped otherwise
+    sql_setup: str = Field(default="", max_length=MAX_SQL_SETUP)
+    sql_compare: Literal["ordered", "unordered"] = "unordered"
 
     @field_validator("prompt")
     @classmethod
@@ -442,7 +447,10 @@ class QuestionIn(BaseModel):
         if self.type != "code":
             self.language, self.starter_code, self.tests = None, "", []
             self.write_only, self.time_limit_ms = False, DEFAULT_TIME_LIMIT_MS
+            self.sql_setup, self.sql_compare = "", "unordered"
         else:
+            if self.language is not None and self.language != "sql":
+                self.sql_setup, self.sql_compare = "", "unordered"
             # phase 4: graded by the teacher (tests run in the teacher's browser). Test points,
             # when given, must add up to the question's points.
             test_sum = sum(t.points for t in self.tests)
