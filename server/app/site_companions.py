@@ -47,22 +47,10 @@ class Service:
     rank: int = 0
 
 
-SERVICES: tuple[Service, ...] = (
-    Service(
-        id="box", name="Box", rank=1,
-        matches=("box.com", "*.box.com"),
-        companions=(
-            "app.box.com", "{tenant}.app.box.com", "account.box.com", "{tenant}.account.box.com",
-            "api.box.com", "sso.services.box.net", "*.boxcdn.net", "*.boxcloud.com",
-        ),
-    ),
-    Service(
-        id="duke-box", name="Duke Box", rank=2,
-        matches=("duke.app.box.com", "duke.box.com", "duke.account.box.com"),
-        # Duke NetID sign-in (Shibboleth) and its Duo prompt
-        companions=("shib.oit.duke.edu", "*.duosecurity.com"),
-    ),
-)
+# 2026-10-30: empty on purpose. Duke Box used to be listed here (sign-in, Duo, scripts); that
+# widened the frame allow-list and never worked, because Box sign-in refuses framing
+# (X-Frame-Options SAMEORIGIN). A Box link now opens in its own pane, see app.box_profiles.
+SERVICES: tuple[Service, ...] = ()
 
 # Labels of box.com hosts that are Box's own, not a tenant ("www.box.com", "app.box.com").
 _NOT_TENANT = {"www", "app", "account", "api", "upload", "dl", "public", "cdn01", "notes",

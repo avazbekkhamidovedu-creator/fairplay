@@ -188,7 +188,8 @@ def tool_settings(e: Exam) -> dict:
     upload_opens_days (open book: uploads that many days before the date)."""
     if e.mode == "external":
         return {"calculator": "off", "open_book": False, "websites": [], "website_links": [],
-                "companions": [], "upload_opens_days": 0}
+                "companions": [], "upload_opens_days": 0, "box_link": None}
+    from .box_profiles import checked_link, without_box_hosts
     from .schemas import clean_website_links
     from .site_companions import companions
     calc = e.calculator if e.calculator in ("scientific", "graphing") else "off"
@@ -197,7 +198,11 @@ def tool_settings(e: Exam) -> dict:
         # security review 2026-10-24: also an exam synced (and started) before the policy
         from .integrations.site_policy import filter_sites
         websites = filter_sites(websites)[0]
+    box_link = checked_link(getattr(e, "box_link", None))[0]
+    if box_link:
+        websites = without_box_hosts(websites)     # the Box page has its own pane (tools.box)
     return {"calculator": calc, "open_book": bool(e.open_book), "websites": websites,
+            "box_link": box_link,
             "website_links": clean_website_links(getattr(e, "website_links", None) or [], websites),
             "companions": companions(websites),
             "upload_opens_days": upload_days(e)}
@@ -443,6 +448,18 @@ def shuffled_for(attempt_id: str, questions: list) -> list:
     return out
 
 
+def running_box_tools(a: Attempt, exam: dict, now: datetime) -> dict | None:
+    """2026-10-30: `tools.box` only while the attempt runs: in progress, before its
+    deadline, exam live, a valid Box link set (app.box_profiles)."""
+    if a.status != "in_progress" or exam.get("status") != "live" or now >= a.deadline_at:
+        return None
+    if (exam.get("mode") or "questions") == "external":
+        return None
+    from .box_profiles import box_tools, checked_link
+    link = checked_link(exam.get("box_link"))[0]
+    return box_tools(link) if link else None
+
+
 def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
     questions = exam["questions"]
     if exam.get("shuffle_questions"):
@@ -465,7 +482,7 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "allowed_apps": [],
         # 2026-10-23: {calculator, open_book, websites}; the page passes websites to the
         # app as allowed_sites (the only hosts its sub-frames may load)
-        "tools": student_tools(exam),
+        "tools": {**student_tools(exam), **({"box": box} if (box := running_box_tools(a, exam, now)) else {})},
         **({"finish_url_regex": exam.get("finish_url_regex"), "external_kind": exam.get("external_kind"),
             "canvas": exam.get("canvas")} if external else {}),
         **({"canvas_scope": canvas_scope_of(exam)}

@@ -71,6 +71,8 @@ CLIENT_EVENT_TYPES = frozenset({
     "single_app_off", "vpn_on", "proxy_on",
     # Canvas mode (2026-10-25)
     "canvas_upload_unsupported", "canvas_sso_popup", "canvas_quiz_started",
+    # 2026-10-30: the Box pane of a running attempt opened (detail: host only)
+    "box_opened",
 })
 SERVER_EVENT_TYPES = frozenset({
     "second_device", "foreign_session", "re_entry", "app_gap", "no_app_signal",

@@ -458,7 +458,14 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     from ...schemas import clean_website_links
     from ...services import upload_days
     from ...site_companions import companions
+    from ...box_profiles import checked_link, without_box_hosts
     websites, refused = filter_sites(list(e.websites or []))
+    box_link, box_error = checked_link(e.box_link)
+    if box_link:
+        # the Box page opens in its own pane (tools.box); framing it never worked
+        refused += [{"site": w, "reason": "Opened with Duke Box (box_link) instead"}
+                    for w in websites if w not in without_box_hosts(websites)]
+        websites = without_box_hosts(websites)
     blocked = [b for b in (e.external_meta or {}).get("websites_blocked") or []
                if isinstance(b, dict) and isinstance(b.get("site"), str)]
     seen = {b["site"] for b in blocked}
@@ -470,6 +477,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "closes_at": iso(exam_closes_at(e)), "open_to": open_to,
             "settings": {"calculator": e.calculator or "off", "open_book": bool(e.open_book),
                          "websites": websites,
+                         "box_link": box_link, "box_link_error": box_error,
                          # 2026-10-24: start pages, sites opened so a service works (Duke Box:
                          # sign-in, scripts, previews; app.site_companions), early uploads
                          "website_links": clean_website_links(e.website_links or [], websites),
@@ -493,7 +501,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "counts": counts, "students": students, "server_time": iso(now)}
 
 
-SET_IN_FAIRPLAY_ORDER = ("upload_opens_days", "websites", "calculator", "open_book", "strong_lock",
+SET_IN_FAIRPLAY_ORDER = ("upload_opens_days", "websites", "box_link", "calculator", "open_book", "strong_lock",
                          "resume_needs_approval")
 
 
@@ -503,7 +511,9 @@ def _pending_settings(pending: dict | None) -> dict | None:
     from ...site_companions import companions
     if not isinstance(pending, dict):
         return None
+    from ...box_profiles import checked_link
     sites = [w for w in pending.get("websites") or [] if isinstance(w, str)]
+    box_link, box_error = checked_link(pending.get("box_link"))
     out = {"calculator": pending.get("calculator") if pending.get("calculator") in ("off", "scientific", "graphing")
            else "off",
            "open_book": bool(pending.get("open_book", False)), "websites": sites,
@@ -513,7 +523,7 @@ def _pending_settings(pending: dict | None) -> dict | None:
            "websites_blocked": [b for b in pending.get("websites_blocked") or [] if isinstance(b, dict)],
            "strong_lock": bool(pending.get("strong_lock", False)),
            "resume_needs_approval": pending.get("resume_needs_approval") is not False,
-           "review": pending.get("review") or "nothing"}
+           "review": pending.get("review") or "nothing", "box_link": box_link, "box_link_error": box_error}
     if isinstance(pending.get("websites_input"), list):
         out["websites_input"] = pending["websites_input"]
     return out
@@ -635,7 +645,7 @@ SETTINGS_FIXED = "The exam has started: its settings can't change any more."
 MAX_PENDING = 2000             # exams not synced yet that may hold settings at once
 PENDING_FOR = timedelta(days=180)
 SETTING_FIELDS = ("calculator", "open_book", "websites", "strong_lock", "resume_needs_approval",
-                  "upload_opens_days", "review")
+                  "upload_opens_days", "review", "box_link")
 
 
 def _settings_body(data: dict, key: str) -> tuple[list[str], dict]:
@@ -650,6 +660,8 @@ def _settings_body(data: dict, key: str) -> tuple[list[str], dict]:
     ov: dict = {}
     for f in sent:
         v = data[f]
+        if f == "box_link" and isinstance(v, str) and not v.strip():
+            v = None
         if v is None:
             if f == "review":
                 raise HTTPException(400, "review must be one of: " + ", ".join(LEVELS))
@@ -671,6 +683,12 @@ def _settings_body(data: dict, key: str) -> tuple[list[str], dict]:
             if v not in LEVELS:
                 raise HTTPException(400, "review must be one of: " + ", ".join(LEVELS))
             ov[f] = v
+        elif f == "box_link":
+            from ...box_profiles import BoxLinkError, normalize_link
+            try:
+                ov[f] = normalize_link(v)
+            except BoxLinkError as exc:
+                raise HTTPException(400, f"box_link: {exc}") from None
         elif f == "websites":
             if not isinstance(v, list) or len(v) > MAX_SETTINGS_SITES or not all(
                     isinstance(x, str) and len(x) <= 2100
@@ -753,6 +771,7 @@ async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
     """The exam settings of a DKU OJ exam, kept in FairPlay (v2 §3, §10, §11). Body, any of:
     {"calculator": "off|scientific|graphing", "open_book": bool, "strong_lock": bool,
     "resume_needs_approval": bool, "upload_opens_days": 0..7, "review": "<level>",
+    "box_link": "https://duke.box.com/s/<token>" (stored as https://duke.app.box.com/s/<token>; "" clears),
     "websites": ["docs.python.org", "https://duke.app.box.com/folder/0",
     "Course folder https://duke.app.box.com/folder/123", {"url": "...", "title": "..."}]}; null
     hands a field back (the exam list's value or the default; not for review).

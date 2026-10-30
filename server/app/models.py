@@ -122,6 +122,9 @@ class Exam(Base):
     # also in `websites`): the page the exam's websites tab opens first. The apps never read it.
     website_links: Mapped[list] = mapped_column(JSON, nullable=False, default=list,
                                                 server_default=text("'[]'"))
+    # 2026-10-30: Duke Box shared link of the exam, stored normalized
+    # (https://duke.app.box.com/s/<token>); app.box_profiles. NULL = no Box pane.
+    box_link: Mapped[str | None] = mapped_column(String(300), nullable=True)
     # 2026-10-24: open book: students may upload their materials this many days before
     # scheduled_at (0 = off: only on "Before you start" once the exam is open). The window ends
     # at scheduled_at or when the exam opens, whichever is first (app.materials.upload_window).

@@ -1140,3 +1140,44 @@ Replaces "8 hours" above.
   `{ok: true, revoked: n}`.
 - A remember token is not a bearer token: every other route answers 401 to it. Neither token is logged (a sha256
   prefix is). The homework token is still refused on all exam routes.
+
+## Open exam with Duke Box (2026-10-30)
+
+An exam may carry one Duke Box shared link. A running attempt then gets a Box pane next to the exam. The host
+lists are data in `server/app/box_profiles.py` (profile `duke`; test profile `fakebox`, only with `FAIRPLAY_DEV=1`,
+chosen by env `BOX_PROFILE`). The duke lists come from a real Box page and Box's firewall documentation: confirm
+them with a real login trace (`python server/scripts/box_trace.py session.har` prints hosts, request counts and first
+path segments; never cookies, headers, queries or bodies) and refine the profile.
+
+- **Setting** `box_link` in `POST /api/integrations/dkuoj/v1/exams/<key>/settings`: a string or null. Accepted:
+  `https://duke.box.com/s/<token>` or `https://duke.app.box.com/s/<token>`, token `[A-Za-z0-9]{10,64}`, optional
+  trailing `/`; a query or fragment is dropped. Stored (column `exams.box_link`, FairPlay's own database) as
+  `https://duke.app.box.com/s/<token>`. Refused with 400 `{"detail": "box_link: <plain message>"}`: other hosts or
+  tenants, `http`, user info, port, `/folder/<id>`, `/file/<id>`, any other path, a bad token. `""` or null clears it.
+  Same rules as the other settings: kept for an exam not synced yet and applied when it arrives; once the first
+  student started a different value is 409; `box_link` is in `set_in_fairplay` when set.
+- **`GET/POST .../exams/<key>` `settings`** gains `box_link` (normalized string or null) and `box_link_error`
+  (plain message when the stored value is not valid, else null; then `box_link` is null). Also in the not-synced shape.
+  A Box host in `websites` while a `box_link` is set is not framed: it moves to `websites_blocked` with reason
+  "Opened with Duke Box (box_link) instead".
+- **Teacher exam view** has `box_link` (normalized or null).
+- **Student attempt view** (`POST /api/student/exams/<id>/start`, `GET /api/student/attempts/<id>`) has
+  `tools.box` only while the attempt is `in_progress`, before `deadline_at`, and the exam is `live`, with a valid link:
+  ```
+  "box": {"start_url": "https://duke.app.box.com/s/<token>",
+          "app_hosts": ["duke.app.box.com", "duke.box.com"],
+          "path_prefix": "/s/<token>",
+          "sign_in_hosts": [{"host": "duke.account.box.com", "paths": ["/login*"]},
+                            {"host": "sso.services.box.net", "paths": null}, ...],
+          "asset_hosts": ["cdn01.boxcdn.net", "*.boxcloud.com", ...],
+          "blocked_requests": [{"host": "*", "path": "/upload*"},
+                               {"host": "*", "path": "/api/2.0/folders", "methods": ["POST"]}, ...]}
+  ```
+  `sign_in_hosts[].paths` null = any path, else path globs with a trailing `*`; a host `*.base` is the subdomains
+  of base. `blocked_requests[].host` `*` = any host the pane may load; `methods` absent = any method. The pane
+  loads `app_hosts` only under `path_prefix`. `tools.box` is never in the exam list, the offline package, or for a
+  submitted, not started, expired or closed attempt, or when the link is empty or invalid.
+- **Events**: clients may post `box_opened` (detail: the host only); `blocked_navigation` detail for Box is
+  `box <host> <path-class>`. `box_opened` is bookkeeping, not a flag.
+- **Companion sites**: Box and Duke sign-in hosts are no longer added to `allowed_sites` / `companions` (the frame
+  allow-list); `settings.companions` and `tools.allowed_sites` carry no Box hosts.

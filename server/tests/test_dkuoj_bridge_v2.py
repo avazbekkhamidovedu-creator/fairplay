@@ -542,7 +542,7 @@ def test_exam_endpoints(oj, fake):
                              "websites_blocked": [{"site": "*.com",            # refused, and shown
                                                    "reason": "'*.com' is not a website name like docs.python.org"}],
                              "strong_lock": True, "resume_needs_approval": True,
-                             "review": "answers_and_results"}
+                             "review": "answers_and_results", "box_link": None, "box_link_error": None}
     assert v["counts"] == {"roster": 4, "set_up": 2, "not_started": 4, "writing": 0, "offline": 0,
                            "waiting": 0, "handed_in": 0}
     assert {s["netid"] for s in v["students"]} == {"alice", "carol", "ax19", "bl642"}

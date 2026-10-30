@@ -259,7 +259,8 @@ def _settings(item: dict) -> dict:
             # 2026-10-24: open book: students may upload this many days before start_time
             "upload_opens_days": upload_days_of(s.get("upload_opens_days")),
             "require_strong_lock": bool(s.get("strong_lock")),
-            "resume_needs_approval": s.get("resume_needs_approval") is not False}
+            "resume_needs_approval": s.get("resume_needs_approval") is not False,
+            "box_link": None}       # 2026-10-30: only ever set in FairPlay
 
 
 # 2026-10-24: settings set in FairPlay for a DKU OJ exam (POST /exams/<key>/settings, v2 §3),
@@ -271,10 +272,12 @@ def _settings(item: dict) -> dict:
 # 2026-10-24 (§11): DKU OJ keeps no FairPlay settings any more; its exam list has no "settings"
 # and every setting comes through POST /exams/<key>/settings.
 FAIRPLAY_SETTINGS = "fairplay_settings"
-OVERRIDABLE = ("calculator", "open_book", "websites", "strong_lock", "resume_needs_approval", "upload_opens_days")
+OVERRIDABLE = ("calculator", "open_book", "websites", "strong_lock", "resume_needs_approval", "upload_opens_days",
+               "box_link")
 # setting name in the API -> Exam attribute
 EXAM_FIELD = {"calculator": "calculator", "open_book": "open_book", "strong_lock": "require_strong_lock",
-              "resume_needs_approval": "resume_needs_approval", "upload_opens_days": "upload_opens_days"}
+              "resume_needs_approval": "resume_needs_approval", "upload_opens_days": "upload_opens_days",
+              "box_link": "box_link"}
 PENDING_PREFIX = "pending:"     # oj_state rows: settings for an exam not synced yet (§11)
 
 
@@ -290,6 +293,9 @@ def apply_fairplay_settings(e: Exam, meta: dict) -> None:
             setattr(e, EXAM_FIELD[f], bool(ov[f]))
     if "upload_opens_days" in ov:
         e.upload_opens_days = upload_days_of(ov.get("upload_opens_days"))
+    if "box_link" in ov:
+        from ...box_profiles import checked_link
+        e.box_link = checked_link(ov["box_link"])[0]
     if isinstance(ov.get("websites"), list):
         e.websites = [w for w in ov["websites"] if isinstance(w, str)][:MAX_WEBSITES]
         e.website_links = clean_website_links(ov.get("website_links") or [], e.websites)

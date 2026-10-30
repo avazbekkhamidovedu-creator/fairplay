@@ -35,6 +35,7 @@ ONLINE_WINDOW_S = 15
 # Integrity events that are bookkeeping, not "flags" a teacher should look at.
 NON_FLAG_TYPES = ("lock_started", "lock_ended", "device_released", "device_bound",
                   "offline_exit_code_issued", "canvas_quiz_started", "client_canvas_quiz_started",
+                  "box_opened", "client_box_opened",
                   "resume_approved", "swap_approved",     # S3 / S4: the teacher's own actions
                   "device_released_oj", "attempt_reopened", "extra_time_granted",   # the same from DKU OJ
                   "access_code_reissued",

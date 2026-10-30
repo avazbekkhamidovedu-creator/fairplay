@@ -75,11 +75,7 @@ def test_teacher_saves_links_and_sees_companions(client, teacher, alice):
     # the apps' list keeps its format: plain hosts
     assert e["websites"] == ["duke.app.box.com", "docs.python.org"]
     assert e["website_links"] == [{"host": "duke.app.box.com", "url": BOX, "title": "Course folder"}]
-    comp = e["companions"]
-    assert [c["name"] for c in comp] == ["Duke Box"] and comp[0]["for"] == "duke.app.box.com"
-    for s in ("app.box.com", "account.box.com", "duke.account.box.com", "sso.services.box.net",
-              "*.boxcdn.net", "*.boxcloud.com", "shib.oit.duke.edu", "*.duosecurity.com"):
-        assert s in comp[0]["sites"], s
+    assert e["companions"] == []          # 2026-10-30: Box is no companion any more (own pane)
     # a PUT without websites keeps them and their links
     r = client.put(f"/api/exams/{e['id']}", json={**SAMPLE_EXAM, "title": "T2"}, headers=teacher).json()
     assert r["website_links"] == e["website_links"]
@@ -88,7 +84,7 @@ def test_teacher_saves_links_and_sees_companions(client, teacher, alice):
     t = listed(client, alice, e["id"])["tools"]
     assert t["websites"] == ["duke.app.box.com", "docs.python.org"]
     assert t["website_links"] == [{"host": "duke.app.box.com", "url": BOX, "title": "Course folder"}]
-    assert t["allowed_sites"][:2] == t["websites"] and "*.boxcdn.net" in t["allowed_sites"]
+    assert t["allowed_sites"] == t["websites"]
 
 
 def test_site_check_names_companions(client, teacher, monkeypatch):
@@ -98,25 +94,24 @@ def test_site_check_names_companions(client, teacher, monkeypatch):
         return {"host": entry, "frameable": True, "reason": ""}
     monkeypatch.setattr(sc, "check_site", fake_check)
     r = client.get("/api/tools/site-check", params={"host": BOX}, headers=teacher).json()
-    assert r["host"] == "duke.app.box.com" and r["companions"]["name"] == "Duke Box"
+    assert r["host"] == "duke.app.box.com" and r["companions"] is None
     r = client.get("/api/tools/site-check", params={"host": "docs.python.org"}, headers=teacher).json()
     assert r["companions"] is None
 
 
 def test_companions_table(monkeypatch):
-    name, sites = companions_for("app.box.com")
-    assert name == "Box" and "{tenant}" not in "".join(sites) and "app.box.com" not in sites
+    assert companions_for("app.box.com") == (None, [])
     assert companions_for("docs.python.org") == (None, [])
     # never more than the Windows app reads
-    many = [f"t{i}.app.box.com" for i in range(20)]
-    assert MAX_LOCK_SITES == 64 and len(allowed_sites(many)) == 46      # 20 + 6 shared + 20 tenants
     import app.site_companions as sc
-    monkeypatch.setattr(sc, "MAX_LOCK_SITES", 30)
-    assert len(allowed_sites(many)) == 30 and allowed_sites(many)[:20] == many
-    assert sum(len(c["sites"]) for c in companions(many)) == 10
+    svc = sc.Service(id="x", name="X", matches=("*.x.org",), companions=("a.y.org", "b.y.org", "c.y.org"))
+    monkeypatch.setattr(sc, "SERVICES", (svc,))
+    many = [f"t{i}.x.org" for i in range(20)]
+    assert len(allowed_sites(many)) == 20 + 3 and companions(many)[0]["sites"] == ["a.y.org", "b.y.org", "c.y.org"]
+    monkeypatch.setattr(sc, "MAX_LOCK_SITES", 21)
+    assert len(allowed_sites(many)) == 21 and allowed_sites(many)[:20] == many
 
 
-# ---------------------------------------------------------------- site policy (external exams)
 def test_duke_box_allowed_other_storage_refused(monkeypatch):
     monkeypatch.delenv(site_policy.ENV_EXCEPTIONS, raising=False)
     monkeypatch.delenv(site_policy.ENV_ALLOWLIST, raising=False)
@@ -237,7 +232,7 @@ def test_dkuoj_settings_endpoint(oj, fake):
     assert s["upload_opens_days"] == 2 and s["set_in_fairplay"] == ["upload_opens_days", "websites"]
     assert s["websites"] == ["duke.app.box.com", "docs.python.org"]
     assert s["website_links"] == [{"host": "duke.app.box.com", "url": BOX, "title": "Course folder"}]
-    assert s["companions"][0]["name"] == "Duke Box"
+    assert s["companions"] == []
     assert [b["site"] for b in s["websites_blocked"]] == ["www.dropbox.com"]
     # the next sync keeps them (FairPlay-set wins over the exam list)
     run(oj)
