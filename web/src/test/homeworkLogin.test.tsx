@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bridge from "../lib/bridge";
-import { HOMEWORK_TOKEN_KEY, getHomeworkToken } from "../lib/homework";
+import { getHomeworkToken } from "../lib/homework";
+import { clearHomeworkSession, setHomeworkSession } from "../lib/homeworkSession";
 import HomeworkPage from "../pages/student/HomeworkPage";
 import StudentLogin from "../pages/student/StudentLogin";
 
@@ -60,6 +61,7 @@ beforeEach(() => {
     "/api/homework/me": { status: 200, body: { name: "Ava K", netid: "ak1" } },
   };
   localStorage.clear();
+  clearHomeworkSession();
   bridge._resetBridgeForTests();
   vi.stubGlobal(
     "fetch",
@@ -153,9 +155,9 @@ describe("homework login flow", () => {
     expect(await screen.findByText("Welcome, Ava K")).toBeTruthy();
     const fin = calls.find((c) => c.url === "/api/homework/login/finish");
     expect(JSON.parse(String(fin?.init?.body))).toEqual({ state: START.state, ticket: "TICKET" });
-    expect(localStorage.getItem(HOMEWORK_TOKEN_KEY)).toBe("HW-TOKEN");
+    expect(getHomeworkToken()).toBe("HW-TOKEN");
     expect(localStorage.getItem(EXAM_KEY)).toBe("EXAM-TOK");
-    expect(Object.keys(localStorage).filter((k) => localStorage.getItem(k) === "HW-TOKEN")).toEqual([HOMEWORK_TOKEN_KEY]);
+    expect(Object.keys(localStorage).filter((k) => localStorage.getItem(k) === "HW-TOKEN")).toEqual([]);
   });
 
   it("cancel returns quietly", async () => {
@@ -223,7 +225,7 @@ describe("homework page", () => {
   });
 
   it("loads /me with the homework token and no exam endpoint", async () => {
-    localStorage.setItem(HOMEWORK_TOKEN_KEY, "HW-TOKEN");
+    setHomeworkSession("HW-TOKEN");
     renderPage();
     expect(await screen.findByText("Welcome, Ava K")).toBeTruthy();
     expect(screen.getByText("NetID: ak1")).toBeTruthy();
@@ -233,7 +235,7 @@ describe("homework page", () => {
   });
 
   it("redirects and drops the token when /me says 401", async () => {
-    localStorage.setItem(HOMEWORK_TOKEN_KEY, "OLD");
+    setHomeworkSession("OLD");
     replies["/api/homework/me"] = { status: 401, body: {} };
     renderPage();
     expect(await screen.findByText("Code screen")).toBeTruthy();
@@ -242,7 +244,7 @@ describe("homework page", () => {
 
   it("sign out drops the token, leaves the exam token and tells a supporting app", async () => {
     native(true);
-    localStorage.setItem(HOMEWORK_TOKEN_KEY, "HW-TOKEN");
+    setHomeworkSession("HW-TOKEN");
     localStorage.setItem(EXAM_KEY, "EXAM-TOK");
     const user = userEvent.setup();
     renderPage();
@@ -255,7 +257,7 @@ describe("homework page", () => {
 
   it("sign out sends nothing to an app without support", async () => {
     native(false);
-    localStorage.setItem(HOMEWORK_TOKEN_KEY, "HW-TOKEN");
+    setHomeworkSession("HW-TOKEN");
     const user = userEvent.setup();
     renderPage();
     await user.click(await screen.findByRole("button", { name: "Sign out" }));

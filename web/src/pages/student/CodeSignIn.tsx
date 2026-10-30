@@ -3,13 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { ApiError, TooEarlyError, codeLoginApi, setToken } from "../../api/client";
 import type { CodeLoginPrompt } from "../../api/types";
 import { CODE_LENGTH, CodeBoxes } from "../../components/code-signin/CodeBoxes";
-import { HomeworkLink } from "../../components/code-signin/HomeworkLink";
+import { HomeworkLink, SignedOutNotice } from "../../components/code-signin/HomeworkLink";
 import { DeviceCheckDialog, type DeviceCheckState } from "../../components/code-signin/DeviceCheckDialog";
 import { TryExamScreenDialog } from "../../components/code-signin/TryExamScreenDialog";
 import { UpdateCard, useSignInUpdate } from "../../components/code-signin/UpdatePrompt";
 import { AppVersion } from "../../components/AppVersion";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import * as bridge from "../../lib/bridge";
+import { clearHomeworkSession } from "../../lib/homeworkSession";
 import { rememberResume, welcomeBack } from "../../lib/resumeState";
 import { countdownText, opensInMs, startsMessage } from "../../lib/earlyCode";
 import { keepDeviceCheck, sendPendingDeviceCheck } from "../../lib/pendingDeviceCheck";
@@ -78,6 +79,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
     setError(null);
     setEarly(null);
     const typed = normalizeCode(code);
+    clearHomeworkSession();
     setBusy(true);
     try {
       const ch = await codeLoginApi.challenge();
@@ -99,6 +101,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
 
   async function confirm() {
     if (!prompt) return;
+    clearHomeworkSession();
     setBusy(true);
     setError(null);
     try {
@@ -205,6 +208,7 @@ export default function CodeSignIn({ onUseAccount }: { onUseAccount: () => void 
               Enter your exam code
             </h1>
             <p className="cs-sub">The 6-character code on the sheet your professor gave you.</p>
+            <SignedOutNotice />
             <form onSubmit={submit} noValidate>
               <CodeBoxes
                 chars={chars}

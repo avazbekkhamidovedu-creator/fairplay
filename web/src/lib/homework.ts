@@ -1,6 +1,15 @@
 import * as bridge from "./bridge";
+import {
+  LEGACY_HOMEWORK_TOKEN_KEY,
+  clearHomeworkSession,
+  getHomeworkToken,
+  noteActivity,
+  setHomeworkSession,
+  type SessionTimes,
+} from "./homeworkSession";
 
-export const HOMEWORK_TOKEN_KEY = "fairplay:homework-token";
+export { getHomeworkToken };
+export const HOMEWORK_TOKEN_KEY = LEGACY_HOMEWORK_TOKEN_KEY;
 
 export interface HomeworkInfo {
   provider: string;
@@ -18,33 +27,10 @@ export const MSG_RATE = "Too many tries. Wait a moment and try again.";
 export const MSG_BUSY = "DKU OJ cannot be reached right now. Try again in a few minutes.";
 export const MSG_BRIDGE = "The sign-in window could not be completed. Try again.";
 export const MSG_GENERIC = "Could not sign in. Try again.";
+export const MSG_AGAIN = "Please sign in again.";
 export const MSG_NETWORK = "Cannot reach the server. Check your connection and try again.";
 
 export type LoginOutcome = { ok: true; identity: HomeworkIdentity } | { ok: false; cancelled?: boolean; message?: string };
-
-export function getHomeworkToken(): string | null {
-  try {
-    return localStorage.getItem(HOMEWORK_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setHomeworkToken(token: string): void {
-  try {
-    localStorage.setItem(HOMEWORK_TOKEN_KEY, token);
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-export function clearHomeworkToken(): void {
-  try {
-    localStorage.removeItem(HOMEWORK_TOKEN_KEY);
-  } catch {
-    /* storage unavailable */
-  }
-}
 
 export async function loadHomeworkInfo(): Promise<HomeworkInfo | null> {
   try {
@@ -67,10 +53,11 @@ function statusMessage(status: number): string {
   return MSG_GENERIC;
 }
 
-async function post<T>(path: string, body: unknown): Promise<{ status: number; data: T | null }> {
+async function post<T>(path: string, body: unknown, bearer?: string | null): Promise<{ status: number; data: T | null }> {
+  noteActivity();
   const res = await fetch(path, {
     method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
     body: JSON.stringify(body),
   });
   let data: T | null = null;
@@ -112,7 +99,7 @@ function waitForResult(state: string, expiresAt: string): Promise<Wait> {
 
 /** Whole DKU OJ sign-in: start, the app's login window, finish. Stores the homework token
  *  under its own key; the exam token is never touched. */
-export async function runHomeworkLogin(): Promise<LoginOutcome> {
+export async function runHomeworkLogin(opts: { remember?: boolean } = {}): Promise<LoginOutcome> {
   if (!bridge.homeworkLoginSupported()) return { ok: false, message: MSG_BRIDGE };
   let start: StartReply;
   try {
@@ -136,13 +123,15 @@ export async function runHomeworkLogin(): Promise<LoginOutcome> {
   if (w.kind === "timeout") return { ok: false, message: MSG_EXPIRED };
   if (w.kind === "error") return { ok: false, message: MSG_BRIDGE };
   try {
-    const r = await post<{ token: string; name: string; netid: string }>("/api/homework/login/finish", {
+    const r = await post<{ token: string; name: string; netid: string } & SessionTimes>("/api/homework/login/finish", {
       state: start.state,
       ticket: w.ticket,
     });
     if (r.status !== 200 || !r.data?.token) return { ok: false, message: statusMessage(r.status) };
-    setHomeworkToken(r.data.token);
-    return { ok: true, identity: { name: String(r.data.name ?? ""), netid: String(r.data.netid ?? "") } };
+    setHomeworkSession(r.data.token, r.data);
+    const identity = { name: String(r.data.name ?? ""), netid: String(r.data.netid ?? "") };
+    if (opts.remember) await createRemember(identity.name);
+    return { ok: true, identity };
   } catch {
     return { ok: false, message: MSG_NETWORK };
   }
@@ -152,10 +141,11 @@ export async function runHomeworkLogin(): Promise<LoginOutcome> {
 export async function loadHomeworkMe(): Promise<HomeworkIdentity | "signed-out" | "error"> {
   const token = getHomeworkToken();
   if (!token) return "signed-out";
+  noteActivity();
   try {
     const res = await fetch("/api/homework/me", { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
     if (res.status === 401 || res.status === 403) {
-      clearHomeworkToken();
+      clearHomeworkSession();
       return "signed-out";
     }
     if (!res.ok) return "error";
@@ -167,6 +157,52 @@ export async function loadHomeworkMe(): Promise<HomeworkIdentity | "signed-out" 
 }
 
 export function signOutHomework(): void {
-  clearHomeworkToken();
+  clearHomeworkSession();
   bridge.clearHomeworkLogin();
+}
+
+/** Best effort: a failure here never blocks the sign-in that just worked. */
+async function createRemember(name: string): Promise<void> {
+  try {
+    const r = await post<{ remember_token?: string }>("/api/homework/remember/create", {}, getHomeworkToken());
+    if (r.status === 200 && r.data?.remember_token) bridge.rememberSave(r.data.remember_token, name);
+  } catch {
+    /* not remembered */
+  }
+}
+
+export type ContinueOutcome = { ok: true } | { ok: false; cancelled?: boolean; message?: string };
+
+/** "Continue as <name>": device unlock, then trade the stored remember token for a session. */
+export async function continueAsRemembered(): Promise<ContinueOutcome> {
+  const u = await bridge.rememberUnlock();
+  if ("cancelled" in u) return { ok: false, cancelled: true };
+  if ("error" in u) return { ok: false, message: MSG_GENERIC };
+  try {
+    const r = await post<{ token: string; name: string; remember_token?: string } & SessionTimes>("/api/homework/remember/exchange", {
+      remember_token: u.token,
+    });
+    if (r.status === 401) {
+      bridge.rememberForget();
+      return { ok: false, message: MSG_AGAIN };
+    }
+    if (r.status !== 200 || !r.data?.token) return { ok: false, message: statusMessage(r.status) };
+    setHomeworkSession(r.data.token, r.data);
+    if (r.data.remember_token) bridge.rememberSave(r.data.remember_token, String(r.data.name ?? ""));
+    return { ok: true };
+  } catch {
+    return { ok: false, message: MSG_NETWORK };
+  }
+}
+
+/** "Forget this device": drop every remember token of the account, then sign out. */
+export async function forgetThisDevice(): Promise<void> {
+  const token = getHomeworkToken();
+  try {
+    if (token) await post("/api/homework/remember/forget-all", {}, token);
+  } catch {
+    /* the local copy is deleted below either way */
+  }
+  bridge.rememberForget();
+  signOutHomework();
 }

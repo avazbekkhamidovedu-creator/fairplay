@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
-import { getHomeworkToken, loadHomeworkMe, signOutHomework, type HomeworkIdentity } from "../../lib/homework";
+import { SessionBar } from "../../components/homework/SessionBar";
+import { forgetThisDevice, getHomeworkToken, loadHomeworkMe, signOutHomework, type HomeworkIdentity } from "../../lib/homework";
 import "../../styles/code-signin.css";
 
 export default function HomeworkPage() {
@@ -25,6 +26,8 @@ export default function HomeworkPage() {
     };
   }, [hasToken]);
 
+  const expired = useCallback(() => setGone(true), []);
+
   if (!hasToken || gone) return <Navigate to="/student/login" replace />;
 
   function signOut() {
@@ -32,8 +35,14 @@ export default function HomeworkPage() {
     navigate("/student/login", { replace: true });
   }
 
+  async function forget() {
+    await forgetThisDevice();
+    navigate("/student/login", { replace: true });
+  }
+
   return (
     <div className="cs-page">
+      <SessionBar onExpire={expired} />
       <header className="cs-top">
         <span className="cs-brand">
           <LogoMark />
@@ -62,6 +71,9 @@ export default function HomeworkPage() {
           <p className="cs-sub">Homework is coming soon.</p>
           <button type="button" className="cs-btn cs-btn-secondary cs-block" onClick={signOut}>
             Sign out
+          </button>
+          <button type="button" className="cs-link cs-forget" onClick={() => void forget()}>
+            Forget this device
           </button>
         </section>
       </main>

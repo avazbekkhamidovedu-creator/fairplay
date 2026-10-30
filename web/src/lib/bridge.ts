@@ -20,6 +20,9 @@ export interface NativeState {
   deviceTest?: boolean;
   /** 2026-10-30: the app can open the separate homework login window (missing = no). */
   homeworkLogin?: boolean;
+  /** Homework "remember me": available = biometrics or a passcode plus a working secure
+   *  store; name = display name of the account stored on this device. Never a secret. */
+  homeworkRemember?: { available: boolean; name: string | null };
 }
 
 export type DeviceTestEnd = "leave" | "timeout" | "refused" | "error";
@@ -37,6 +40,14 @@ export interface HomeworkLoginResultMessage {
   type: "homeworkLoginResult";
   state?: string;
   ticket?: string;
+  cancelled?: boolean;
+  error?: string;
+}
+
+/** The app's answer to rememberUnlock: the stored remember token, a cancel, or an error. */
+export interface RememberResultMessage {
+  type: "rememberResult";
+  token?: string;
   cancelled?: boolean;
   error?: string;
 }
@@ -62,6 +73,7 @@ export type NativeMessage =
   | { type: "unlocked" }
   | DeviceTestMessage
   | HomeworkLoginResultMessage
+  | RememberResultMessage
   /** 2026-10-23: "preunlock" refused (an exam is attached to the lock). */
   | { type: "preunlockRefused" }
   /** Audit 2026-10-12: the app unlocks only once the server confirms the hand-in. */
@@ -154,6 +166,9 @@ type OutMessage =
   | { action: "deviceTestLeave" }
   | ({ action: "openHomeworkLogin" } & HomeworkLoginParams)
   | { action: "clearHomeworkLogin" }
+  | { action: "rememberSave"; token: string; name: string }
+  | { action: "rememberUnlock" }
+  | { action: "rememberForget" }
   | { action: "openDownloadPage" };
 
 /** S5: what the app seals when the submit at time-up failed. answers_json is the exact
@@ -274,6 +289,10 @@ function stateOf(d: NativeState): NativeState {
   if (typeof d.prelock === "boolean") out.prelock = d.prelock;   // 2026-10-23
   if (d.deviceTest === true) out.deviceTest = true;
   if (d.homeworkLogin === true) out.homeworkLogin = true;
+  const rem = (d as { homeworkRemember?: { available?: unknown; name?: unknown } }).homeworkRemember;
+  if (rem && typeof rem === "object") {
+    out.homeworkRemember = { available: rem.available === true, name: typeof rem.name === "string" && rem.name ? rem.name : null };
+  }
   const update = parseUpdate((d as { update?: unknown }).update);
   if (update) out.update = update;
   return out;
@@ -360,6 +379,57 @@ export function clearHomeworkLogin(): boolean {
   if (!homeworkLoginSupported()) return false;
   post({ action: "clearHomeworkLogin" });
   return true;
+}
+
+/** True when this device can keep a remember token (biometrics or passcode, secure store). */
+export function rememberAvailable(): boolean {
+  return isNative() && getNativeState()?.homeworkRemember?.available === true;
+}
+
+/** Display name of the account stored on this device, or null. */
+export function rememberedName(): string | null {
+  if (!rememberAvailable()) return null;
+  return getNativeState()?.homeworkRemember?.name ?? null;
+}
+
+/** Store the remember token in the app's secure store, replacing any older one. */
+export function rememberSave(token: string, name: string): boolean {
+  if (!rememberAvailable()) return false;
+  post({ action: "rememberSave", token, name });
+  return true;
+}
+
+/** Delete the stored remember token. */
+export function rememberForget(): boolean {
+  if (!isNative()) return false;
+  post({ action: "rememberForget" });
+  return true;
+}
+
+export type RememberUnlock = { token: string } | { cancelled: true } | { error: string };
+
+/** The app asks for biometrics or the device password, then answers rememberResult. */
+export function rememberUnlock(timeoutMs = 120000): Promise<RememberUnlock> {
+  install();
+  if (!rememberAvailable()) return Promise.resolve({ error: "unsupported" });
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r: RememberUnlock) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve(r);
+    };
+    const off = onNative((m) => {
+      if (m.type !== "rememberResult") return;
+      if (m.cancelled === true) finish({ cancelled: true });
+      else if (typeof m.error === "string" && m.error) finish({ error: m.error });
+      else if (typeof m.token === "string" && m.token) finish({ token: m.token });
+    });
+    const timer = setTimeout(() => finish({ error: "timeout" }), timeoutMs);
+    post({ action: "rememberUnlock" });
+  });
 }
 
 /** Ask the Mac app to open DOWNLOAD_PAGE in the browser (the exam window only shows the

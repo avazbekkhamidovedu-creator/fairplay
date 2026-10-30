@@ -67,3 +67,9 @@
 .cs-btn-sm { padding: 8px 14px; font-size: 14px; }
 .cs-try-list { margin: 0; padding-left: 20px; font-size: 15px; line-height: 1.55; color: #1c2230; }
 .cs-try-list li + li { margin-top: 6px; }
+.cs-remembered { margin: 0 0 12px; }
+.cs-remembered .cs-block { margin-top: 0; margin-bottom: 8px; }
+.cs-remember { display: block; margin: 10px 0 0; font-size: 13px; line-height: 1.4; color: #667085; text-align: left; }
+.cs-remember input { margin-right: 6px; }
+.cs-session-bar { position: fixed; left: 0; right: 0; top: 0; z-index: 60; padding: 10px 16px; background: #fff7e0; border-bottom: 1px solid #ead9a4; color: #4a3b0a; font-size: 14px; text-align: center; }
+.cs-forget { margin-left: 14px; }
