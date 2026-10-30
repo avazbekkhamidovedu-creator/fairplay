@@ -79,6 +79,15 @@ def code_language(q: dict, default_language: str | None = None) -> str:
     return default_language if default_language in CODE_LANGUAGES else "python"
 
 
+def exam_code_languages(questions, default_language: str | None) -> list[str]:
+    """The sorted resolved languages of an exam's own coding questions (a DKU OJ question
+    carries external_ref and is left out). Nothing else about the questions is exposed."""
+    default = default_language if default_language in CODE_LANGUAGES else "python"
+    return sorted({code_language(q, default) for q in questions or []
+                   if isinstance(q, dict) and q.get("type") == "code"
+                   and not isinstance(q.get("external_ref"), dict)})
+
+
 def code_fields(q: dict) -> dict:
     """Phase 4: the stored coding fields (teacher view); {} for other question types."""
     if q.get("type") != "code":

@@ -847,8 +847,12 @@ def grading_code_fields(q: dict, e: Exam) -> dict:
     if q.get("type") != "code":
         return {}
     f = code_fields(q)
-    return {"language": code_language(q, exam_default_language(e)), "tests": f["tests"],
-            "time_limit_ms": f["time_limit_ms"], "write_only": f["write_only"]}
+    lang = code_language(q, exam_default_language(e))
+    out = {"language": lang, "tests": f["tests"],
+           "time_limit_ms": f["time_limit_ms"], "write_only": f["write_only"]}
+    if lang == "sql":
+        out["sql_setup"], out["sql_compare"] = f["sql_setup"], f["sql_compare"]
+    return out
 
 
 async def _exam_attempt(session: AsyncSession, exam_id: str, aid: str,

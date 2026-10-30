@@ -30,7 +30,7 @@ from .security import ADMIN_SCOPE, Principal, require_student
 from .services import (LIVE_TTL, attempt_key, attempt_meta_from, attempt_view, cache_attempt,
                        find_attempt, get_attempt_meta, get_exam_cached, get_exam_hot, new_id,
                        new_receipt, new_session_id, student_tools, code_language,
-                       exam_default_language, approval_of)
+                       exam_default_language, exam_code_languages, approval_of)
 from .store import get_store
 from .timeutil import arrived_at, iso, utcnow
 
@@ -210,6 +210,14 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         row["class_ids"] = _class_ids(source, class_id, external_meta)
         row.update(_source_fields(source))
         out.append(row)
+    shown = [r["id"] for r in out if r["question_count"] is not None and r["mode"] != "external"]
+    if shown:
+        qrows = (await session.execute(
+            select(Exam.id, Exam.questions, Exam.default_language).where(Exam.id.in_(shown)))).all()
+        langs = {eid: exam_code_languages(qs, dl) for eid, qs, dl in qrows}
+        for r in out:
+            if langs.get(r["id"]):
+                r["code_languages"] = langs[r["id"]]
     return JSONResponse(out)   # perf 0.6.2: plain JSON values; skips FastAPI's re-encoding pass
 
 

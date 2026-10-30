@@ -1241,3 +1241,5 @@ A bad value stops the server at startup with a message.
 - Student view: a SQL question (resolved language `sql`) carries `sql_setup` and `sql_compare`; other questions carry
   neither. Hidden tests and points stay stripped exactly as before. Answers and grading are unchanged (manual type).
 - DKU OJ questions keep their own language handling (`runner_for` is unchanged and never yields `typescript` or `sql`).
+- Follow-ups (2026-10-30): `GET /api/student/exams` items carry `code_languages` (sorted unique array of the resolved languages of the exam's own coding questions: the question's language, else the exam `default_language`). The key is absent when the exam has no coding questions, for website exams, and for exams still waiting or in the early upload window. DKU OJ questions are not counted. It holds language names only, nothing about questions or tests.
+- The teacher grading payload (`GET /api/exams/{id}/grading`, `questions[]`) carries `sql_setup` and `sql_compare` for a coding question whose resolved language is `sql`, and neither for other questions. Students never get that payload.
