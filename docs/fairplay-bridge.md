@@ -178,6 +178,32 @@ Assignments without the lock, and a site without the bridge, send nothing.
   (180 days) from before the course pages were removed is still in the cache; DKU OJ no longer makes new marks.
 * File names of uploads not yet handed in: the file is still filed, named `answer<ext>`.
 
+## Homework app sign-in
+
+The FairPlay homework app signs a student in with their DKU OJ account through a one-time ticket.
+Only the FairPlay server and the student's browser are involved; the ticket never appears in a query
+string, a log or the HTML of a page.
+
+1. The app opens `GET /fairplay/app-login/?state=S&challenge=C` in the web view. `state` and
+   `challenge` are base64url (`[A-Za-z0-9_-]`, 16 to 128 characters), else `400`. An anonymous user
+   goes through the normal DKU OJ login first (the Duke NetID login lands on `/`, so the app loads the
+   URL again). Superusers, staff and inactive users get `403`; 10 tickets per minute per session
+   (`429` after that).
+2. DKU OJ stores `{user id, challenge, state}` in the cache under `fpb:applogin:<sha256(ticket)>` for
+   60 seconds (the ticket is `secrets.token_urlsafe(32)`) and answers `302` to
+   `<public URL>/fairplay/app-login/done#ticket=T&state=S`. The ticket is only in the fragment. The
+   `done` page is static ("Return to FairPlay"), drops the hash with `history.replaceState`, and every
+   answer is `Cache-Control: no-store`.
+3. FairPlay calls the signed `POST /api/fairplay/v1/app-login/redeem` with `{ticket, verifier}` (body
+   up to 4 KB). If `base64url(sha256(verifier))` without padding equals the stored challenge the answer
+   is `200 {netid, first_name, last_name, email}`. An unknown, used or expired ticket is `404`; a
+   verifier that does not match is `409`. The ticket is spent by any answer except `404`, atomically,
+   so two concurrent calls cannot both succeed.
+
+The public URL is the address the browser used (`ALLOWED_HOSTS` applies). Behind a proxy that
+terminates TLS, set `FAIRPLAY_OJ_PUBLIC_URL = 'https://<site>'` in `local_settings.py` so the
+redirect is https. No database change; the cache is the one DKU OJ already uses.
+
 ## Behaviour notes
 
 * A clone of a FairPlay assignment is an ordinary assignment (the `fairplay` tag is not copied); turn
