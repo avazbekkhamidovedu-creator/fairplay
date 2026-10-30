@@ -13,9 +13,9 @@ from django.views.generic import RedirectView
 from judge.feed import AtomBlogFeed, AtomCommentFeed, AtomProblemFeed, BlogFeed, CommentFeed, ProblemFeed
 from judge.sitemap import sitemaps
 from judge.views import (
-    TitledTemplateView, api, assignment_draft, blog, comment, contest_analytics, contests, fairplay, file_upload,
-    fill_blank, grade, ide, language, license, mailgun, mcq, organization, preview, problem, problem_import,
-    problem_manage, ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
+    TitledTemplateView, api, assignment_draft, blog, comment, contest_analytics, contests, fairplay,
+    fairplay_app_login, file_upload, fill_blank, grade, ide, language, license, mailgun, mcq, organization, preview,
+    problem, problem_import, problem_manage, ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.api import fairplay as fairplay_api
 from judge.views.editor_attachment import editor_file_download, editor_file_uploader
@@ -420,6 +420,12 @@ urlpatterns = [
         path('classes/<int:class_id>/roster', fairplay_api.class_roster_view, name='fairplay_api_class_roster'),
         path('students/<str:netid>/classes', fairplay_api.student_classes_view,
              name='fairplay_api_student_classes'),
+        path('app-login/redeem', fairplay_app_login.app_login_redeem, name='fairplay_api_app_login_redeem'),
+    ])),
+
+    path('fairplay/app-login/', include([
+        path('', fairplay_app_login.app_login_mint, name='fairplay_app_login'),
+        path('done', fairplay_app_login.app_login_done, name='fairplay_app_login_done'),
     ])),
 
     path('blog/', paged_list_view(blog.PostList, 'blog_post_list')),
