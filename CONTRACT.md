@@ -1209,3 +1209,18 @@ A bad value stops the server at startup with a message.
   stored; `start_url` is the entry's url; `allowed_hosts` is the url's host, the entry's `hosts` and, for `box`, the
   box hosts (host or `*.suffix`); `finish_url` is `https://fairplay-webtest.invalid/done` (never loaded);
   `resume_paths` is `["/__none__"]`. 404 for an unknown id or when the feature is off.
+
+## Duke Box folder from the teacher dashboard (2026-10-31)
+
+- `POST /api/exams` and `PUT /api/exams/{id}` (draft exams) accept `box_link` (string, `null` or `""` to clear). The value
+  is normalised exactly like the bridge setting (`https://duke.app.box.com/s/<token>`); a refusal answers
+  `400 {"detail": "box_link: <plain message>"}`. A PUT without the field keeps the value. Website-mode exams ignore it.
+- `PATCH /api/exams/{id}/tool-settings` (the exam's own teacher) changes tool settings of an exam that is already open
+  and of DKU OJ exams, which PUT cannot edit. Body `{"box_link": string|null|""}` and, for DKU OJ exams only,
+  `{"websites": [...]}`. It answers 200 with the teacher exam output. A CHANGED `box_link` answers
+  `409 "The Duke Box folder cannot be changed after students have started."` once any attempt exists (the same value
+  answers 200); an empty body or `websites` on a native exam answers 400; another teacher 404; a student 403.
+  For DKU OJ exams the values are written to the same store as the bridge settings call (`external_meta.fairplay_settings`),
+  so the last write per field wins (DKU OJ pushes only the fields it changed). Clearing removes the override.
+- The teacher exam output carries `box_link` (normalised) to the exam's own teacher only. Students only ever receive
+  `tools.box` for a running attempt. A set or clear is logged on `proctora.teacher` with the host only, never the token.

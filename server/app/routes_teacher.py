@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import statistics
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, case, delete, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,9 @@ from .timeutil import iso, iso_from_epoch, utcnow
 from .closing import AUTO_CLOSE_EVENT, LATE_GRACE
 
 router = APIRouter(prefix="/api/exams", tags=["teacher"])
+
+log = logging.getLogger("proctora.teacher")
+BOX_FIXED = "The Duke Box folder cannot be changed after students have started."
 
 ONLINE_WINDOW_S = 15
 # Integrity events that are bookkeeping, not "flags" a teacher should look at.
@@ -104,6 +108,33 @@ def _apply(e: Exam, body: ExamIn, creating: bool = False) -> None:
             q["topics"] = [default_topic]
 
 
+def _box_value(raw) -> str | None:
+    """A Duke Box link from the teacher: None or blank clears, else the normalized
+    https://duke.app.box.com/s/<token>; a refusal is a 400 like the DKU OJ bridge's."""
+    from .box_profiles import BoxLinkError, normalize_link
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    try:
+        return normalize_link(raw)
+    except BoxLinkError as exc:
+        raise HTTPException(400, f"box_link: {exc}") from None
+
+
+async def _box_changes(session: AsyncSession, e: Exam, new: str | None) -> bool:
+    """True when `new` differs from the exam's link; 409 for a change once any attempt exists."""
+    from .box_profiles import checked_link
+    if new == checked_link(e.box_link)[0]:
+        return False
+    if (await session.execute(select(Attempt.id).where(Attempt.exam_id == e.id).limit(1))).first() is not None:
+        raise HTTPException(409, BOX_FIXED)
+    return True
+
+
+def _log_box(e: Exam, p: Principal, new: str | None) -> None:
+    log.info("exam %s: Duke Box folder %s by user %s%s", e.id, "set" if new else "cleared", p.user_id,
+             " (host duke.app.box.com)" if new else "")
+
+
 async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
     if e is None or e.is_trial:                                 # never the sample exam
@@ -158,7 +189,11 @@ async def create_exam(body: ExamIn, request: Request, p: Principal = Depends(req
     await check_class_for_exam(session, body.class_id, p)
     now = utcnow()
     e = Exam(id=new_id("e"), teacher_id=p.user_id, status="draft", created_at=now)
+    box = _box_value(body.box_link) if body.mode != "external" else None
     _apply(e, body, creating=True)
+    e.box_link = box
+    if box:
+        _log_box(e, p, box)
     canvas_mode.apply_settings(e, body)
     session.add(e)
     await session.commit()
@@ -191,11 +226,73 @@ async def update_exam(exam_id: str, body: ExamIn, request: Request,
     if "class_id" in body.model_fields_set:
         await check_class_for_exam(session, body.class_id, p)
     prev_domains = list(e.allowed_domains or [])
+    box_sent = "box_link" in body.model_fields_set and body.mode != "external"
+    box = _box_value(body.box_link) if box_sent else None
+    box_changed = box_sent and await _box_changes(session, e, box)
+    if body.mode == "external":
+        e.box_link = None
     _apply(e, body)
+    if box_changed:
+        e.box_link = box
+        _log_box(e, p, box)
     canvas_mode.apply_settings(e, body, prev_domains)
     await session.commit()
     await invalidate_exam(get_store(), exam_id)
     return exam_out(e)
+
+
+@router.patch("/{exam_id}/tool-settings")
+async def update_tool_settings(exam_id: str, body: dict = Body(...), p: Principal = Depends(require_teacher),
+                               session: AsyncSession = Depends(get_session)):
+    """2026-10-30: the Duke Box folder (and, for a DKU OJ exam, the allowed websites) of an
+    exam that is already open. Body {"box_link": "<link>" | null | ""} and, DKU OJ exams only,
+    {"websites": [...]}. A DKU OJ exam keeps them in its FairPlay settings, the same place the
+    bridge's settings call writes (the last write per field wins)."""
+    from .box_profiles import checked_link
+    from .integrations.dkuoj.routes_v2 import SETTINGS_FIXED, _settings_body
+    from .integrations.dkuoj.sync import FAIRPLAY_SETTINGS, apply_fairplay_settings
+    e = await _own_exam(session, exam_id, p)
+    fields = {f: body[f] for f in ("box_link", "websites") if f in body}
+    if not fields:
+        raise HTTPException(400, "Send box_link or websites")
+    dkuoj = e.source == "dkuoj"
+    if "websites" in fields and not dkuoj:
+        raise HTTPException(400, "websites of a FairPlay exam are saved with the exam")
+    if e.mode == "external":
+        raise HTTPException(409, "A website exam has no tools")
+    sent, ov = _settings_body(fields, e.external_key or "")
+    box_changed = "box_link" in sent and await _box_changes(session, e, ov["box_link"])
+    if not dkuoj:
+        if box_changed:
+            e.box_link = ov["box_link"]
+    else:
+        meta = dict(e.external_meta or {})
+        have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
+        if "websites" in sent:
+            if ov.get("websites") is None:
+                raise HTTPException(400, "websites must be a list of site names or links")
+            if (e.external_frozen_version or e.status == "closed") and \
+                    (ov["websites"], ov["website_links"]) != (list(e.websites or []), list(e.website_links or [])):
+                raise HTTPException(409, SETTINGS_FIXED)
+            for k in ("websites", "website_links", "websites_blocked", "websites_input"):
+                have[k] = ov[k]
+        if box_changed:
+            if ov["box_link"] is None:
+                have.pop("box_link", None)
+            else:
+                have["box_link"] = ov["box_link"]
+        have["updated_at"] = iso(utcnow())
+        meta[FAIRPLAY_SETTINGS] = have
+        if box_changed and ov["box_link"] is None:
+            e.box_link = None
+        apply_fairplay_settings(e, meta)
+        e.external_meta = meta
+    if box_changed:
+        _log_box(e, p, ov["box_link"])
+    e.updated_at = utcnow()
+    await session.commit()
+    await invalidate_exam(get_store(), exam_id)
+    return await exam_out_full(session, e)
 
 
 @router.delete("/{exam_id}", status_code=204)

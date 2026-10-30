@@ -561,6 +561,9 @@ class ExamIn(BaseModel):
     # 2026-10-24: open book: students may upload their files this many days before the exam's
     # date (0 = only on "Before you start" once it is open). Needs scheduled_at to mean anything.
     upload_opens_days: int = Field(default=0, ge=0, le=7)
+    # 2026-10-30: Duke Box shared folder link (string, null or "" to clear); the route checks it
+    # with box_profiles.normalize_link so a refusal is a plain 400, not a 422
+    box_link: Any = None
     # phase 4: language of coding questions that do not pick their own
     default_language: CodeLanguage = "python"
 
