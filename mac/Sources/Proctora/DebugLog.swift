@@ -59,6 +59,8 @@ enum DebugLog {
     // MARK: - Hooks installed once at launch
 
     private static var clickMonitor: Any?
+    private static var keyMonitor: Any?
+    private static var lastKeyLog = Date.distantPast
 
     static func installHooks() {
         guard isOn else { return }
@@ -75,6 +77,13 @@ enum DebugLog {
         // Every click in our own windows (exam window, alerts, blocking screen).
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
             DebugLog.logClick(event)
+            return event
+        }
+
+        // Where the keyboard goes: the type of the first responder after a click and while keys are
+        // pressed (at most one line a second). Never the keys or the typed text.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            DebugLog.logKeyTarget(event)
             return event
         }
 
@@ -119,6 +128,23 @@ enum DebugLog {
         }
         let title = win.title.isEmpty ? String(describing: type(of: win)) : win.title
         log("click", "\(kind) at (\(Int(p.x)),\(Int(p.y))) in \"\(title)\" on \(target)")
+        DispatchQueue.main.async { [weak win] in
+            guard let win else { return }
+            log("focus", "first responder after the click: \(responderName(win.firstResponder)); page views visible: "
+                + "\((win.contentView?.subviews ?? []).filter { $0.className.contains("WKWebView") || $0 is ExamWebView }.map { $0.isHidden ? "hidden" : "shown" })")
+        }
+    }
+
+    private static func logKeyTarget(_ event: NSEvent) {
+        let now = Date()
+        guard now.timeIntervalSince(lastKeyLog) > 1.0 else { return }
+        lastKeyLog = now
+        log("focus", "key pressed, first responder: \(responderName(event.window?.firstResponder))")
+    }
+
+    private static func responderName(_ r: NSResponder?) -> String {
+        guard let r else { return "none" }
+        return String(describing: type(of: r))
     }
 
     private static func describe(view: NSView) -> String {
