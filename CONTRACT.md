@@ -1140,6 +1140,16 @@ Replaces "8 hours" above.
   `{ok: true, revoked: n}`.
 - A remember token is not a bearer token: every other route answers 401 to it. Neither token is logged (a sha256
   prefix is). The homework token is still refused on all exam routes.
+- A homework session that came from `/remember/exchange` carries a signed `rm` claim (kept by `/session/renew`).
+  `/remember/create` answers `403 "Sign in with DKU OJ to remember this device"` for it, so a stolen remember key
+  cannot start a new family. A fresh DKU OJ sign-in (and its renewals) can still create one.
+- Presenting the immediate predecessor of a rotated key within 10 seconds, while its successor is still unused
+  (a double click, two tabs), answers the generic 401 without revoking the family and without issuing a token. After
+  10 seconds, or once the successor has been used, reuse revokes the whole family as before.
+- "Sign out everywhere" (`/auth/logout`), a teacher sign-out of a member, a DKU OJ student reset and any other token
+  version bump revoke every remember family of that user.
+- `POST /api/homework/login/start` is limited by IPv6 /64 (IPv4: exact address) and by a global cap of 1200 starts
+  per minute.
 
 ## Open exam with Duke Box (2026-10-30)
 

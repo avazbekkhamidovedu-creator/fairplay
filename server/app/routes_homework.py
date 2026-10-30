@@ -38,7 +38,8 @@ from .integrations import homework_login as hw
 from .models import User
 from .routes_auth import client_ip
 from .security import (HOMEWORK_ABSOLUTE_S, HOMEWORK_IDLE_S, HOMEWORK_SCOPE, Principal, current_principal, homework_expiry, homework_times,
-                       make_token, remember_user, require_homework)
+                       homework_remembered, make_token, remember_user,
+                       require_homework)
 from .store import get_store
 from .timeutil import iso, utcnow
 
@@ -48,6 +49,7 @@ router = APIRouter(prefix="/api/homework", tags=["homework"])
 
 STATE_TTL_S = 600
 START_PER_MIN = 20
+START_GLOBAL_PER_MIN = 1200
 FINISH_PER_MIN = 10
 FINISH_PER_NETID_HOUR = 20
 RENEW_PER_MIN = 12
@@ -87,12 +89,12 @@ def _tag(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:8]
 
 
-def _prefix(ip: str) -> str:
+def _prefix(ip: str, v6_bits: int = 48) -> str:
     try:
         a = ipaddress.ip_address(ip)
     except ValueError:
         return ip
-    return str(ipaddress.ip_network(f"{a}/{24 if a.version == 4 else 48}", strict=False))
+    return str(ipaddress.ip_network(f"{a}/{24 if a.version == 4 else v6_bits}", strict=False))
 
 
 def _provider(request: Request) -> hw.Provider:
@@ -106,10 +108,10 @@ def _no_store(body: dict) -> JSONResponse:
     return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
-def _new_session(settings, u: User, login_at: int, now: float | None = None) -> dict:
+def _new_session(settings, u: User, login_at: int, now: float | None = None, remembered: bool = False) -> dict:
     exp, absolute = homework_expiry(login_at, now)
     token = make_token(settings.secret, u.id, "student", 0, version=u.token_version or 0, scope=HOMEWORK_SCOPE,
-                       login_at=login_at, exp=exp)
+                       login_at=login_at, exp=exp, remembered=remembered)
     return {"token": token, "expires_at": _epoch_iso(exp), "absolute_expires_at": _epoch_iso(absolute)}
 
 
@@ -123,7 +125,9 @@ async def start(request: Request):
     settings = request.app.state.settings
     store = get_store()
     ip = client_ip(request)
-    if await store.incr(f"hwl:rl:start:{ip}", 60) > START_PER_MIN:
+    if await store.incr(f"hwl:rl:start:{_prefix(ip, 64) if ':' in ip else ip}", 60) > START_PER_MIN:
+        raise HTTPException(429, TOO_MANY)
+    if await store.incr("hwl:rl:start:all", 60) > START_GLOBAL_PER_MIN:
         raise HTTPException(429, TOO_MANY)
     state = _b64(secrets.token_bytes(32))
     verifier = _b64(secrets.token_bytes(32))
@@ -265,7 +269,7 @@ async def renew(request: Request, p: Principal = Depends(current_principal),
     u = await session.get(User, p.user_id)
     if u is None:
         raise HTTPException(401, SESSION_OVER)
-    return _no_store(_new_session(settings, u, login_at))
+    return _no_store(_new_session(settings, u, login_at, remembered=homework_remembered(settings.secret, _bearer(request))))
 
 
 @router.post("/remember/create")
@@ -274,6 +278,8 @@ async def remember_create(body: RememberCreateIn, request: Request, p: Principal
     _provider(request)
     if p.scope != HOMEWORK_SCOPE:
         raise HTTPException(403, "Homework sign-in required")
+    if homework_remembered(request.app.state.settings.secret, _bearer(request)):
+        raise HTTPException(403, "Sign in with DKU OJ to remember this device")
     token, expires = await rem.create(session, p.user_id, body.label)
     log.info("homework remember created for user %s (%s)", p.user_id, rem.tag(token))
     return _no_store({"remember_token": token, "expires_at": iso(expires)})
@@ -292,6 +298,9 @@ async def remember_exchange(body: RememberIn, request: Request, session: AsyncSe
         log.info("homework remember %s refused: unknown", tag)
         raise HTTPException(401, REMEMBER_REFUSED)
     if row.replaced_by is not None:
+        if await rem.is_grace_replay(session, body.remember_token):
+            log.info("homework remember %s presented again within the grace period", tag)
+            raise HTTPException(401, REMEMBER_REFUSED)
         await rem.revoke_family(session, row.family_id)
         await session.commit()
         log.warning("homework remember %s reused: family revoked for user %s", tag, row.user_id)
@@ -320,6 +329,9 @@ async def remember_exchange(body: RememberIn, request: Request, session: AsyncSe
     await session.refresh(u)
     rotated = await rem.rotate(session, row) if row is not None else None
     if rotated is None:
+        if await rem.is_grace_replay(session, body.remember_token):
+            log.info("homework remember %s lost a race inside the grace period", tag)
+            raise HTTPException(401, REMEMBER_REFUSED)
         await rem.revoke_family(session, family_id)
         await session.commit()
         log.warning("homework remember %s lost a race: family revoked for user %s", tag, user_id)
@@ -327,7 +339,7 @@ async def remember_exchange(body: RememberIn, request: Request, session: AsyncSe
     new_token, remember_expires = rotated
     await remember_user(u.id, u.role, int(u.token_version or 0))
     log.info("homework remember %s exchanged for user %s (new %s)", tag, u.id, rem.tag(new_token))
-    return _no_store({**_new_session(settings, u, int(time.time())), "remember_token": new_token,
+    return _no_store({**_new_session(settings, u, int(time.time()), remembered=True), "remember_token": new_token,
                       "remember_expires_at": iso(remember_expires), "name": u.name, "netid": netid})
 
 

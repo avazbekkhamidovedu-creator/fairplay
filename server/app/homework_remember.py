@@ -20,6 +20,7 @@ from .db import Base
 from .timeutil import utcnow
 
 REMEMBER_DAYS = 14
+GRACE_S = 10
 MAX_DEVICES = 5
 LABEL_MAX = 40
 TOKEN_LEN = 43
@@ -99,6 +100,27 @@ async def revoke_all(session: AsyncSession, user_id: int) -> int:
         await revoke_family(session, f, now)
     await session.commit()
     return len(fams)
+
+
+async def revoke_user(session: AsyncSession, user_id: int, now: datetime | None = None) -> int:
+    """Every remember family of the user; the caller commits."""
+    res = await session.execute(update(HomeworkRemember).where(
+        HomeworkRemember.user_id == user_id, HomeworkRemember.revoked_at.is_(None)).values(revoked_at=now or utcnow()))
+    return res.rowcount or 0
+
+
+async def is_grace_replay(session: AsyncSession, token: str) -> bool:
+    """The token was replaced less than GRACE_S ago and its successor is still the live one:
+    a double click or a second tab, not a theft."""
+    row = (await session.execute(select(HomeworkRemember).where(
+        HomeworkRemember.token_hash == hash_token(token)).execution_options(populate_existing=True))).scalar_one_or_none()
+    if row is None or row.replaced_by is None or row.revoked_at is not None or row.last_used_at is None:
+        return False
+    if utcnow() - row.last_used_at > timedelta(seconds=GRACE_S):
+        return False
+    nxt = (await session.execute(select(HomeworkRemember).where(
+        HomeworkRemember.id == row.replaced_by).execution_options(populate_existing=True))).scalar_one_or_none()
+    return nxt is not None and nxt.replaced_by is None and nxt.revoked_at is None
 
 
 async def find(session: AsyncSession, token: str) -> HomeworkRemember | None:

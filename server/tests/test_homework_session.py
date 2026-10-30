@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 
 from app.homework_remember import HomeworkRemember, hash_token
 from app.models import User
-from app.security import HOMEWORK_SCOPE, homework_times, make_token, parse_scoped_token
+from app.security import HOMEWORK_SCOPE, homework_remembered, homework_times, make_token, parse_scoped_token
 from app.timeutil import utcnow
 
 from .test_dkuoj_bridge import db
@@ -173,11 +173,43 @@ def test_exchange_rotates_and_issues_a_fresh_session(hw, fake):
 def test_reuse_of_a_rotated_token_revokes_the_family(hw, fake):
     rt = remember(hw, signed_in(hw, fake)["token"])
     new = hw.post(EXCHANGE, json={"remember_token": rt}).json()["remember_token"]
+    write(hw, update(HomeworkRemember).values(last_used_at=utcnow() - timedelta(seconds=11)))
     r = hw.post(EXCHANGE, json={"remember_token": rt})
     assert r.status_code == 401 and r.json()["detail"] == GENERIC
     r = hw.post(EXCHANGE, json={"remember_token": new})
     assert r.status_code == 401 and r.json()["detail"] == GENERIC
     assert all(x.revoked_at is not None for x in rows(hw))
+
+
+def test_reuse_within_ten_seconds_is_refused_without_revoking(hw, fake):
+    rt = remember(hw, signed_in(hw, fake)["token"])
+    out = hw.post(EXCHANGE, json={"remember_token": rt}).json()
+    r = hw.post(EXCHANGE, json={"remember_token": rt})
+    assert r.status_code == 401 and r.json() == {"detail": GENERIC}
+    assert all(x.revoked_at is None for x in rows(hw)) and len(rows(hw)) == 2
+    assert hw.post(EXCHANGE, json={"remember_token": out["remember_token"]}).status_code == 200
+
+
+def test_grace_ends_after_the_successor_is_used(hw, fake):
+    rt = remember(hw, signed_in(hw, fake)["token"])
+    new = hw.post(EXCHANGE, json={"remember_token": rt}).json()["remember_token"]
+    assert hw.post(EXCHANGE, json={"remember_token": new}).status_code == 200
+    assert hw.post(EXCHANGE, json={"remember_token": rt}).status_code == 401
+    assert all(x.revoked_at is not None for x in rows(hw))
+
+
+def test_parallel_exchange_loser_does_not_revoke_the_family(hw, fake, monkeypatch):
+    from app import homework_remember as rem
+    rt = remember(hw, signed_in(hw, fake)["token"])
+    real = rem.rotate
+
+    async def second_wins(session, row):
+        await real(session, row)
+        return None
+    monkeypatch.setattr(rem, "rotate", second_wins)
+    r = hw.post(EXCHANGE, json={"remember_token": rt})
+    assert r.status_code == 401 and r.json()["detail"] == GENERIC
+    assert all(x.revoked_at is None for x in rows(hw))
 
 
 def test_unknown_expired_revoked_all_answer_the_same_401(hw, fake):
@@ -219,6 +251,56 @@ def test_exchange_after_sign_out_everywhere_still_works_with_new_version(hw, fak
     hw.portal.call(forget_user_cache, uid_of(hw))
     out = hw.post(EXCHANGE, json={"remember_token": rt}).json()
     assert hw.get(ME, headers=bearer(out["token"])).status_code == 200
+
+
+def test_sign_out_everywhere_revokes_remember_me(hw, fake):
+    tok = signed_in(hw, fake)["token"]
+    a, b = remember(hw, tok), remember(hw, tok)
+    assert hw.post("/api/auth/logout", headers=bearer(tok)).status_code == 200
+    for t in (a, b):
+        r = hw.post(EXCHANGE, json={"remember_token": t})
+        assert r.status_code == 401 and r.json()["detail"] == GENERIC
+    assert all(x.revoked_at is not None for x in rows(hw))
+    fresh = signed_in(hw, fake)["token"]
+    assert hw.post(EXCHANGE, json={"remember_token": remember(hw, fresh)}).status_code == 200
+
+
+def test_admin_version_bump_revokes_remember_me(hw, fake):
+    from app.routes_auth import bump_token_version
+    rt = remember(hw, signed_in(hw, fake)["token"])
+    uid = uid_of(hw)
+
+    async def go(s):
+        await bump_token_version(s, uid)
+    db(hw, go)
+    assert hw.post(EXCHANGE, json={"remember_token": rt}).status_code == 401
+
+
+def test_session_from_exchange_cannot_create_a_remember_key(hw, fake):
+    rt = remember(hw, signed_in(hw, fake)["token"])
+    out = hw.post(EXCHANGE, json={"remember_token": rt}).json()
+    for tok in (out["token"], hw.post(RENEW, headers=bearer(out["token"])).json()["token"]):
+        assert parse_scoped_token(SECRET, tok)[3] == HOMEWORK_SCOPE and homework_times(SECRET, tok)
+        r = hw.post(CREATE, json={}, headers=bearer(tok))
+        assert r.status_code == 403 and r.json()["detail"] == "Sign in with DKU OJ to remember this device"
+        assert hw.get(ME, headers=bearer(tok)).status_code == 200
+    assert len(rows(hw)) == 2
+
+
+def test_fresh_login_and_its_renewal_can_still_create(hw, fake):
+    tok = signed_in(hw, fake)["token"]
+    renewed = hw.post(RENEW, headers=bearer(tok)).json()["token"]
+    assert not homework_remembered(SECRET, tok) and not homework_remembered(SECRET, renewed)
+    assert hw.post(CREATE, json={}, headers=bearer(renewed)).status_code == 200
+
+
+def test_remembered_claim_is_signed(hw, fake):
+    tok = make_token(SECRET, 1, "student", 0, scope=HOMEWORK_SCOPE, login_at=int(time.time()),
+                     exp=int(time.time()) + 60, remembered=True)
+    assert homework_remembered(SECRET, tok)
+    head, sig = tok.split(".")
+    assert parse_scoped_token(SECRET, head + "x." + sig) is None
+    assert parse_scoped_token(SECRET, make_token(SECRET, 1, "student", 60, scope="ex1")) is not None
 
 
 def test_sixth_device_revokes_the_oldest(hw, fake):
@@ -303,3 +385,31 @@ def test_tokens_are_not_logged(hw, fake, caplog):
     hw.post(EXCHANGE, json={"remember_token": rt})
     for secret in (body["token"], rt, out["remember_token"], out["token"]):
         assert secret not in caplog.text
+
+
+# ---------------------------------------------------------------- login/start limits
+START = "/api/homework/login/start"
+
+
+def test_start_limit_uses_the_ipv6_64_prefix(hw, monkeypatch):
+    from app import routes_homework
+    n = iter(range(1, 1000))
+    monkeypatch.setattr(routes_homework, "client_ip", lambda request: f"2001:db8:1:2:{next(n):x}::1")
+    codes = [hw.post(START, json={}).status_code for _ in range(21)]
+    assert codes == [200] * 20 + [429]
+    monkeypatch.setattr(routes_homework, "client_ip", lambda request: "2001:db8:1:3::1")
+    assert hw.post(START, json={}).status_code == 200
+
+
+def test_start_global_cap(hw, monkeypatch):
+    from app import routes_homework
+    n = iter(range(1, 1000))
+    monkeypatch.setattr(routes_homework, "START_GLOBAL_PER_MIN", 5)
+    monkeypatch.setattr(routes_homework, "client_ip", lambda request: f"10.{next(n)}.0.1")
+    codes = [hw.post(START, json={}).status_code for _ in range(7)]
+    assert codes == [200] * 5 + [429] * 2
+
+
+def test_global_cap_is_far_above_a_class(hw):
+    from app import routes_homework
+    assert routes_homework.START_GLOBAL_PER_MIN >= 4 * 300

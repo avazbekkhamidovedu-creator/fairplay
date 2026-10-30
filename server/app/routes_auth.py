@@ -115,7 +115,9 @@ async def logout_everywhere(p: Principal = Depends(current_principal),
 
 async def bump_token_version(session: AsyncSession, user_id: int) -> None:
     from sqlalchemy import select, update
+    from . import homework_remember
     from .security import forget_user_cache, remember_user
+    await homework_remember.revoke_user(session, user_id)
     await session.execute(update(User).where(User.id == user_id)
                           .values(token_version=User.token_version + 1))
     await session.commit()
