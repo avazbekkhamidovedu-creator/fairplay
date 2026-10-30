@@ -355,6 +355,8 @@ export const teacherApi = {
   createExam: (input: ExamInput) => request<Exam>("teacher", "POST", "/api/exams", input),
   getExam: (id: string) => request<Exam>("teacher", "GET", `/api/exams/${enc(id)}`),
   updateExam: (id: string, input: ExamInput) => request<Exam>("teacher", "PUT", `/api/exams/${enc(id)}`, input),
+  toolSettings: (id: string, body: { box_link?: string | null; websites?: string[] }) =>
+    request<Exam>("teacher", "PATCH", `/api/exams/${enc(id)}/tool-settings`, body),
   deleteExam: (id: string) => request<void>("teacher", "DELETE", `/api/exams/${enc(id)}`),
   /** openTo omitted = everyone (no body, as before). */
   openExam: (id: string, openTo?: OpenTo) =>

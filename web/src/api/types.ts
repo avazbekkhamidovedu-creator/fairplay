@@ -1494,6 +1494,8 @@ export interface ExamTools {
   allowed_sites?: string[];
 }
 export interface Exam {
+  /** "dkuoj" for exams imported from DKU OJ */
+  source?: string;
   /** 2026-10-30: the exam's Duke Box link, normalized, or null. The page only shows whether it is set. */
   box_link?: string | null;
   website_links?: WebsiteLink[];
@@ -1503,6 +1505,8 @@ export interface Exam {
 }
 export interface ExamInput {
   upload_opens_days?: number;
+  /** teacher's Duke Box folder link; null or '' clears it */
+  box_link?: string | null;
 }
 export interface StudentExamSummary {
   /** 2026-10-24: a draft exam whose early upload window is open ("Upcoming — upload your

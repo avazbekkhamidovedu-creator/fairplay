@@ -10,6 +10,7 @@ import { CODE_LANGUAGES, LANGUAGE_LABEL } from "../../lib/code/languages";
 import { Icon } from "../../components/ui/Icon";
 import { Switch } from "../../components/ui/Switch";
 import { ExternalExamSettings } from "../../components/teacher/ExternalExamSettings";
+import { boxLinkProblem } from "../../lib/boxLink";
 import { ExamToolsSettings } from "../../components/teacher/ExamToolsSettings";
 import { LmsCourseSelect } from "../../components/teacher/lms/LmsCourseSelect";
 import { QuestionImagesEditor } from "../../components/teacher/QuestionImagesEditor";
@@ -77,6 +78,11 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
   const [showErrors, setShowErrors] = useState(false);
   const [saving, setSaving] = useState<null | "save" | "open">(null);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [boxError, setBoxError] = useState<string | null>(null);
+  const [boxLocked, setBoxLocked] = useState(false);
+  const [boxBusy, setBoxBusy] = useState(false);
+  // what the server has for the fields saved through tool-settings
+  const [toolBase, setToolBase] = useState(() => ({ box: exam?.box_link ?? "", websites: draftFromExam(exam).websites }));
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(() => draft.external.mode === "external" || draft.delivery === "paper");
   const [askClass, setAskClass] = useState(false);
@@ -86,6 +92,9 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
   // Audit W-08: once created, later saves update that exam (a failed "Open" made duplicates).
   const [created, setCreated] = useState<Exam | null>(null);
   const errors = useMemo(() => validateDraft(draft), [draft]);
+  const isDkuOj = exam?.source === "dkuoj";
+  // draft native exams save the folder with the rest (PUT); the others have their own button (PATCH)
+  const patchMode = !!exam && draft.external.mode !== "external" && (exam.status !== "draft" || isDkuOj);
   const isPaper = draft.delivery === "paper" && draft.external.mode !== "external";
   // slice 6: topic suggestions (the teacher's earlier topics); failure just means no suggestions
   const [topicSuggestions, setTopicSuggestions] = useState<TopicCount[]>([]);
@@ -135,6 +144,11 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
   async function save(andOpen: boolean, classOverride?: string) {
     setShowErrors(true);
     setServerError(null);
+    setBoxError(null);
+    if (boxLinkProblem(draft.boxLink)) {
+      document.getElementById("exam-box-link")?.focus();
+      return;
+    }
     if (hasErrors(errors)) {
       setOpen((o) => {
         const next = { ...o };
@@ -151,7 +165,7 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
     }
     setSaving(andOpen ? "open" : "save");
     try {
-      const input = toExamInput({ ...draft, classId });
+      const input = toExamInput({ ...draft, classId, boxLink: patchMode ? draft.boxLinkOrig : draft.boxLink });
       const existing = exam ?? created;
       let saved = existing ? await teacherApi.updateExam(existing.id, input) : await teacherApi.createExam(input);
       if (!existing) setCreated(saved);
@@ -159,10 +173,46 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
       if (andOpen) saved = await teacherApi.openExam(saved.id);
       onSaved(saved, andOpen);
     } catch (e) {
-      if (e instanceof ApiError) setServerError(e.status === 422 ? `Please check the exam: ${e.detail}` : e.detail);
+      if (boxFailure(e)) {
+        // shown under the field
+      } else if (e instanceof ApiError) setServerError(e.status === 422 ? `Please check the exam: ${e.detail}` : e.detail);
       else setServerError("Cannot reach the server. Your changes are still here; try saving again.");
       setSaving(null);
     }
+  }
+
+  function boxFailure(e: unknown): boolean {
+    if (!(e instanceof ApiError)) return false;
+    if (e.status === 400 && e.detail.startsWith("box_link:")) {
+      setBoxError(e.detail.slice("box_link:".length).trim());
+      document.getElementById("exam-box-link")?.focus();
+      return true;
+    }
+    if (e.status === 409 && /Duke Box folder/.test(e.detail)) {
+      setBoxError(e.detail);
+      setBoxLocked(true);
+      return true;
+    }
+    return false;
+  }
+
+  async function saveBoxFolder() {
+    if (!exam || boxLinkProblem(draft.boxLink)) return;
+    const body: { box_link?: string | null; websites?: string[] } = {};
+    const link = draft.boxLink.trim();
+    if (link !== toolBase.box) body.box_link = link || null;
+    if (isDkuOj && draft.websites.join("\n") !== toolBase.websites.join("\n")) body.websites = [...draft.websites];
+    if (!Object.keys(body).length) return;
+    setBoxBusy(true);
+    setBoxError(null);
+    try {
+      const saved = await teacherApi.toolSettings(exam.id, body);
+      setToolBase({ box: saved.box_link ?? "", websites: isDkuOj ? draft.websites : toolBase.websites });
+      set({ boxLink: saved.box_link ?? "", boxLinkOrig: saved.box_link ?? "" });
+    } catch (e) {
+      if (!boxFailure(e)) setBoxError(e instanceof ApiError ? e.detail : "Cannot reach the server. Try again.");
+    }
+    setBoxBusy(false);
   }
 
   function onSubmit(e: FormEvent) {
@@ -468,14 +518,35 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
         )}
       </section>
 
-      {draft.external.mode !== "external" && !isPaper && (
+      {draft.external.mode !== "external" && (!isPaper || isDkuOj) && (
         <ExamToolsSettings
+          only={isDkuOj ? "sites-box" : undefined}
           value={{ calculator: draft.calculator, openBook: draft.openBook, websites: draft.websites, uploadOpensDays: draft.uploadOpensDays }}
           onChange={(v) =>
             set({ calculator: v.calculator, openBook: v.openBook, websites: v.websites, uploadOpensDays: v.uploadOpensDays ?? 0 })
           }
           hasDate={!!draft.date}
-          boxLinkSet={(exam ?? created)?.box_link === undefined ? undefined : !!(exam ?? created)?.box_link}
+          box={{
+            value: draft.boxLink,
+            onChange: (v) => {
+              set({ boxLink: v });
+              setBoxError(null);
+            },
+            error: boxError,
+            locked: boxLocked,
+            ...(patchMode
+              ? {
+                  save: {
+                    onClick: () => void saveBoxFolder(),
+                    busy: boxBusy,
+                    disabled:
+                      !!boxLinkProblem(draft.boxLink) ||
+                      (draft.boxLink.trim() === toolBase.box &&
+                        (!isDkuOj || draft.websites.join("\n") === toolBase.websites.join("\n"))),
+                  },
+                }
+              : {}),
+          }}
         />
       )}
 

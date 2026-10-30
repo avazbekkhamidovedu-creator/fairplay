@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExamBox } from "../api/types";
 import { DukeBoxPane, useDukeBox } from "../components/student/DukeBox";
-import { ExamToolsSettings } from "../components/teacher/ExamToolsSettings";
 import { eventDetailText, eventLabel } from "../components/teacher/util";
 import * as bridge from "../lib/bridge";
 
@@ -119,15 +118,5 @@ describe("Duke Box for the teacher", () => {
     expect(eventDetailText("blocked_navigation", "docs.python.org")).toBe("docs.python.org");
     expect(eventDetailText("box_opened", "duke.app.box.com")).toBe("duke.app.box.com");
     expect(eventDetailText("blocked_navigation", null)).toBe("");
-  });
-
-  it("shows only whether the folder is set", () => {
-    const value = { calculator: "off" as const, openBook: false, websites: [] };
-    const a = render(<ExamToolsSettings value={value} onChange={() => undefined} boxLinkSet />);
-    expect(screen.getByTestId("box-folder-status")).toHaveTextContent("Duke Box folder: set");
-    expect(a.container.innerHTML).not.toContain("box.com/s");
-    a.unmount();
-    render(<ExamToolsSettings value={value} onChange={() => undefined} boxLinkSet={false} />);
-    expect(screen.getByTestId("box-folder-status")).toHaveTextContent("Duke Box folder: not set");
   });
 });

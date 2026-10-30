@@ -92,6 +92,9 @@ export interface DraftExam {
   websites: string[];
   /** 2026-10-24: open book: uploads open this many days before the date (0 = off) */
   uploadOpensDays: number;
+  /** the teacher's Duke Box folder link ('' = none); boxLinkOrig is what the exam had when loaded */
+  boxLink: string;
+  boxLinkOrig: string;
   /** S3: the teacher approves a student coming back after FairPlay closed (default on). */
   resumeNeedsApproval: boolean;
   /** S6: require the strongest lock (default off). */
@@ -256,6 +259,8 @@ export function draftFromExam(exam?: Exam): DraftExam {
       openBook: false,
       websites: [],
       uploadOpensDays: 0,
+      boxLink: "",
+      boxLinkOrig: "",
       resumeNeedsApproval: true,
       strongLock: false,
       defaultLanguage: "python",
@@ -280,6 +285,8 @@ export function draftFromExam(exam?: Exam): DraftExam {
     openBook: exam.open_book === true,
     websites: websiteEntries(exam.websites ?? [], exam.website_links ?? []),
     uploadOpensDays: typeof exam.upload_opens_days === "number" ? exam.upload_opens_days : 0,
+    boxLink: exam.box_link ?? "",
+    boxLinkOrig: exam.box_link ?? "",
     resumeNeedsApproval: exam.resume_needs_approval !== false,
     strongLock: exam.require_strong_lock === true,
     defaultLanguage: isCodeLanguage(exam.default_language) ? exam.default_language : "python",
@@ -509,6 +516,7 @@ export function toExamInput(d: DraftExam): ExamInput {
           open_book: d.openBook,
           websites: [...d.websites],
           upload_opens_days: d.openBook ? d.uploadOpensDays : 0,
+          ...(d.boxLink.trim() !== d.boxLinkOrig ? { box_link: d.boxLink.trim() || null } : {}),
         }),
     resume_needs_approval: d.resumeNeedsApproval,
     require_strong_lock: d.strongLock,
