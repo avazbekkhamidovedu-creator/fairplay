@@ -22,7 +22,6 @@ export function HomeworkLink() {
   const [info, setInfo] = useState<HomeworkInfo | null>(null);
   const [supported, setSupported] = useState(() => bridge.homeworkLoginSupported());
   const [busy, setBusy] = useState(false);
-  const [remember, setRemember] = useState(false);
   const [canRemember, setCanRemember] = useState(() => bridge.rememberAvailable());
   const [saved, setSaved] = useState(() => bridge.rememberedName());
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +48,7 @@ export function HomeworkLink() {
     if (busy) return;
     setBusy(true);
     setError(null);
-    const r = await runHomeworkLogin({ remember: canRemember && remember });
+    const r = await runHomeworkLogin();
     setBusy(false);
     if (r.ok) navigate("/student/homework", { replace: true });
     else if (r.message) setError(r.message);
@@ -90,11 +89,6 @@ export function HomeworkLink() {
       <button type="button" className="cs-link" onClick={() => void go()} disabled={busy}>
         {busy ? "Waiting for the sign-in window…" : `Log in with ${info.label}`}
       </button>
-      {canRemember && (
-        <label className="cs-remember">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} disabled={busy} /> Remember me on this device (asks for fingerprint or device password next time)
-        </label>
-      )}
       {error && (
         <p className="cs-error" role="alert">
           {error}

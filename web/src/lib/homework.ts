@@ -99,7 +99,7 @@ function waitForResult(state: string, expiresAt: string): Promise<Wait> {
 
 /** Whole DKU OJ sign-in: start, the app's login window, finish. Stores the homework token
  *  under its own key; the exam token is never touched. */
-export async function runHomeworkLogin(opts: { remember?: boolean } = {}): Promise<LoginOutcome> {
+export async function runHomeworkLogin(): Promise<LoginOutcome> {
   if (!bridge.homeworkLoginSupported()) return { ok: false, message: MSG_BRIDGE };
   let start: StartReply;
   try {
@@ -130,7 +130,6 @@ export async function runHomeworkLogin(opts: { remember?: boolean } = {}): Promi
     if (r.status !== 200 || !r.data?.token) return { ok: false, message: statusMessage(r.status) };
     setHomeworkSession(r.data.token, r.data);
     const identity = { name: String(r.data.name ?? ""), netid: String(r.data.netid ?? "") };
-    if (opts.remember) await createRemember(identity.name);
     return { ok: true, identity };
   } catch {
     return { ok: false, message: MSG_NETWORK };
@@ -161,13 +160,19 @@ export function signOutHomework(): void {
   bridge.clearHomeworkLogin();
 }
 
-/** Best effort: a failure here never blocks the sign-in that just worked. */
-async function createRemember(name: string): Promise<void> {
+export type RememberOutcome = { ok: true } | { ok: false; message: string };
+
+/** "Remember this device": a remember token for the signed-in account, kept in the app's secure store. */
+export async function rememberThisDevice(name: string): Promise<RememberOutcome> {
+  const token = getHomeworkToken();
+  if (!token) return { ok: false, message: MSG_AGAIN };
   try {
-    const r = await post<{ remember_token?: string }>("/api/homework/remember/create", {}, getHomeworkToken());
-    if (r.status === 200 && r.data?.remember_token) bridge.rememberSave(r.data.remember_token, name);
+    const r = await post<{ remember_token?: string }>("/api/homework/remember/create", {}, token);
+    if (r.status !== 200 || !r.data?.remember_token) return { ok: false, message: statusMessage(r.status) };
+    if (!bridge.rememberSave(r.data.remember_token, name)) return { ok: false, message: MSG_BRIDGE };
+    return { ok: true };
   } catch {
-    /* not remembered */
+    return { ok: false, message: MSG_NETWORK };
   }
 }
 

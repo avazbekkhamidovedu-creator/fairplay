@@ -19,7 +19,6 @@ const START = {
   expires_at: new Date(Date.now() + 600_000).toISOString(),
 };
 const TIMES = { expires_at: new Date(Date.now() + 1_800_000).toISOString(), absolute_expires_at: new Date(Date.now() + 14_400_000).toISOString() };
-const LABEL = /Remember me on this device/;
 
 let replies: Record<string, Reply>;
 let calls: { url: string; init?: RequestInit }[];
@@ -85,47 +84,91 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("remember me checkbox", () => {
+describe("code screen has no remember option", () => {
   it.each([
     ["unavailable", { available: false, name: null }],
     ["missing", undefined],
-  ])("is hidden when %s", async (_n, state) => {
+    ["available", { available: true, name: null }],
+    ["remembered", { available: true, name: "Ava K" }],
+  ])("shows no checkbox when %s", async (_n, state) => {
     native(state);
     renderApp();
     await screen.findByRole("button", { name: "Log in with DKU OJ" });
-    expect(screen.queryByLabelText(LABEL)).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByText(/Remember me/)).toBeNull();
+    expect(screen.queryByText(/fingerprint/)).toBeNull();
   });
 
-  it("shows when available", async () => {
-    native({ available: true, name: null });
-    renderApp();
-    expect(await screen.findByLabelText(LABEL)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Continue as/ })).toBeNull();
-  });
-
-  async function login(tick: boolean) {
+  it("login creates and saves nothing", async () => {
     native({ available: true, name: null });
     const user = userEvent.setup();
     renderApp();
-    if (tick) await user.click(await screen.findByLabelText(LABEL));
     await user.click(await screen.findByRole("button", { name: "Log in with DKU OJ" }));
     await waitFor(() => expect(sent("openHomeworkLogin")).toHaveLength(1));
     send({ type: "homeworkLoginResult", state: START.state, ticket: "TICKET" });
     await screen.findByText("Welcome, Ava K");
-  }
+    expect(called("/api/homework/remember/create")).toHaveLength(0);
+    expect(sent("rememberSave")).toHaveLength(0);
+  });
+});
 
-  it("ticked: creates a remember token with the Bearer and saves it", async () => {
-    await login(true);
+describe("Remember this device card", () => {
+  async function open(remember: { available: boolean; name: string | null } | undefined) {
+    native(remember);
+    setHomeworkSession("HW1", TIMES);
+    renderApp("/student/homework");
+    await screen.findByText("Welcome, Ava K");
+  }
+  const card = () => screen.queryByRole("button", { name: "Remember this device" });
+
+  it.each([
+    ["unavailable", { available: false, name: null }],
+    ["missing", undefined],
+  ])("is hidden when %s", async (_n, state) => {
+    await open(state);
+    expect(card()).toBeNull();
+    expect(screen.queryByText(/fingerprint/)).toBeNull();
+  });
+
+  it("is hidden when this account is already remembered", async () => {
+    await open({ available: true, name: "Ava K" });
+    expect(card()).toBeNull();
+    expect(screen.getByRole("button", { name: "Forget this device" })).toBeTruthy();
+  });
+
+  it("is shown for a device remembered under another name", async () => {
+    await open({ available: true, name: "Someone Else" });
+    expect(card()).toBeTruthy();
+  });
+
+  it("success: creates with the Bearer, saves, confirms", async () => {
+    await open({ available: true, name: null });
+    expect(screen.getByText("Next time you can sign in with your fingerprint or device password.")).toBeTruthy();
+    await userEvent.setup().click(card()!);
+    await screen.findByText("This device is remembered.");
     const c = called("/api/homework/remember/create");
     expect(c).toHaveLength(1);
     expect((c[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer HW1");
     expect(sent("rememberSave")).toEqual([{ action: "rememberSave", token: "REM1", name: "Ava K" }]);
+    expect(card()).toBeNull();
+    expect(screen.getByRole("button", { name: "Forget this device" })).toBeTruthy();
   });
 
-  it("not ticked: nothing is created or saved", async () => {
-    await login(false);
-    expect(called("/api/homework/remember/create")).toHaveLength(0);
+  it("failure: plain error, no save, no token shown", async () => {
+    replies["/api/homework/remember/create"] = { status: 503, body: {} };
+    await open({ available: true, name: null });
+    await userEvent.setup().click(card()!);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("DKU OJ cannot be reached right now. Try again in a few minutes.");
     expect(sent("rememberSave")).toHaveLength(0);
+    expect(document.body.textContent).not.toMatch(/HW1|REM1/);
+    expect(card()).toBeTruthy();
+  });
+
+  it("hides once the state refresh reports this account", async () => {
+    await open({ available: true, name: null });
+    send({ type: "state", locked: false, trusted: true, version: "1", homeworkLogin: true, homeworkRemember: { available: true, name: "Ava K" } });
+    await waitFor(() => expect(card()).toBeNull());
   });
 });
 
