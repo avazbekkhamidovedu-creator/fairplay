@@ -69,11 +69,14 @@ export function ExamToolsSettings({
   value,
   onChange,
   hasDate = true,
+  boxLinkSet,
 }: {
   value: ExamToolsValue;
   onChange: (v: ExamToolsValue) => void;
   /** 2026-10-24: the exam has a date (the early upload window counts back from it) */
   hasDate?: boolean;
+  /** 2026-10-30: read-only; whether the exam has a Duke Box folder (never the link itself). Missing = not shown. */
+  boxLinkSet?: boolean;
 }) {
   const [site, setSite] = useState("");
   const [siteError, setSiteError] = useState<string | null>(null);
@@ -299,6 +302,12 @@ export function ExamToolsSettings({
           </div>
         )}
       </div>
+
+      {boxLinkSet !== undefined && (
+        <p className="t-small t-muted" data-testid="box-folder-status" style={{ margin: 0 }}>
+          Duke Box folder: {boxLinkSet ? "set" : "not set"}
+        </p>
+      )}
     </section>
   );
 }

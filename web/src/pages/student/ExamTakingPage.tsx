@@ -71,6 +71,7 @@ import { CODE_LENGTH, StartCodeBoxes, emptyCode } from "../../components/student
 import { QuestionImages } from "../../components/QuestionImages";
 import { TrialExit } from "../../components/student/TrialExit";
 import { Calculator } from "../../components/student/Calculator";
+import { DukeBoxPane, useDukeBox } from "../../components/student/DukeBox";
 import { MaterialFileView, MaterialsPaneContent, WebsitesPaneContent } from "../../components/student/ExamToolPanes";
 import { CloudCheckIcon, DiskIcon, WidenIcon } from "../../components/student/icons";
 import "../../styles/exam-d.css";
@@ -86,12 +87,14 @@ export type MatTab =
   | { id: "files"; kind: "files" }
   | { id: string; kind: "file"; file: MaterialFile }
   | { id: "sites"; kind: "sites" }
+  | { id: "box"; kind: "box" }
   | { id: string; kind: "site"; host: string; url: string; seq: number };
 export const MAX_TABS = 6;
 const FILE_BADGE: Record<MaterialFile["kind"], string> = { pdf: "PDF", png: "IMG", jpg: "IMG", txt: "TXT", md: "MD" };
 function tabInfo(t: MatTab): { id: string; label: string; badge: string } {
   if (t.kind === "files") return { id: t.id, label: "Materials", badge: "≡" };
   if (t.kind === "sites") return { id: t.id, label: "Websites", badge: "◎" };
+  if (t.kind === "box") return { id: t.id, label: "Duke Box", badge: "◎" };
   if (t.kind === "file") return { id: t.id, label: t.file.name, badge: FILE_BADGE[t.file.kind] ?? "FILE" };
   return { id: t.id, label: t.host, badge: "◎" };
 }
@@ -336,6 +339,7 @@ function ExamTakingInner() {
       // app cannot confirm still has a way out there (it clears the key once unlocked).
       if (trialRef.current && !bridge.isLocked()) writeTrialKey(doneAid, null);
       // The app unlocks only after the server confirms the hand-in (audit #11).
+      bridge.closeBox();
       bridge.unlock();
       // The done page is allowed while locked; for the sample exam it waits for the unlock
       // and then goes to the dashboard (no receipt, no score).
@@ -853,6 +857,7 @@ function ExamTakingInner() {
   // ----- 2026-10-23 exam tools: calculator, materials, websites -----
 
   const tools = attempt?.tools;
+  const dukeBox = useDukeBox(tools?.box);
   const calcMode = tools?.calculator === "scientific" || tools?.calculator === "graphing" ? tools.calculator : null;
   const [calcOpen, setCalcOpen] = useState(false);
   const [calcMounted, setCalcMounted] = useState(false);   // stays mounted: keeps its state
@@ -1066,7 +1071,9 @@ function ExamTakingInner() {
   // 2026-10-23: no calculator or materials while handing in or once the time is up
   const toolsShown = (phase === "exam" || phase === "review") && !waitPanel && !stopPanel && remaining > 0;
   const tabs = toolsShown
-    ? matTabs.filter((t) => (t.kind === "files" || t.kind === "file" ? !!tools?.open_book : (tools?.websites?.length ?? 0) > 0))
+    ? matTabs.filter((t) =>
+        t.kind === "box" ? !!tools?.box : t.kind === "files" || t.kind === "file" ? !!tools?.open_book : (tools?.websites?.length ?? 0) > 0,
+      )
     : [];
   const shownTab = tabs.some((t) => t.id === activeTab) ? activeTab : "question";
   const onTabKey = (e: ReactKeyboardEvent) => {
@@ -1168,6 +1175,7 @@ function ExamTakingInner() {
             ? { count: tools.websites.length, onOpen: () => openTab({ id: "sites", kind: "sites" }) }
             : undefined
         }
+        box={tools?.box && toolsShown ? { onOpen: () => openTab({ id: "box", kind: "box" }) } : undefined}
         showSync={!(showExam && q)}
         directions={
           attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length, richExam ? totalPoints : undefined)
@@ -1363,6 +1371,10 @@ function ExamTakingInner() {
                     </div>
                   ) : t.kind === "file" ? (
                     <MaterialFileView attemptId={materialsAid} file={t.file} />
+                  ) : t.kind === "box" ? (
+                    <div className="xd-tool-pad">
+                      <DukeBoxPane box={dukeBox} />
+                    </div>
                   ) : t.kind === "sites" ? (
                     <div className="xd-tool-pad">
                       <WebsitesPaneContent sites={tools?.websites ?? []} links={tools?.website_links} onOpenSite={(h, u) => openSite(h, u, true)} />

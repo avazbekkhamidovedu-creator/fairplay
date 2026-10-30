@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { NetworkError, teacherApi } from "../../api/client";
 import type { Exam, LiveFlag, LiveRoom as LiveRoomData, LiveStudent, ReadinessRow } from "../../api/types";
-import { errorText, eventLabel, plural } from "../../components/teacher/util";
+import { errorText, eventDetailText, eventLabel, plural } from "../../components/teacher/util";
 import { clockOffset, formatClock, formatCountdown } from "../../lib/timer";
 import { OpenToEditor, closesAtLabel } from "../../components/teacher/OpenTo";
 
@@ -485,7 +485,7 @@ function FlagCard({ examId, flag, onDone }: { examId: string; flag: LiveFlag; on
         </span>
         <span className="t-muted">{formatClock(flag.server_time)}</span>
       </div>
-      {flag.detail && <span className="t-flag-detail mono">{flag.detail}</span>}
+      {flag.detail && <span className="t-flag-detail mono">{eventDetailText(flag.type, flag.detail)}</span>}
       {noting && (
         <div className="t-field">
           <label htmlFor={noteId}>Note for the record</label>

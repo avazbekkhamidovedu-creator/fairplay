@@ -1475,7 +1475,18 @@ export interface SiteCompanions {
   name: string;
   sites: string[];
 }
+/** 2026-10-30: Duke Box for a running attempt (CONTRACT.md "Open exam with Duke Box"). */
+export interface ExamBox {
+  start_url: string;
+  app_hosts: string[];
+  path_prefix: string;
+  sign_in_hosts: { host: string; paths: string[] | null }[];
+  asset_hosts: string[];
+  blocked_requests: { host: string; path: string; methods?: string[] }[];
+}
 export interface ExamTools {
+  /** present only for a running attempt whose exam has a valid Box link */
+  box?: ExamBox;
   /** 2026-10-24: start pages of allowed websites given as links */
   website_links?: WebsiteLink[];
   /** 2026-10-24: websites + their companions: what the page hands the app (allowed_sites).
@@ -1483,6 +1494,8 @@ export interface ExamTools {
   allowed_sites?: string[];
 }
 export interface Exam {
+  /** 2026-10-30: the exam's Duke Box link, normalized, or null. The page only shows whether it is set. */
+  box_link?: string | null;
   website_links?: WebsiteLink[];
   companions?: SiteCompanions[];
   /** open book: students may upload their files this many days before scheduled_at (0 = off) */

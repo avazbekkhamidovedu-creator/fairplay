@@ -114,10 +114,21 @@ export function eventLabel(type: string): string {
     canvas_upload_unsupported: "Canvas file upload not supported on this computer",
     canvas_sso_popup: "Canvas sign-in window opened",
     blocked_navigation: "Tried to open a blocked website",
+    box_opened: "Opened Duke Box",
   };
   if (known[type]) return known[type];
   // Types only the server may write, or unknown ones, posted by the page or app (audit S-06).
   if (type.startsWith("client_")) return `Reported by the computer: ${eventLabel(type.slice(7))}`;
   const s = type.replace(/[_-]+/g, " ").trim();
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : "Event";
+}
+
+/** Event detail for the teacher. Box navigation blocks are "box <host> <path-class>". */
+export function eventDetailText(type: string, detail: string | null | undefined): string {
+  const d = detail ?? "";
+  if (type.replace(/^client_/, "") === "blocked_navigation") {
+    const m = /^box\s+(\S+)\s+(\S+)$/.exec(d.trim());
+    if (m?.[1] && m[2]) return `Duke Box: tried ${m[2].replace(/[_-]+/g, " ")} on ${m[1]}`;
+  }
+  return d;
 }

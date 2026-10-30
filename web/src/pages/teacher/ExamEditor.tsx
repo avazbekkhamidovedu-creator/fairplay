@@ -475,6 +475,7 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
             set({ calculator: v.calculator, openBook: v.openBook, websites: v.websites, uploadOpensDays: v.uploadOpensDays ?? 0 })
           }
           hasDate={!!draft.date}
+          boxLinkSet={(exam ?? created)?.box_link === undefined ? undefined : !!(exam ?? created)?.box_link}
         />
       )}
 

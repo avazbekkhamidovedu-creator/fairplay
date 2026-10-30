@@ -1,7 +1,7 @@
 // Native bridge to the FairPlay Mac app (CONTRACT.md "Native bridge").
 // In a normal browser every call is a no-op and isNative() is false.
 
-import type { CanvasScopeView, IntegrityEvent } from "../api/types";
+import type { CanvasScopeView, ExamBox, IntegrityEvent } from "../api/types";
 
 /** What the app's "state" message says. app_version / platform (S2) and sealed_pending
  *  (S5) are missing from older app builds. */
@@ -23,6 +23,15 @@ export interface NativeState {
   /** Homework "remember me": available = biometrics or a passcode plus a working secure
    *  store; name = display name of the account stored on this device. Never a secret. */
   homeworkRemember?: { available: boolean; name: string | null };
+  /** 2026-10-30: the app can open the Duke Box window (missing = no). */
+  boxSupported?: boolean;
+}
+
+/** The app's answer to open_box / close_box. */
+export interface BoxResultMessage {
+  type: "boxResult";
+  state: "opened" | "closed" | "error";
+  error?: string;
 }
 
 export type DeviceTestEnd = "leave" | "timeout" | "refused" | "error";
@@ -74,6 +83,7 @@ export type NativeMessage =
   | DeviceTestMessage
   | HomeworkLoginResultMessage
   | RememberResultMessage
+  | BoxResultMessage
   /** 2026-10-23: "preunlock" refused (an exam is attached to the lock). */
   | { type: "preunlockRefused" }
   /** Audit 2026-10-12: the app unlocks only once the server confirms the hand-in. */
@@ -169,7 +179,9 @@ type OutMessage =
   | { action: "rememberSave"; token: string; name: string }
   | { action: "rememberUnlock" }
   | { action: "rememberForget" }
-  | { action: "openDownloadPage" };
+  | { action: "openDownloadPage" }
+  | { action: "open_box"; box: ExamBox }
+  | { action: "close_box" };
 
 /** S5: what the app seals when the submit at time-up failed. answers_json is the exact
  *  string the app hashes (SHA-256 of its UTF-8 bytes). */
@@ -289,6 +301,7 @@ function stateOf(d: NativeState): NativeState {
   if (typeof d.prelock === "boolean") out.prelock = d.prelock;   // 2026-10-23
   if (d.deviceTest === true) out.deviceTest = true;
   if (d.homeworkLogin === true) out.homeworkLogin = true;
+  if (d.boxSupported === true) out.boxSupported = true;
   const rem = (d as { homeworkRemember?: { available?: unknown; name?: unknown } }).homeworkRemember;
   if (rem && typeof rem === "object") {
     out.homeworkRemember = { available: rem.available === true, name: typeof rem.name === "string" && rem.name ? rem.name : null };
@@ -351,6 +364,26 @@ export function onDeviceTest(listener: (msg: DeviceTestMessage) => void): () => 
   return onNative((m) => {
     if (m.type === "deviceTest") listener(m);
   });
+}
+
+/** True inside an app that said (in its state) it can open the Duke Box window. */
+export function boxSupported(): boolean {
+  return isNative() && getNativeState()?.boxSupported === true;
+}
+
+/** Ask the app to open the Duke Box window with exactly the attempt's tools.box object.
+ *  Its answer is a boxResult message. Returns false when the app can't (nothing is sent). */
+export function openBox(box: ExamBox): boolean {
+  if (!boxSupported()) return false;
+  post({ action: "open_box", box });
+  return true;
+}
+
+/** Close the Duke Box window (no-op when none is open or the app has no Box support). */
+export function closeBox(): boolean {
+  if (!boxSupported()) return false;
+  post({ action: "close_box" });
+  return true;
 }
 
 /** True inside an app that said (in its state) it can open the homework login window. */

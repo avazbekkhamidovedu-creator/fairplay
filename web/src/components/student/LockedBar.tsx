@@ -48,6 +48,7 @@ export function LockedBar({
   calculator,
   materials,
   websites,
+  box,
   moreButtonRef,
   showSync = true,
 }: {
@@ -73,6 +74,8 @@ export function LockedBar({
   /** open-book exams: count = the student's files (null = not known yet) */
   materials?: { count: number | null; onOpen: () => void };
   websites?: { count: number; onOpen: () => void };
+  /** 2026-10-30: the exam has a Duke Box folder */
+  box?: { onOpen: () => void };
   /** 2026-10-23: the More button, so focus can come back to it when a side panel closes. */
   moreButtonRef?: Ref<HTMLButtonElement>;
   /** 2026-10-24 (layout D): false while the question screen shows the save status in its
@@ -296,6 +299,20 @@ export function LockedBar({
               <span className="stu-menu-note">
                 {websites.count} {websites.count === 1 ? "site" : "sites"}
               </span>
+            </button>
+          )}
+          {box && (
+            <button
+              type="button"
+              role="menuitem"
+              className="stu-menu-item"
+              onClick={() => {
+                close();
+                box.onOpen();
+              }}
+            >
+              <GlobeIcon />
+              Duke Box
             </button>
           )}
           {onTextSize && <TextSizeRow size={textSize} onChange={onTextSize} />}

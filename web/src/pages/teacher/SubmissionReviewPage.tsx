@@ -12,7 +12,7 @@ import { QuestionImages, TopicChips } from "../../components/QuestionImages";
 import { Pill } from "../../components/teacher/TeacherLayout";
 import { SubmissionMaterials } from "../../components/teacher/SubmissionMaterials";
 import { urlHost } from "../../components/teacher/externalValidation";
-import { errorText, eventLabel, formatWhen, num, pct } from "../../components/teacher/util";
+import { errorText, eventDetailText, eventLabel, formatWhen, num, pct } from "../../components/teacher/util";
 import { KIND_LABEL, kindOf } from "./examDraft";
 import { formatGiven } from "./ResultsView";
 import "../../styles/code.css";
@@ -228,7 +228,7 @@ export default function SubmissionReviewPage() {
               {attempt.events.map((ev) => (
                 <li key={ev.event_id}>
                   <span>{eventLabel(ev.type)}</span>
-                  {ev.detail && <span className="t-muted"> · {ev.detail}</span>}
+                  {ev.detail && <span className="t-muted"> · {eventDetailText(ev.type, ev.detail)}</span>}
                   <span className="t-small t-muted"> · {formatWhen(ev.server_time)}</span>
                   {ev.review !== "open" && (
                     <span className="t-small t-muted"> · {ev.review === "dismissed" ? "looked fine" : `note: ${ev.note}`}</span>

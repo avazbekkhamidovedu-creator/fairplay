@@ -7,7 +7,7 @@ import type { AnswerValue, Exam, Question, ResultAnswer, ResultAttempt, Results 
 import { Loading } from "../../components/Loading";
 import { Pill } from "../../components/teacher/TeacherLayout";
 import { SendGradesButton } from "../../components/teacher/lms/SendGradesButton";
-import { errorText, eventLabel, formatWhen, num, pct, plural } from "../../components/teacher/util";
+import { errorText, eventDetailText, eventLabel, formatWhen, num, pct, plural } from "../../components/teacher/util";
 import { formatClock } from "../../lib/timer";
 import { KIND_LABEL, kindOf } from "./examDraft";
 import { CanvasExamInfo } from "../../components/teacher/CanvasExamInfo";
@@ -565,7 +565,7 @@ function AttemptDetails({
                 <li key={ev.event_id ?? i} className="t-answer" style={{ gridTemplateColumns: "auto 1fr auto" }}>
                   <span className="mono t-small">{formatClock(ev.client_time ?? ev.server_time)}</span>
                   <span className="t-small">
-                    {eventLabel(ev.type)} <span className="mono t-muted">{ev.detail}</span>
+                    {eventLabel(ev.type)} <span className="mono t-muted">{eventDetailText(ev.type, ev.detail)}</span>
                     {ev.note && <div className="t-muted">Note: {ev.note}</div>}
                   </span>
                   {ev.review && ev.review !== "open" ? (
