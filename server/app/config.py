@@ -53,6 +53,68 @@ def _list(name: str) -> list[str]:
     return [x.strip() for x in os.environ.get(name, "").split(",") if x.strip()]
 
 
+WEBTEST_ID_RE = re.compile(r"[a-z0-9-]{1,32}")
+WEBTEST_HOST_RE = re.compile(r"(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
+WEBTEST_MAX = 12
+
+
+def parse_webtest_sites(raw, dev: bool = False) -> list[dict]:
+    """Validated HOMEWORK_WEBTEST_SITES entries: {id, label, url, host, hosts, box}. RuntimeError on a bad value."""
+    import json
+    from urllib.parse import urlsplit
+    if isinstance(raw, str):
+        if not raw.strip():
+            return []
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            raise RuntimeError(f"HOMEWORK_WEBTEST_SITES is not valid JSON ({exc}).") from None
+    if not isinstance(raw, list):
+        raise RuntimeError("HOMEWORK_WEBTEST_SITES must be a JSON list of {id, label, url} objects.")
+    if len(raw) > WEBTEST_MAX:
+        raise RuntimeError(f"HOMEWORK_WEBTEST_SITES has {len(raw)} entries; at most {WEBTEST_MAX}.")
+    out, seen = [], set()
+    for i, e in enumerate(raw):
+        where = f"HOMEWORK_WEBTEST_SITES entry {i + 1}"
+        if not isinstance(e, dict):
+            raise RuntimeError(f"{where} must be an object.")
+        unknown = set(e) - {"id", "label", "url", "hosts", "box"}
+        if unknown:
+            raise RuntimeError(f"{where} has unknown keys: {', '.join(sorted(map(str, unknown)))}.")
+        sid, label, url = e.get("id"), e.get("label"), e.get("url")
+        if not isinstance(sid, str) or not WEBTEST_ID_RE.fullmatch(sid):
+            raise RuntimeError(f"{where}: id must be 1-32 characters of a-z, 0-9 and -.")
+        if sid in seen:
+            raise RuntimeError(f"{where}: id {sid!r} is used twice.")
+        seen.add(sid)
+        if not isinstance(label, str) or not 1 <= len(label.strip()) <= 40:
+            raise RuntimeError(f"{where} ({sid}): label must be 1-40 characters.")
+        if not isinstance(url, str):
+            raise RuntimeError(f"{where} ({sid}): url is required.")
+        try:
+            parts = urlsplit(url)
+            host, _ = parts.hostname, parts.port
+        except ValueError:
+            raise RuntimeError(f"{where} ({sid}): url is not a valid address.") from None
+        if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+            raise RuntimeError(f"{where} ({sid}): url must not contain a user name or password.")
+        loopback = host in ("localhost", "127.0.0.1", "::1")
+        if not host or not (parts.scheme == "https" or (dev and parts.scheme == "http" and loopback)):
+            raise RuntimeError(f"{where} ({sid}): url must be https:// (http://localhost only with FAIRPLAY_DEV=1).")
+        hosts = e.get("hosts", [])
+        if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
+            raise RuntimeError(f"{where} ({sid}): hosts must be a list of host names.")
+        hosts = [h.strip().lower() for h in hosts]
+        for h in hosts:
+            if not WEBTEST_HOST_RE.fullmatch(h):
+                raise RuntimeError(f"{where} ({sid}): host {h!r} must be a host name or *.suffix (no port or path).")
+        box = e.get("box", False)
+        if not isinstance(box, bool):
+            raise RuntimeError(f"{where} ({sid}): box must be true or false.")
+        out.append({"id": sid, "label": label.strip(), "url": url, "host": host.lower(), "hosts": hosts, "box": box})
+    return out
+
+
 def _int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -180,6 +242,9 @@ class Settings:
     homework_login_hosts: list[str] = field(default_factory=lambda: _list("HOMEWORK_LOGIN_HOSTS"))
     homework_login_resume_paths: list[str] = field(
         default_factory=lambda: _list("HOMEWORK_LOGIN_RESUME_PATHS") or ["/"])
+    # HOMEWORK_WEBTEST_SITES: JSON list of {"id","label","url","hosts"?,"box"?}; the sites a student
+    # may open in the restricted web window after the homework sign-in. "" = off.
+    homework_webtest_sites: str = field(default_factory=lambda: os.environ.get("HOMEWORK_WEBTEST_SITES", "").strip())
 
     def canvas_min_version(self, platform: str | None) -> str | None:
         p = (platform or "").strip().lower()
@@ -265,6 +330,7 @@ class Settings:
         if self.homework_login:
             from .integrations import homework_login
             homework_login.check(self)
+            parse_webtest_sites(self.homework_webtest_sites, self.dev)
         self.warn_insecure()
 
     def warn_insecure(self) -> None:

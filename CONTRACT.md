@@ -1181,3 +1181,21 @@ path segments; never cookies, headers, queries or bodies) and refine the profile
   `box <host> <path-class>`. `box_opened` is bookkeeping, not a flag.
 - **Companion sites**: Box and Duke sign-in hosts are no longer added to `allowed_sites` / `companions` (the frame
   allow-list); `settings.companions` and `tools.allowed_sites` carry no Box hosts.
+
+## Homework web view check (optional)
+
+Setting `HOMEWORK_WEBTEST_SITES` (env, default empty = off), only active with `FAIRPLAY_HOMEWORK_LOGIN` on. A JSON
+list of at most 12 objects: `{"id": "wikipedia", "label": "Wikipedia", "url": "https://en.wikipedia.org/",
+"hosts": ["*.wikimedia.org"], "box": false}`. `id` is `[a-z0-9-]{1,32}` and unique, `label` 1-40 characters, `url`
+https only (http loopback only with `FAIRPLAY_DEV`), no user info. `hosts` (optional) are extra allowed hosts (host
+names or `*.suffix`, no port or path). `box: true` also allows the active box profile's app, sign-in and asset hosts.
+A bad value stops the server at startup with a message.
+
+- **`GET /api/homework/webtest`** (homework or plain student bearer; an exam-scoped token is 403) ->
+  `{"sites": [{"id", "label"}]}`. Empty list when no sites are set; 404 when homework sign-in is off. No URLs.
+- **`POST /api/homework/webtest/open`** `{"id"}` (same auth, 30/min per user, 429 after) ->
+  `{state, start_url, allowed_hosts, finish_url, resume_paths, expires_at}`, the same shape as
+  `POST /api/homework/login/start`, opened with the same `openHomeworkLogin` message. `state` is random and not
+  stored; `start_url` is the entry's url; `allowed_hosts` is the url's host, the entry's `hosts` and, for `box`, the
+  box hosts (host or `*.suffix`); `finish_url` is `https://fairplay-webtest.invalid/done` (never loaded);
+  `resume_paths` is `["/__none__"]`. 404 for an unknown id or when the feature is off.

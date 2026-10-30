@@ -211,3 +211,80 @@ export async function forgetThisDevice(): Promise<void> {
   bridge.rememberForget();
   signOutHomework();
 }
+
+export interface WebTestSite {
+  id: string;
+  label: string;
+}
+
+export const MSG_WEBTEST_GONE = "That page is not available right now.";
+export const MSG_WEBTEST_CLOSED = "The web view could not be opened. Try again.";
+
+/** Sites the student may try in a secure window. Empty = feature off (also on any failure). */
+export async function listWebTests(): Promise<WebTestSite[] | "signed-out"> {
+  const token = getHomeworkToken();
+  if (!token) return "signed-out";
+  noteActivity();
+  try {
+    const res = await fetch("/api/homework/webtest", { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+    if (res.status === 401) {
+      clearHomeworkSession();
+      return "signed-out";
+    }
+    if (!res.ok) return [];
+    const j = (await res.json()) as { sites?: unknown };
+    if (!Array.isArray(j?.sites)) return [];
+    return j.sites
+      .filter((s): s is WebTestSite => !!s && typeof (s as WebTestSite).id === "string" && typeof (s as WebTestSite).label === "string")
+      .map((s) => ({ id: s.id, label: s.label }));
+  } catch {
+    return [];
+  }
+}
+
+export type WebTestOutcome = { ok: true } | { ok: false; signedOut?: true; message?: string };
+
+/** Opens a web-test window and resolves when the student closes it. A ticket result is never
+ *  expected for these windows and is ignored. */
+export async function openWebTest(id: string, signal?: AbortSignal): Promise<WebTestOutcome> {
+  const token = getHomeworkToken();
+  if (!token) return { ok: false, signedOut: true };
+  let start: bridge.HomeworkLoginParams;
+  try {
+    const r = await post<bridge.HomeworkLoginParams>("/api/homework/webtest/open", { id }, token);
+    if (r.status === 401) {
+      clearHomeworkSession();
+      return { ok: false, signedOut: true };
+    }
+    if (r.status === 429) return { ok: false, message: MSG_RATE };
+    if (r.status === 404) return { ok: false, message: MSG_WEBTEST_GONE };
+    if (r.status !== 200 || !r.data) return { ok: false, message: MSG_WEBTEST_CLOSED };
+    start = r.data;
+  } catch {
+    return { ok: false, message: MSG_NETWORK };
+  }
+  if (signal?.aborted) return { ok: true };
+  return new Promise<WebTestOutcome>((resolve) => {
+    const end = (o: WebTestOutcome) => {
+      off();
+      signal?.removeEventListener("abort", onAbort);
+      resolve(o);
+    };
+    const onAbort = () => end({ ok: true });
+    const off = bridge.onNative((m) => {
+      if (m.type !== "homeworkLoginResult") return;
+      if (m.state !== undefined && m.state !== start.state) return;
+      if (m.cancelled === true) end({ ok: true });
+      else if (typeof m.error === "string" && m.error) end({ ok: false, message: MSG_WEBTEST_CLOSED });
+    });
+    signal?.addEventListener("abort", onAbort);
+    const sent = bridge.openHomeworkLogin({
+      state: start.state,
+      start_url: start.start_url,
+      allowed_hosts: start.allowed_hosts,
+      finish_url: start.finish_url,
+      resume_paths: start.resume_paths,
+    });
+    if (!sent) end({ ok: false, message: MSG_WEBTEST_CLOSED });
+  });
+}

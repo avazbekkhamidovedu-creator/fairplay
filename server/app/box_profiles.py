@@ -167,3 +167,13 @@ def is_box_host(host: str) -> bool:
 def without_box_hosts(websites: list[str]) -> list[str]:
     """The Box page opens in its own pane (tools.box), never as an allowed website."""
     return [w for w in websites if not is_box_host(w.lstrip("*.").lower())]
+
+
+def allowed_host_strings() -> list[str]:
+    """Plain host / '*.suffix' strings for the active profile's app, sign-in and asset hosts."""
+    _, prof = selected_profile()
+    out: list[str] = []
+    for h in [*APP_HOSTS, *(x["host"] for x in prof["sign_in_hosts"]), *prof["asset_hosts"]]:
+        if h not in out:
+            out.append(h)
+    return out

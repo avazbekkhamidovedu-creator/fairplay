@@ -5,6 +5,8 @@ POST /api/homework/login/start   {}                  -> {state, start_url, allow
 POST /api/homework/login/finish  {state, ticket}     -> {token, name, netid, expires_at, absolute_expires_at, idle_seconds}
 GET  /api/homework/me                                -> {name, netid, expires_at, absolute_expires_at}
 POST /api/homework/session/renew                     -> {token, expires_at, absolute_expires_at}
+GET  /api/homework/webtest                           -> {sites: [{id, label}]}
+POST /api/homework/webtest/open  {id}                -> {state, start_url, allowed_hosts, finish_url, resume_paths, expires_at}
 POST /api/homework/remember/{create,exchange,forget,forget-all}   (see CONTRACT.md)
 
 States are single use (deleted on the first finish, right or wrong). Tickets, verifiers and
@@ -28,6 +30,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import box_profiles
+from .config import parse_webtest_sites
 from .db import get_session
 from . import homework_remember as rem
 from .integrations import homework_login as hw
@@ -201,6 +205,48 @@ async def me(request: Request, p: Principal = Depends(require_homework), session
 
 def _bearer(request: Request) -> str:
     return request.headers.get("authorization", "").partition(" ")[2].strip()
+
+
+WEBTEST_PER_MIN = 30
+WEBTEST_FINISH_URL = "https://fairplay-webtest.invalid/done"
+
+
+class WebtestOpenIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(max_length=64)
+
+
+def _webtest_sites(request: Request) -> list[dict]:
+    settings = request.app.state.settings
+    if hw.active(settings) is None:
+        return []
+    return parse_webtest_sites(settings.homework_webtest_sites, settings.dev)
+
+
+@router.get("/webtest")
+async def webtest_list(request: Request, p: Principal = Depends(require_homework)):
+    _provider(request)
+    return _no_store({"sites": [{"id": s["id"], "label": s["label"]} for s in _webtest_sites(request)]})
+
+
+@router.post("/webtest/open")
+async def webtest_open(body: WebtestOpenIn, request: Request, p: Principal = Depends(require_homework)):
+    _provider(request)
+    site = next((s for s in _webtest_sites(request) if s["id"] == body.id), None)
+    if site is None:
+        raise HTTPException(404, "Not Found")
+    if await get_store().incr(f"hwl:rl:webtest:{p.user_id}", 60) > WEBTEST_PER_MIN:
+        raise HTTPException(429, TOO_MANY)
+    hosts = [site["host"], *site["hosts"]]
+    if site["box"]:
+        try:
+            hosts += box_profiles.allowed_host_strings()
+        except box_profiles.BoxProfileError:
+            raise HTTPException(503, UNAVAILABLE) from None
+    hosts = list(dict.fromkeys(hosts))
+    return _no_store({"state": _b64(secrets.token_bytes(32)), "start_url": site["url"], "allowed_hosts": hosts,
+                      "finish_url": WEBTEST_FINISH_URL, "resume_paths": ["/__none__"],
+                      "expires_at": iso(utcnow() + timedelta(seconds=STATE_TTL_S))})
 
 
 @router.post("/session/renew")

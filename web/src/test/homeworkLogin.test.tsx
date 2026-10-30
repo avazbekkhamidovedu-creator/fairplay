@@ -230,7 +230,7 @@ describe("homework page", () => {
     expect(await screen.findByText("Welcome, Ava K")).toBeTruthy();
     expect(screen.getByText("NetID: ak1")).toBeTruthy();
     expect(screen.getByText("Homework is coming soon.")).toBeTruthy();
-    expect(calls.map((c) => c.url)).toEqual(["/api/homework/me"]);
+    expect(calls.map((c) => c.url).filter((u) => u !== "/api/homework/webtest")).toEqual(["/api/homework/me"]);
     expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer HW-TOKEN");
   });
 

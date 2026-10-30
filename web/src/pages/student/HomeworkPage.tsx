@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import { SessionBar } from "../../components/homework/SessionBar";
 import * as bridge from "../../lib/bridge";
-import { forgetThisDevice, getHomeworkToken, loadHomeworkMe, rememberThisDevice, signOutHomework, type HomeworkIdentity } from "../../lib/homework";
+import {
+  forgetThisDevice,
+  getHomeworkToken,
+  listWebTests,
+  loadHomeworkMe,
+  openWebTest,
+  rememberThisDevice,
+  signOutHomework,
+  type HomeworkIdentity,
+  type WebTestSite,
+} from "../../lib/homework";
 import "../../styles/code-signin.css";
 
 export default function HomeworkPage() {
@@ -17,11 +27,17 @@ export default function HomeworkPage() {
   const [justSaved, setJustSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [canWindow, setCanWindow] = useState(() => bridge.homeworkLoginSupported());
+  const [sites, setSites] = useState<WebTestSite[]>([]);
+  const [opening, setOpening] = useState(false);
+  const [webError, setWebError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(
     () =>
       bridge.onNative((m) => {
         if (m.type === "state") {
+          setCanWindow(bridge.homeworkLoginSupported());
           setCanRemember(bridge.rememberAvailable());
           setSavedName(bridge.rememberedName());
         }
@@ -43,6 +59,20 @@ export default function HomeworkPage() {
     };
   }, [hasToken]);
 
+  useEffect(() => {
+    if (!hasToken) return;
+    let alive = true;
+    void listWebTests().then((r) => {
+      if (!alive) return;
+      if (r === "signed-out") setGone(true);
+      else setSites(r);
+    });
+    return () => {
+      alive = false;
+      abortRef.current?.abort();
+    };
+  }, [hasToken]);
+
   const expired = useCallback(() => setGone(true), []);
 
   if (!hasToken || gone) return <Navigate to="/student/login" replace />;
@@ -60,6 +90,20 @@ export default function HomeworkPage() {
     setSaving(false);
     if (r.ok) setJustSaved(true);
     else setSaveError(r.message);
+  }
+
+  async function tryWeb(id: string) {
+    if (opening) return;
+    setOpening(true);
+    setWebError(null);
+    const ctl = new AbortController();
+    abortRef.current = ctl;
+    const r = await openWebTest(id, ctl.signal);
+    if (ctl.signal.aborted) return;
+    setOpening(false);
+    if (r.ok) return;
+    if (r.signedOut) setGone(true);
+    else setWebError(r.message ?? null);
   }
 
   const remembered = justSaved || (me !== null && savedName === me.name);
@@ -119,6 +163,37 @@ export default function HomeworkPage() {
             <p className="cs-info" role="status">
               This device is remembered.
             </p>
+          )}
+          {sites.length > 0 && (
+            <div className="cs-remember-card" data-testid="web-test">
+              {canWindow ? (
+                <>
+                  <h2 className="cs-sub">Try the web view</h2>
+                  <p className="cs-sub">
+                    Open a page in a secure FairPlay window to check that it works on this computer. Nothing here is graded and nothing locks your computer.
+                  </p>
+                  {sites.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="cs-btn cs-btn-secondary cs-block"
+                      style={{ minHeight: 44 }}
+                      onClick={() => void tryWeb(s.id)}
+                      disabled={opening}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                  {webError && (
+                    <p className="cs-error" role="alert">
+                      {webError}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="cs-sub">The web view test needs the FairPlay app.</p>
+              )}
+            </div>
           )}
           <button type="button" className="cs-link cs-forget" onClick={() => void forget()}>
             Forget this device
