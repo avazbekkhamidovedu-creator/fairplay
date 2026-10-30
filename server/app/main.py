@@ -58,6 +58,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await db.dispose()
             raise
         store = make_store(settings.redis_url)
+        from . import code_runner
+        code_runner.configure(settings)
         set_db(db)
         set_store(store)
         await refresh_trial_cache()        # the seed may have changed the sample exam
@@ -89,6 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     await sweeper
                 except (asyncio.CancelledError, Exception):  # noqa: BLE001
                     pass
+            await code_runner.shutdown()
             await store.close()
             await db.dispose()
             set_db(None)
@@ -130,10 +133,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # of all requests during an exam. Its paths overlap no other router's
     # (tests/test_perf_0_6_2.py checks), so the order changes nothing else.
     app.include_router(student_router)
+    from .code_runner import student_router as code_student_router, teacher_router as code_teacher_router
+    app.include_router(code_student_router)      # external code runner: student run
     app.include_router(auth_router)
     app.include_router(classes_teacher_router)   # audit S-03
     app.include_router(classes_student_router)
     app.include_router(teacher_router)
+    app.include_router(code_teacher_router)      # external code runner: teacher run-tests
     app.include_router(trial_router)             # 2026-10-22: sample exam (app.trial)
     app.include_router(sealed_router)            # S5: sealed offline hand-in
     app.include_router(grading_router)
@@ -186,6 +192,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                "student_grades": settings.student_grades}
         from .integrations import homework_login
         out["homework_login"] = homework_login.health(settings)
+        from . import code_runner
+        out["code_runner"] = await code_runner.health()
         if settings.browser_gate == "off":
             out["browser_demo"] = True
         return out

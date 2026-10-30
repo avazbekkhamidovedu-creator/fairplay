@@ -1243,3 +1243,23 @@ A bad value stops the server at startup with a message.
 - DKU OJ questions keep their own language handling (`runner_for` is unchanged and never yields `typescript` or `sql`).
 - Follow-ups (2026-10-30): `GET /api/student/exams` items carry `code_languages` (sorted unique array of the resolved languages of the exam's own coding questions: the question's language, else the exam `default_language`). The key is absent when the exam has no coding questions, for website exams, and for exams still waiting or in the early upload window. DKU OJ questions are not counted. It holds language names only, nothing about questions or tests.
 - The teacher grading payload (`GET /api/exams/{id}/grading`, `questions[]`) carries `sql_setup` and `sql_compare` for a coding question whose resolved language is `sql`, and neither for other questions. Students never get that payload.
+
+## External code runner (C, C++, Java)
+
+The server never executes code. When `FAIRPLAY_RUNNER_URL`, `FAIRPLAY_RUNNER_TENANT` and `FAIRPLAY_RUNNER_SECRET` are set, it sends programs to `fp-runner` over signed HTTP. None set = feature off and every language behaves as before. Only some of the three set, a non-https URL (http loopback only with `FAIRPLAY_DEV=1`) or a secret under 32 characters: the server refuses to start. `FAIRPLAY_RUNNER_TIMEOUT_S` (default 30) bounds one runner call.
+
+Hidden tests and expected outputs never go to the runner or to a student: the server compares outputs itself, with the same rule as `web/src/lib/code/compare.ts` (line endings unified, trailing spaces and tabs per line ignored, empty lines at the end ignored).
+
+`GET /api/health` gains `"code_runner": null | {"languages": ["c","cpp","java"]}` (the languages the runner offers right now; null when off or when the runner offers none; never the URL).
+
+`POST /api/student/attempts/{aid}/questions/{qid}/run` (student, own attempt, in progress, before its deadline)
+- body `{"source": str (<= 50,000), "stdins": [str, ...] (1..20 items, each <= 20,000)}`
+- 200 `{"status": "ok"|"compile_error", "compile_output": str, "results": [{"status": "ok"|"runtime_error"|"time_limit"|"memory_limit"|"output_limit", "stdout": str, "stderr": str, "time_ms": int, "truncated": bool}]}` (results empty on compile_error, one per stdin otherwise)
+- 400 `This language cannot be run here` (not a code question, language not c/cpp/java, or not offered by the runner; also when the runner is off), 404 (not the student's attempt or unknown question), 409 (submitted, or time is up), 422 (too large or empty), 429 + `Retry-After` (1 run per 3 s and 120 per hour per attempt), 503 `The code runner is not available right now` (+ `Retry-After`).
+- The language is the question's own, else the exam default. Limits: the question's `time_limit_ms` (default 2000) and `memory_limit_kb` (default 262144, capped to 16384..1048576).
+- Records the attempt event `code_run` with detail `<language> <status> x<count>` (never the source).
+
+`POST /api/exams/{exam_id}/questions/{qid}/run-tests` (the exam's own teacher)
+- body `{"source": str (<= 50,000)}`; runs every test of the question (visible and hidden), in runner calls of at most 30 inputs.
+- 200 `{"status": "ok"|"compile_error", "compile_output": str, "tests": [{"index": int, "visible": bool, "points": number, "passed": bool, "status": "ok"|"runtime_error"|"time_limit"|"memory_limit"|"output_limit"|"not_run", "stdout": str (<= 2,000 chars), "stderr": str (<= 2,000 chars), "time_ms": int}], "earned": number, "total": number}`. `earned` = the points of passed tests; when no test has points, the question's points shared out by passed/total. `total` = the question's points. A test passes when the program ended normally (`ok`) and its output matches the expected output.
+- 400 `This language cannot be run here` or `This question has no tests`, 404 (not the teacher's exam), 403 (students), 503 as above.

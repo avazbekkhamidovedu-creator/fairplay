@@ -246,6 +246,13 @@ class Settings:
     # may open in the restricted web window after the homework sign-in. "" = off.
     homework_webtest_sites: str = field(default_factory=lambda: os.environ.get("HOMEWORK_WEBTEST_SITES", "").strip())
 
+    # External code runner (app/code_runner.py) for C, C++ and Java. All empty = off.
+    runner_url: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_RUNNER_URL", "").strip().rstrip("/"))
+    runner_tenant: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_RUNNER_TENANT", "").strip())
+    runner_secret: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_RUNNER_SECRET", "").strip(),
+                               repr=False)
+    runner_timeout_s: int = field(default_factory=lambda: _int("FAIRPLAY_RUNNER_TIMEOUT_S", 30))
+
     def canvas_min_version(self, platform: str | None) -> str | None:
         p = (platform or "").strip().lower()
         v = {"mac": self.canvas_min_version_mac, "windows": self.canvas_min_version_windows,
@@ -331,7 +338,34 @@ class Settings:
             from .integrations import homework_login
             homework_login.check(self)
             parse_webtest_sites(self.homework_webtest_sites, self.dev)
+        self.check_runner()
         self.warn_insecure()
+
+    @property
+    def runner_on(self) -> bool:
+        return bool(self.runner_url)
+
+    def check_runner(self) -> None:
+        if not (self.runner_url or self.runner_tenant or self.runner_secret):
+            return
+        if not (self.runner_url and self.runner_tenant and self.runner_secret):
+            raise RuntimeError(
+                "The code runner is half configured: FAIRPLAY_RUNNER_URL, FAIRPLAY_RUNNER_TENANT and "
+                "FAIRPLAY_RUNNER_SECRET must all be set (or none of them).")
+        from urllib.parse import urlsplit
+        try:
+            parts = urlsplit(self.runner_url)
+            host, _ = parts.hostname, parts.port
+        except ValueError:
+            raise RuntimeError("FAIRPLAY_RUNNER_URL is not a valid address.") from None
+        loopback = host in ("localhost", "127.0.0.1", "::1")
+        if not host or parts.username is not None or not (
+                parts.scheme == "https" or (self.dev and parts.scheme == "http" and loopback)):
+            raise RuntimeError("FAIRPLAY_RUNNER_URL must be https:// (http://localhost only with FAIRPLAY_DEV=1).")
+        if len(self.runner_secret) < 32:
+            raise RuntimeError("FAIRPLAY_RUNNER_SECRET must be at least 32 characters.")
+        if not 1 <= self.runner_timeout_s <= 300:
+            raise RuntimeError("FAIRPLAY_RUNNER_TIMEOUT_S must be between 1 and 300.")
 
     def warn_insecure(self) -> None:
         if not self.redis_url:
