@@ -99,6 +99,13 @@ export function setScopedEndHandler(fn: (() => void) | null): void {
   onScopedEnd = fn;
 }
 
+let onStudentExpired: (() => void) | null = null;
+
+/** Registered by lib/studentSession: a 401 that clears a student token also wipes exam data. */
+export function setStudentExpiredHandler(fn: (() => void) | null): void {
+  onStudentExpired = fn;
+}
+
 export function clearToken(role: Role): void {
   if (role === "student" && tokenScope(getToken("student"))) onScopedEnd?.();
   try {
@@ -289,6 +296,7 @@ export async function request<T>(
 
   if (!res.ok) {
     if (res.status === 401 && role) {
+      if (role === "student") onStudentExpired?.();
       clearToken(role);
       onUnauthorized(role);
     }

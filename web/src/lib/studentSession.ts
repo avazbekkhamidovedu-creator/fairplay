@@ -1,4 +1,4 @@
-import { setScopedEndHandler } from "../api/client";
+import { setScopedEndHandler, setStudentExpiredHandler } from "../api/client";
 import { clearExamDataOnSignOut } from "./offline";
 import { keepDeviceCheck } from "./pendingDeviceCheck";
 
@@ -17,3 +17,4 @@ export function wipeStudentState(): void {
 }
 
 setScopedEndHandler(wipeStudentState);
+setStudentExpiredHandler(clearExamDataOnSignOut);

@@ -10,9 +10,11 @@
 // - Every exam page caches its last AttemptView in localStorage["fairplay:attempt-view:<aid>"]
 //   and uses it when GET attempt fails with a network error.
 
-import { NetworkError, slice6Api } from "../api/client";
+import { NetworkError, currentStudentId, slice6Api } from "../api/client";
 import type { AttemptView, OfflineExam, OfflinePackage } from "../api/types";
 import { ATTEMPT_PREFIX } from "./answerQueue";
+import { clearJoinCode } from "../pages/student/JoinLinkPage";
+import { clearExamPrefs } from "./examPrefs";
 
 /** Audit 2026-10-13: package version 3 (the count is also written in the package). */
 export const PBKDF2_ITERATIONS = 600_000;
@@ -243,6 +245,8 @@ export interface OfflineRecord {
   view: AttemptView;
   /** set once the server accepted the attempt */
   real_attempt_id?: string | null;
+  /** account id from the token that started the attempt */
+  owner?: string | null;
 }
 
 export function readOfflineRecord(examId: string): OfflineRecord | null {
@@ -253,7 +257,7 @@ export function readOfflineRecord(examId: string): OfflineRecord | null {
 export function saveOfflineRecord(r: OfflineRecord): void {
   const { start_code: _never, ...rest } = r;      // audit W-03: the code stays in memory only
   void _never;
-  writeJson(offlineRecordKey(r.exam_id), rest);
+  writeJson(offlineRecordKey(r.exam_id), { ...rest, owner: rest.owner ?? currentStudentId() });
 }
 
 // ---------- audit W-03: start codes live in memory only ----------
@@ -293,6 +297,9 @@ const EXAM_DATA_PREFIXES = [
   // lib/answerTypes.ts: uploaded file names, code in the other languages
   "fairplay:answer-files:",
   "fairplay:code-drafts:",
+  "fairplay:crossed:offline:",
+  "fairplay:crossmode:offline:",
+  "fairplay:timerhidden:offline:",
 ];
 /** Packages fetched for an exam that never showed up: dropped after this long. */
 export const PACKAGE_MAX_AGE_MS = 24 * 3600 * 1000;
@@ -340,6 +347,7 @@ export function clearExamDataOnSignOut(): void {
     else if (k.startsWith(ATTEMPT_PREFIX) && answerCopyIsSynced(k)) remove(k);
   }
   rememberedCodes.clear();
+  clearJoinCode();
 }
 
 /** After each exam list from the server: drop data of handed-in attempts and of packages
@@ -432,7 +440,12 @@ export async function startOffline(
   // The code opened the package, so it is right: resume the local attempt if there is one.
   rememberStartCode(examId, startCode);
   const existing = readOfflineRecord(examId);
-  if (existing) return existing.view;
+  const me = currentStudentId();
+  if (existing && me && existing.owner === me) return existing.view;
+  if (existing) {
+    clearOfflineRecord(examId);
+    clearExamPrefs(offlineAttemptId(examId));
+  }
   const view = offlineAttemptView(exam);
   saveOfflineRecord({ exam_id: examId, started_at: view.started_at, view });
   return view;

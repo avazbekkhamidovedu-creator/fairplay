@@ -14,6 +14,22 @@ export function rememberJoinCode(code: string): void {
   }
 }
 
+export function peekJoinCode(): string | null {
+  try {
+    return sessionStorage.getItem(PENDING_JOIN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearJoinCode(): void {
+  try {
+    sessionStorage.removeItem(PENDING_JOIN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function takeJoinCode(): string | null {
   try {
     const c = sessionStorage.getItem(PENDING_JOIN_KEY);

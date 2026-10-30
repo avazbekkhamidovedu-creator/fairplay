@@ -1,21 +1,28 @@
 // Audit 2026-10-12 S-03: a student joins a class with the code the teacher gives out.
 // Exams of that class then appear on the home page.
 // 2026-10-24: only the "Join another class" box; the course cards (Courses.tsx) list the classes.
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { ApiError, NetworkError, studentClassesApi } from "../../api/client";
-import { takeJoinCode } from "../../pages/student/JoinLinkPage";
+import { clearJoinCode, peekJoinCode } from "../../pages/student/JoinLinkPage";
 
 export function JoinClass({ onJoined, hasClasses = true }: { onJoined?: () => void; hasClasses?: boolean }) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // 2026-10-13: arrived through a class link -> join straight away.
-  useEffect(() => {
-    const pending = takeJoinCode();
-    if (pending) void doJoin(pending);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [pending, setPending] = useState<string | null>(() => peekJoinCode());
+
+  function confirmPending() {
+    const c = pending;
+    clearJoinCode();
+    setPending(null);
+    if (c) void doJoin(c);
+  }
+
+  function cancelPending() {
+    clearJoinCode();
+    setPending(null);
+  }
 
   async function join(e: FormEvent) {
     e.preventDefault();
@@ -48,6 +55,17 @@ export function JoinClass({ onJoined, hasClasses = true }: { onJoined?: () => vo
       <p className="stu-muted stu-small" style={{ margin: 0 }}>
         Your DKU OJ courses appear here by themselves. Use a class code only if your teacher gave you one.
       </p>
+      {pending && (
+        <div role="alertdialog" aria-label="Join this class?" className="stu-join-confirm" data-testid="join-confirm">
+          <p style={{ margin: 0 }}>Join this class?</p>
+          <button type="button" className="stu-btn primary" onClick={confirmPending} disabled={busy}>
+            Confirm
+          </button>
+          <button type="button" className="stu-btn" onClick={cancelPending} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      )}
       <form onSubmit={join} className="stu-join-form">
         <label htmlFor="join-code" className="sr-only">
           Class code
