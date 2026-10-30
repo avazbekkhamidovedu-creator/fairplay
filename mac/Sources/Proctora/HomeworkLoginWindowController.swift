@@ -8,13 +8,20 @@ import WebKit
 final class HomeworkLoginCoordinator {
     private var panel: HomeworkLoginPanel?
     private var held = false
+    private weak var page: NSView?
 
     var isOpen: Bool { panel != nil }
 
     func setHeld(_ on: Bool) {
         held = on
         panel?.isHidden = on
+        updatePage()
         if !on { panel?.focusPage() }
+    }
+
+    private func updatePage() {
+        page?.isHidden = HomeworkPanelPolicy.pageHidden(panelOpen: panel != nil, held: held)
+        if panel == nil, let page, let win = page.window, win.firstResponder !== page { win.makeFirstResponder(page) }
     }
 
     func open(body: [String: Any], busy: Bool, deviceTestRunning: Bool, container: NSView?, above: NSView?,
@@ -32,16 +39,19 @@ final class HomeworkLoginCoordinator {
         guard let login, let container else { return }
         let view = HomeworkLoginPanel(login: login, frame: container.bounds) { [weak self] outcome in
             self?.panel = nil
+            self?.updatePage()
             if let outcome { send(login.message(for: outcome)) }
         }
         container.addSubview(view, positioned: .above, relativeTo: above)
         panel = view
+        page = above
         view.isHidden = held
+        updatePage()
         view.begin()
     }
 
     /// Sign-out: close the panel without an answer and wipe its data store.
-    func clear() { panel?.end(nil); panel = nil }
+    func clear() { panel?.end(nil); panel = nil; updatePage() }
 
     func dismiss() { clear() }
 }
@@ -122,7 +132,16 @@ final class HomeworkLoginPanel: NSView, WKNavigationDelegate, WKUIDelegate {
         focusPage()
     }
 
-    func focusPage() { window?.makeFirstResponder(webView) }
+    func focusPage() {
+        guard let webView else { return }
+        window?.makeFirstResponder(webView)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.completion != nil, !self.isHidden, let wv = self.webView else { return }
+            if self.window?.firstResponder !== wv { self.window?.makeFirstResponder(wv) }
+        }
+    }
+
+    private var focusedAfterLoad = false
 
     @objc private func closePressed() { end(.cancelled) }
 
@@ -182,6 +201,7 @@ final class HomeworkLoginPanel: NSView, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         hostLabel.stringValue = HomeworkLogin.displayHost(webView.url)
+        if !focusedAfterLoad { focusedAfterLoad = true; focusPage() }
         if let again = login.resume(afterFinishing: webView.url) { webView.load(URLRequest(url: again)) }
     }
 

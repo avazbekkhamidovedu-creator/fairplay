@@ -9,6 +9,7 @@ final class BoxCoordinator {
     private var generation = 0
     private var pending: (([String: Any]) -> Void)?
     private var held = false
+    private weak var page: NSView?
     private let ruleListID = "fairplay-box"
 
     var isOpen: Bool { overlay != nil }
@@ -17,7 +18,13 @@ final class BoxCoordinator {
     func setHeld(_ on: Bool) {
         held = on
         overlay?.isHidden = on
+        updatePage()
         if !on { overlay?.focusPage() }
+    }
+
+    private func updatePage() {
+        page?.isHidden = HomeworkPanelPolicy.pageHidden(panelOpen: overlay != nil, held: held)
+        if overlay == nil, let page, let win = page.window, win.firstResponder !== page { win.makeFirstResponder(page) }
     }
 
     func open(body: [String: Any], locked: Bool, preLock: Bool, hasAttempt: Bool, container: NSView?, above: NSView?,
@@ -51,6 +58,8 @@ final class BoxCoordinator {
                 }
                 container.addSubview(view, positioned: .above, relativeTo: above)
                 self.overlay = view
+                self.page = above
+                self.updatePage()
                 view.begin()
                 EventLog.shared.record(.boxOpened(BoxPolicy.openedDetail(policy.startURL)))
                 send(BoxPolicy.message("opened"))
@@ -67,6 +76,7 @@ final class BoxCoordinator {
         pending = nil
         was?.end()
         overlay = nil
+        updatePage()
         if was != nil { WKContentRuleListStore.default().removeContentRuleList(forIdentifier: ruleListID) { _ in } }
         waiting?(BoxPolicy.message("error", error: BoxPolicy.notAvailable))
         notify?(BoxPolicy.message("closed"))
@@ -76,6 +86,7 @@ final class BoxCoordinator {
         generation += 1
         overlay?.end()
         overlay = nil
+        updatePage()
         WKContentRuleListStore.default().removeContentRuleList(forIdentifier: ruleListID) { _ in }
         send(BoxPolicy.message(state, error: error))
     }
@@ -160,7 +171,13 @@ final class BoxOverlayView: NSView, WKNavigationDelegate, WKUIDelegate, WKScript
         focusPage()
     }
 
-    func focusPage() { window?.makeFirstResponder(webView) }
+    func focusPage() {
+        window?.makeFirstResponder(webView)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.onEnd != nil, !self.isHidden, let wv = self.webView else { return }
+            if self.window?.firstResponder !== wv { self.window?.makeFirstResponder(wv) }
+        }
+    }
 
     /// A single-page app can change its address without a page load (history.pushState): every URL change
     /// is checked, and a page outside the shared item's path is replaced by the start page (or closed when it keeps happening).

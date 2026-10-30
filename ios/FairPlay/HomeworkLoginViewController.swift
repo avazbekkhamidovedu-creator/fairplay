@@ -10,12 +10,19 @@ import FairPlayCore
 final class HomeworkLoginCoordinator {
     private var panel: HomeworkLoginPanel?
     private var held = false
+    private weak var page: UIView?
 
     var isOpen: Bool { panel != nil }
 
     func setHeld(_ on: Bool) {
         held = on
         panel?.isHidden = on
+        updatePage()
+        if !on { panel?.focusPage() }
+    }
+
+    private func updatePage() {
+        page?.isHidden = HomeworkPanelPolicy.pageHidden(panelOpen: panel != nil, held: held)
     }
 
     func open(body: [String: Any], busy: Bool, deviceTestRunning: Bool, container: UIView, above: UIView,
@@ -33,6 +40,7 @@ final class HomeworkLoginCoordinator {
         guard let login else { return }
         let view = HomeworkLoginPanel(login: login) { [weak self] outcome in
             self?.panel = nil
+            self?.updatePage()
             if let outcome { send(login.message(for: outcome)) }
         }
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -45,7 +53,9 @@ final class HomeworkLoginCoordinator {
         ])
         raise()
         panel = view
+        page = above
         view.isHidden = held
+        updatePage()
         view.begin()
     }
 
@@ -53,6 +63,7 @@ final class HomeworkLoginCoordinator {
     func clear() {
         panel?.end(nil)
         panel = nil
+        updatePage()
     }
 
     func dismiss() { clear() }
@@ -133,6 +144,15 @@ final class HomeworkLoginPanel: UIView, WKNavigationDelegate, WKUIDelegate {
     func begin() {
         guard let webView else { return }
         webView.load(URLRequest(url: login.startURL))
+        focusPage()
+    }
+
+    func focusPage() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.completion != nil, !self.isHidden, let wv = self.webView else { return }
+            self.layoutIfNeeded()
+            if !wv.isFirstResponder { wv.becomeFirstResponder() }
+        }
     }
 
     /// Leave, wipe the data store and answer once. nil = no answer (sign-out, exam start).

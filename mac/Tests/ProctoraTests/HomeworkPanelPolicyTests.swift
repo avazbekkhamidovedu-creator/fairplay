@@ -31,4 +31,11 @@ import Foundation
         for a in ["lock", "prelock", "session", "openExternal", "quitApps", "deviceTestStart"] { #expect(HomeworkPanelPolicy.closes(on: a)) }
         for a in ["hello", "openHomeworkLogin", "clearHomeworkLogin", "open_box", "close_box"] { #expect(!HomeworkPanelPolicy.closes(on: a)) }
     }
+
+    @Test func pageIsHiddenOnlyWhileThePanelIsOpenAndUncovered() {
+        #expect(HomeworkPanelPolicy.pageHidden(panelOpen: true, held: false))
+        #expect(!HomeworkPanelPolicy.pageHidden(panelOpen: true, held: true))
+        #expect(!HomeworkPanelPolicy.pageHidden(panelOpen: false, held: false))
+        #expect(!HomeworkPanelPolicy.pageHidden(panelOpen: false, held: true))
+    }
 }

@@ -18,6 +18,10 @@ enum HomeworkPanelPolicy {
     /// A blocking or permission screen covers the page: the panel is hidden until it clears.
     static func hidden(blockingShown: Bool, permissionShown: Bool) -> Bool { blockingShown || permissionShown }
 
+    /// The page web view is hidden while the panel is open and visible, so it cannot hold the keyboard;
+    /// a cover (held) shows it again because the cover sits above it.
+    static func pageHidden(panelOpen: Bool, held: Bool) -> Bool { panelOpen && !held }
+
     static let closingActions: Set<String> = ["lock", "prelock", "session", "openExternal", "quitApps", "deviceTestStart"]
 
     /// The panel closes without an answer for these bridge actions.

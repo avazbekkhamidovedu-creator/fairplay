@@ -14,6 +14,11 @@ final class ExamWebView: WKWebView {
         super.willOpenMenu(menu, with: event)
     }
     override func quickLook(with event: NSEvent) {}
+    override var acceptsFirstResponder: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        super.mouseDown(with: event)
+    }
 }
 
 /// WKUserContentController retains its handlers; this breaks the cycle.

@@ -18,6 +18,8 @@ public enum HomeworkPanelPolicy {
     /// A blocking screen or the privacy cover covers the page: the panel is hidden until it clears.
     public static func hidden(blockingShown: Bool, privacyShown: Bool) -> Bool { blockingShown || privacyShown }
 
+    public static func pageHidden(panelOpen: Bool, held: Bool) -> Bool { panelOpen && !held }
+
     public static let closingActions: Set<String> = ["lock", "prelock", "session", "openExternal", "deviceTestStart"]
 
     /// The panel closes without an answer for these bridge actions.
