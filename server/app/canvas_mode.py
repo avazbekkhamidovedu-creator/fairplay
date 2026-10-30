@@ -25,7 +25,7 @@ DEFAULT_SSO_HOSTS = ("*.duosecurity.com", "login.microsoftonline.com", "login.mi
 QUIZ_LTI_REGIONS = ("iad", "pdx", "dub", "fra", "sin", "syd", "yul")
 
 DEFAULT_FINISH = {
-    "classic": r"/quizzes/\d+/(submissions/\d+|history)",
+    "classic": r"/quizzes/\d+/submissions/\d+",
     "new": r"submission-confirmation|submission-screen",
     "assignment": r"/assignments/\d+/submissions/\d+",
 }

@@ -6,6 +6,7 @@ only on teacher requests — never on the student hot path.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from urllib.parse import urlsplit
 from typing import Literal
@@ -114,6 +115,10 @@ def _provider_for(c: LmsConnection, secret: str) -> LmsProvider:
         raise HTTPException(409, "The saved token can no longer be read. Remove this "
                                  "connection and connect again.")
     return make_provider(c.provider, c.base_url, token, allow_private=_allow_private())
+
+
+LMS_DEADLINE_S = 120
+TOO_SLOW = "The LMS took too long to answer. Try again later."
 
 
 async def _fail(session: AsyncSession, exc: LmsError, *objs) -> HTTPException:
@@ -365,8 +370,11 @@ async def connection_courses(cid: int, request: Request, p: Principal = Depends(
                              session: AsyncSession = Depends(get_session)):
     c = await _own_connection(session, cid, p)
     try:
-        async with _provider_for(c, _secret(request)) as prov:
-            courses = await prov.list_courses()
+        async with asyncio.timeout(LMS_DEADLINE_S):
+            async with _provider_for(c, _secret(request)) as prov:
+                courses = await prov.list_courses()
+    except TimeoutError:
+        raise await _fail(session, LmsError(TOO_SLOW), c)
     except LmsError as exc:
         raise await _fail(session, exc, c)
     links = {l.lms_course_id: l.id for l in (await session.execute(
@@ -386,35 +394,39 @@ async def link_course(cid: int, lms_course_id: str, request: Request,
     lock = f"lmslink:{c.id}:{lms_course_id}"
     await _lock(lock)
     try:
-        prov = _provider_for(c, _secret(request))
-        async with prov:
-            link = (await session.execute(
-                select(CourseLink).where(CourseLink.connection_id == c.id,
-                                         CourseLink.lms_course_id == lms_course_id))).scalars().first()
-            try:
-                courses = await prov.list_courses()
-            except LmsError as exc:
-                raise await _fail(session, exc, c, link)
-            course = next((x for x in courses if x.id == lms_course_id), None)
-            if course is None:
-                raise HTTPException(404, "That course is not in your LMS course list")
-            if link is None:
-                link = CourseLink(connection_id=c.id, lms_course_id=lms_course_id,
-                                  created_at=utcnow())
-                session.add(link)
-            link.name = course.name[:300]
-            link.code = course.code[:120]
-            try:
-                await session.commit()
-            except IntegrityError:
-                await session.rollback()
-                link = (await session.execute(
-                    select(CourseLink).where(CourseLink.connection_id == c.id,
-                                             CourseLink.lms_course_id == lms_course_id))).scalar_one()
-            try:
-                result = await sync_roster(session, prov, c, link, lock_key=lock)
-            except LmsError as exc:  # raised before any roster change is made
-                raise await _fail(session, exc, c, link)
+        try:
+            async with asyncio.timeout(LMS_DEADLINE_S):
+                prov = _provider_for(c, _secret(request))
+                async with prov:
+                    link = (await session.execute(
+                        select(CourseLink).where(CourseLink.connection_id == c.id,
+                                                 CourseLink.lms_course_id == lms_course_id))).scalars().first()
+                    try:
+                        courses = await prov.list_courses()
+                    except LmsError as exc:
+                        raise await _fail(session, exc, c, link)
+                    course = next((x for x in courses if x.id == lms_course_id), None)
+                    if course is None:
+                        raise HTTPException(404, "That course is not in your LMS course list")
+                    if link is None:
+                        link = CourseLink(connection_id=c.id, lms_course_id=lms_course_id,
+                                          created_at=utcnow())
+                        session.add(link)
+                    link.name = course.name[:300]
+                    link.code = course.code[:120]
+                    try:
+                        await session.commit()
+                    except IntegrityError:
+                        await session.rollback()
+                        link = (await session.execute(
+                            select(CourseLink).where(CourseLink.connection_id == c.id,
+                                                     CourseLink.lms_course_id == lms_course_id))).scalar_one()
+                    try:
+                        result = await sync_roster(session, prov, c, link, lock_key=lock)
+                    except LmsError as exc:  # raised before any roster change is made
+                        raise await _fail(session, exc, c, link)
+        except TimeoutError:
+            raise await _fail(session, LmsError(TOO_SLOW), c)
     finally:
         await _unlock(lock)
     n = (await _member_counts(session, [link.id])).get(link.id, 0)
@@ -428,11 +440,15 @@ async def resync_course(link_id: int, request: Request, p: Principal = Depends(r
     lock = f"lmslink:{c.id}:{link.lms_course_id}"
     await _lock(lock)
     try:
-        async with _provider_for(c, _secret(request)) as prov:
-            try:
-                result = await sync_roster(session, prov, c, link, lock_key=lock)
-            except LmsError as exc:  # raised before any roster change is made
-                raise await _fail(session, exc, c, link)
+        try:
+            async with asyncio.timeout(LMS_DEADLINE_S):
+                async with _provider_for(c, _secret(request)) as prov:
+                    try:
+                        result = await sync_roster(session, prov, c, link, lock_key=lock)
+                    except LmsError as exc:  # raised before any roster change is made
+                        raise await _fail(session, exc, c, link)
+        except TimeoutError:
+            raise await _fail(session, LmsError(TOO_SLOW), c, link)
     finally:
         await _unlock(lock)
     n = (await _member_counts(session, [link.id])).get(link.id, 0)
@@ -510,19 +526,23 @@ async def push_grades(exam_id: str, request: Request, p: Principal = Depends(req
     lock = f"lmspush:{e.id}"
     await _lock(lock)
     try:
-        async with _provider_for(c, _secret(request)) as prov:
-            try:
-                aid = await prov.ensure_assignment(link.lms_course_id, e.title, num(total),
-                                                   e.lms_assignment_id)
-            except LmsError as exc:
-                raise await _fail(session, exc, c)
-            if aid != e.lms_assignment_id:
-                e.lms_assignment_id = aid
-                await session.commit()
-            try:
-                errs = await prov.post_grades(link.lms_course_id, aid, grade_rows) if grade_rows else []
-            except LmsError as exc:
-                raise await _fail(session, exc, c)
+        try:
+            async with asyncio.timeout(LMS_DEADLINE_S):
+                async with _provider_for(c, _secret(request)) as prov:
+                    try:
+                        aid = await prov.ensure_assignment(link.lms_course_id, e.title, num(total),
+                                                           e.lms_assignment_id)
+                    except LmsError as exc:
+                        raise await _fail(session, exc, c)
+                    if aid != e.lms_assignment_id:
+                        e.lms_assignment_id = aid
+                        await session.commit()
+                    try:
+                        errs = await prov.post_grades(link.lms_course_id, aid, grade_rows) if grade_rows else []
+                    except LmsError as exc:
+                        raise await _fail(session, exc, c)
+        except TimeoutError:
+            raise await _fail(session, LmsError(TOO_SLOW), c)
     finally:
         await _unlock(lock)
     failed = sum(1 for x in errs if not x.sent)

@@ -57,10 +57,10 @@ KIND = "codeconfirm"
 # Failed tries only (a too_early answer counts as one). A lab behind one campus NAT shares an
 # IP, so that limit is wide. The device id is chosen by the client, so the limits that hold
 # against a guesser are the per-network one and the global one: a class of 300 with a few
-# typos each stays far below them, while 600 guesses in 10 minutes would take a year of
-# hits to find one of a few hundred codes in 31^6.
+# typos each stays far below them. The global valve is far above what one network can add
+# (IP_FAILS a minute), so a single client cannot shut every student out.
 IP_FAILS, IP_WINDOW_S = 30, 60
-GLOBAL_LIMITS = ((600, 600, 60), (1500, 3600, 300))       # (failures, window s, bucket s)
+GLOBAL_LIMITS = ((6000, 600, 60), (15000, 3600, 300))       # (failures, window s, bucket s)
 DEVICE_MIN_FAILS, DEVICE_MIN_WINDOW_S = 5, 60
 DEVICE_HOUR_FAILS, DEVICE_HOUR_WINDOW_S = 20, 3600
 CHALLENGES_PER_MIN = 60
@@ -280,7 +280,8 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
         log.info("access code refused (%s) from %s device %s", reason, ip, (device or "-")[:8])
         raise HTTPException(400, NOT_VALID)
 
-    token = make_kind_token(s.secret, KIND, {"row": row.id, "dev": device or "", "bound": row.bound_device or ""},
+    token = make_kind_token(s.secret, KIND, {"row": row.id, "dev": device or "", "bound": row.bound_device or "",
+                             "ch": row.code_hmac},
                             CONFIRM_TTL_S)
     return _no_store({"first_name": row.first_name, "last_name": row.last_name, "netid": row.netid,
                       "exam_title": e.title, "resume": await _resuming(session, e.id, row.netid),
@@ -316,6 +317,8 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     if row is None or e is None or row.revoked_at is not None or not await access_codes.in_window(session, e, utcnow()):
         raise HTTPException(400, NOT_VALID)
     bound = str(tok.get("bound") or "") or None
+    if row.code_hmac != tok.get("ch"):      # the code was reissued since it was entered
+        raise HTTPException(400, NOT_VALID)
     if row.bound_device != bound:       # another device bound it since the code was entered
         raise HTTPException(400, NOT_VALID)
     if device and bound and bound != device and not await _freed(session, e.id, row.netid):
@@ -330,6 +333,7 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     took = await session.execute(
         update(ExamAccessCode).where(
             ExamAccessCode.id == row.id, ExamAccessCode.revoked_at.is_(None),
+            ExamAccessCode.code_hmac == row.code_hmac,
             ExamAccessCode.bound_device.is_(None) if bound is None else ExamAccessCode.bound_device == bound)
         .values(bound_device=device if device else ExamAccessCode.bound_device,
                 used_at=row.used_at or now))

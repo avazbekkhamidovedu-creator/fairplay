@@ -478,3 +478,21 @@ def test_global_window_slides(oj, ready, monkeypatch):
         t[0] += 601
         assert await code_login._global_wait(store, t[0]) == 0
     asyncio.run(go())
+
+
+def test_confirm_token_dies_when_the_code_is_reissued(oj, ready):
+    tok = enter(oj, ready["alice"], DEV_A).json()["confirm_token"]
+
+    async def reissue(s):
+        e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
+        await access_codes.reissue(s, secret(oj), e, "alice")
+    db(oj, reissue)
+    assert confirm(oj, tok).status_code == 400
+    bound = db(oj, lambda s: s.scalar(select(ExamAccessCode.bound_device).where(ExamAccessCode.netid == "alice")))
+    assert bound is None
+
+
+def test_one_network_cannot_fill_the_global_failure_window():
+    from app.integrations.dkuoj import code_login as cl
+    limit, window, _ = cl.GLOBAL_LIMITS[0]
+    assert cl.IP_FAILS * (window // cl.IP_WINDOW_S) * 20 <= limit

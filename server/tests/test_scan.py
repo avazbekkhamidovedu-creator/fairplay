@@ -522,3 +522,35 @@ def test_booklets_come_in_parts_and_never_for_everyone(client, teacher, monkeypa
     with pymupdf.open(stream=r1.content) as d1, pymupdf.open(stream=r2.content) as d2:
         assert d1.page_count == 2 * d2.page_count            # 2 students, then 1
     assert client.get(f"/api/exams/{e['id']}/print.pdf?part=3", headers=teacher).status_code == 422
+
+
+def test_assign_refuses_a_student_outside_the_teachers_scope(client, teacher, paper):
+    from sqlalchemy import select
+    from app import db as dbmod
+    from app.models import Attempt, User
+    from app.scan.models import ScanPage
+    e = paper
+    _scan_class(client, teacher, e)
+    _wait(client, teacher, e["id"])
+
+    async def outsider():
+        async with dbmod._db.sessionmaker() as s:
+            u = User(username="stranger", name="Stran Ger", role="student", password_hash="x")
+            s.add(u)
+            await s.commit()
+            return u.id
+    sid = client.portal.call(outsider)
+
+    async def blank_page():
+        async with dbmod._db.sessionmaker() as s:
+            return (await s.execute(select(ScanPage.id).where(
+                ScanPage.exam_id == e["id"], ScanPage.status == "unmatched").limit(1))).scalar_one()
+    pid = client.portal.call(blank_page)
+    r = client.post(f"/api/exams/{e['id']}/scans/pages/{pid}/assign", headers=teacher,
+                    json={"student_id": sid, "page_no": 1, "follow_on": False})
+    assert r.status_code == 422, r.text
+
+    async def attempts():
+        async with dbmod._db.sessionmaker() as s:
+            return (await s.execute(select(Attempt.id).where(Attempt.student_id == sid))).all()
+    assert client.portal.call(attempts) == []

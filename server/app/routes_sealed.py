@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
@@ -73,14 +73,15 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
     if not a.started_at <= seal.sealed_at <= now + SEAL_CLOCK_SLACK:
         raise HTTPException(422, "The sealed time is outside this exam")
     answers = await _known_answers(store, session, aid, answers)
+    seen = await _seen(store, aid, now)
     if a.status != "submitted":
         await _hand_in(session, a, seal, answers, body.proof, now)
         await session.refresh(a)
         if a.sealed_proof == body.proof:      # ours won (not a concurrent submit / close)
-            await _note(session, store, a, seal, body.proof, _seal_detail(a, seal))
+            await _note(session, store, a, seal, body.proof, _seal_detail(a, seal, seen))
             await cache_attempt(store, a)
             return _receipt(a)
-    return await _after_submit(session, store, a, seal, answers, body.proof)
+    return await _after_submit(session, store, a, seal, answers, body.proof, seen)
 
 
 async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: dict,
@@ -109,7 +110,7 @@ async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: di
 
 
 async def _after_submit(session: AsyncSession, store, a: Attempt, seal: ac.Seal,
-                        answers: dict, proof: str):
+                        answers: dict, proof: str, seen: str):
     """The attempt was handed in already (an earlier upload of this seal, the page's own
     submit once online again, or the teacher closing the exam)."""
     if a.sealed_proof == proof:
@@ -117,7 +118,7 @@ async def _after_submit(session: AsyncSession, store, a: Attempt, seal: ac.Seal,
     stored = a.answers or {}
     diff = {k: v for k, v in answers.items() if stored.get(k) != v}
     if not diff:
-        await _note(session, store, a, seal, proof, _seal_detail(a, seal) + "; same as the handed-in answers")
+        await _note(session, store, a, seal, proof, _seal_detail(a, seal, seen) + "; same as the handed-in answers")
         return _receipt(a)
     # Different: keep them aside for the teacher (never graded) and let the teacher decide.
     kept = dict(a.late_answers or {})
@@ -126,7 +127,7 @@ async def _after_submit(session: AsyncSession, store, a: Attempt, seal: ac.Seal,
     a.late_answers = kept
     await session.commit()
     await _note(session, store, a, seal, proof,
-                f"{_seal_detail(a, seal)}; arrived after the hand-in and differs in "
+                f"{_seal_detail(a, seal, seen)}; arrived after the hand-in and differs in "
                 f"{len(diff)} answer(s), kept with the late answers (not graded): you decide")
     raise HTTPException(409, {"code": "already_submitted"})
 
@@ -139,10 +140,17 @@ async def _note(session: AsyncSession, store, a: Attempt, seal: ac.Seal, proof: 
         await ac.add_event(session, store, a.id, a.exam_id, "sealed_submit", detail)
 
 
-def _seal_detail(a: Attempt, seal: ac.Seal) -> str:
-    when = "after the time was up" if seal.sealed_at > a.deadline_at + LATE_GRACE else "in time"
+async def _seen(store, aid: str, now) -> str:
+    raw = await store.get(f"abt:{aid}")
+    last = datetime.fromtimestamp(json.loads(raw)["t"], timezone.utc).replace(tzinfo=None) if raw else None
+    return f"received {iso(now)}, last app signal {iso(last) if last else 'never'}"
+
+
+def _seal_detail(a: Attempt, seal: ac.Seal, seen: str) -> str:
+    when = ("after the time was up" if seal.sealed_at > a.deadline_at + LATE_GRACE
+            else "in time by the seal's own clock")
     return (f"answers sealed offline at {iso(seal.sealed_at)} on device {seal.device_id[:8]} "
-            f"({when}) and uploaded later by the app; the seal key is on the student's computer, so check")
+            f"({when}; {seen}) and uploaded later by the app; the seal key is on the student's computer, so check")
 
 
 def _receipt(a: Attempt) -> dict:

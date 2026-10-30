@@ -78,8 +78,8 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
         class_login = await find_class_login(session, username)
     fails_ui, fails_u = f"login:fail:{uname}:{ip}", f"login:fail:{uname}"
     fails_cl = f"login:clfail:{ip}"
-    if class_login is None and (int(await store.get(fails_ui) or 0) >= USER_IP_FAILS
-                                or int(await store.get(fails_u) or 0) >= USER_FAILS):
+    if class_login is None and (await store.incr(fails_ui, FAIL_WINDOW) > USER_IP_FAILS
+                                or await store.incr(fails_u, FAIL_WINDOW) > USER_FAILS):
         await session.close()
         raise HTTPException(429, TOO_MANY)
     # Release the pooled connection before the CPU-heavy hash check.
@@ -97,9 +97,9 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
             raise HTTPException(429, TOO_MANY)
         raise HTTPException(401, "Invalid username or password")
     if row is None or not ok or (row.role == "student" and not request_from_app(request)):
-        await store.incr(fails_ui, FAIL_WINDOW)
-        await store.incr(fails_u, FAIL_WINDOW)
         raise HTTPException(401, "Invalid username or password")
+    await store.incrby(fails_ui, -1, FAIL_WINDOW)
+    await store.incrby(fails_u, -1, FAIL_WINDOW)
     ttl = s.student_token_ttl_s if row.role == "student" else s.token_ttl_s
     return {"token": make_token(s.secret, row.id, row.role, ttl, version=row.token_version or 0),
             "role": row.role, "name": row.name}

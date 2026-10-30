@@ -41,3 +41,22 @@ def test_role_checks(client, teacher, alice):
     assert client.get("/api/student/exams", headers=teacher).status_code == 403
     assert client.get("/api/exams", headers=teacher).status_code == 200
     assert client.get("/api/student/exams", headers=alice).status_code == 200
+
+
+def test_login_failure_counters_are_reserved_before_the_hash(client, monkeypatch):
+    from app import routes_auth
+    from app.store import get_store
+    seen = []
+    real = routes_auth.verify_password_async
+
+    async def spy(*a, **k):
+        seen.append(int(await get_store().get("login:fail:alice:testclient") or 0))
+        return await real(*a, **k)
+    monkeypatch.setattr(routes_auth, "verify_password_async", spy)
+    client.post("/api/auth/login", json={"username": "alice", "password": "nope"})
+    assert seen == [1]
+    r = client.post("/api/auth/login", json={"username": "teacher", "password": "teacher123"})
+    assert r.status_code == 200
+    for _ in range(11):
+        client.post("/api/auth/login", json={"username": "alice", "password": "nope"})
+    assert client.post("/api/auth/login", json={"username": "alice", "password": "nope"}).status_code == 429

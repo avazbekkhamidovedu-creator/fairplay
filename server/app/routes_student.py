@@ -901,6 +901,10 @@ async def exit_code(aid: str, body: ExitCodeIn, request: Request,
     await store.delete(count_key)
     await ac.add_event(session, store, aid, a.exam_id, "emergency_exit",
                        "invigilator code accepted")
+    if a.status == "in_progress":
+        a.session_id = new_session_id()
+        a.updated_at = utcnow()
+        await session.commit()
     out: dict = {"ok": True}
     if body.nonce:
         # Audit 2026-10-13: signed like the hand-in status, so the app unlocks only on a

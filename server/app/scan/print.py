@@ -68,7 +68,7 @@ def parse_qr(text: str) -> tuple[str, int, int] | None:
         sid, page = int(parts[2]), int(parts[3])
     except ValueError:
         return None
-    if sid < 0 or page < 1:
+    if sid < 0 or sid > 2**53 or page < 1:
         return None
     return parts[1], sid, page
 

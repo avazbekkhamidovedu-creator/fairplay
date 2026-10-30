@@ -201,6 +201,10 @@ def _terms(e: sympy.Basic) -> int:
     if e.is_Pow:
         base, ex = e.args
         t = _terms(base)
+        if not ex.is_Integer and not ex.free_symbols:
+            val = ex.evalf(8)
+            if val.is_Number and val.is_finite and abs(val - round(val)) < 1e-6:
+                ex = sympy.Integer(round(val))
         if ex.is_Integer and t > 1:
             k = abs(int(ex))
             if k > MAX_SYMBOLIC_POWER:

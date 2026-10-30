@@ -166,12 +166,14 @@ async def _require_class_staff(session: AsyncSession, class_id: int, call: Bridg
     if teacher is not None and exam_ids and (await session.execute(select(OjEditor.id).where(
             OjEditor.exam_id.in_(exam_ids), OjEditor.user_id == teacher.id).limit(1))).first():
         return
+    if mirror or exam_ids:
+        raise HTTPException(403, NOT_CLASS_STAFF)
     made = set((await session.execute(select(ClassLogin.created_by).where(ClassLogin.class_id == class_id))).scalars())
     acted = set((await session.execute(select(ClassLoginEvent.actor).where(
         ClassLoginEvent.class_id == class_id))).scalars())
     if acting in made or acting in acted:
         return
-    if mirror or exam_ids or (made | acted) - {None, ""}:
+    if (made | acted) - {None, ""}:
         raise HTTPException(403, NOT_CLASS_STAFF)
 
 
@@ -715,7 +717,7 @@ def sync_field(f: str) -> str:
     return EXAM_FIELD[f]
 
 
-async def _store_pending(session: AsyncSession, key: str, sent: list[str], ov: dict) -> dict:
+async def _store_pending(session: AsyncSession, key: str, sent: list[str], ov: dict, saved_by: str = "") -> dict:
     """§11: settings for an assignment FairPlay has not synced yet, applied when it arrives."""
     from sqlalchemy import func
     from .models import OjState
@@ -760,6 +762,7 @@ async def _store_pending(session: AsyncSession, key: str, sent: list[str], ov: d
     if "review" in sent:
         have["review_updated_at"] = iso(now)
     have["updated_at"] = iso(now)
+    have["saved_by"] = saved_by
     row.value = json.dumps(have)
     await session.commit()
     return have
@@ -786,7 +789,7 @@ async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
     e = await _exam_by_key(session, key)
     if e is None:
         await _require_not_student(session, call)
-        pending = await _store_pending(session, key, sent, ov)
+        pending = await _store_pending(session, key, sent, ov, (call.acting_user or "").strip())
         log.info("DKU OJ exam %s (not synced yet): FairPlay settings %s kept by %s", key, ", ".join(sent),
                  call.acting_user)
         return JSONResponse(_not_synced(pending), headers={"Cache-Control": "no-store"})

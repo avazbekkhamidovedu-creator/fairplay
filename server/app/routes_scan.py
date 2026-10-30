@@ -110,7 +110,7 @@ def _printable(e: Exam) -> None:
 MAX_TEACHER_STUDENTS = 5000
 
 
-def teacher_student_ids(teacher_id: int):
+def teacher_student_ids(teacher_id: int, exclude_paper: bool = False):
     """Audit L-11 (and S-03): the students a teacher works with -- members of their
     classes, of their linked LMS courses, anyone who took one of their exams, and the
     students on the lists of their exams (picked here or sent by the DKU OJ bridge).
@@ -123,6 +123,8 @@ def teacher_student_ids(teacher_id: int):
                  .where(LmsConnection.teacher_id == teacher_id))
     took = (select(Attempt.student_id).join(Exam, Exam.id == Attempt.exam_id)
             .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
+    if exclude_paper:
+        took = took.where(or_(Attempt.source.is_(None), Attempt.source != "paper"))
     picked = (select(ExamRoster.user_id).join(Exam, Exam.id == ExamRoster.exam_id)
               .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
     from .integrations.dkuoj.models import OjEditor, OjRosterEntry
@@ -130,6 +132,16 @@ def teacher_student_ids(teacher_id: int):
               .outerjoin(OjEditor, OjEditor.exam_id == Exam.id)
               .where(or_(Exam.teacher_id == teacher_id, OjEditor.user_id == teacher_id)))
     return in_class.union(in_course, took, picked, bridge)
+
+
+async def _scan_allowed(session: AsyncSession, e: Exam, ids: set[int]) -> set[int]:
+    """The ids a scan may credit: students already in this teacher's scope, where a paper
+    attempt made by a scan does not count as scope."""
+    if not ids:
+        return set()
+    return set((await session.execute(
+        select(User.id).where(User.id.in_(ids), User.role == "student",
+                              User.id.in_(teacher_student_ids(e.teacher_id, exclude_paper=True))))).scalars())
 
 
 async def _all_students(session: AsyncSession, teacher_id: int) -> list[User]:
@@ -627,11 +639,21 @@ async def _run_batch(batch_id: str) -> None:
                                    "qr_found": 0, "rotation": 0, "crops": {}}
                         else:
                             res = await _in_scan_pool(pipeline.process_source_page, pth, i, e.id, layout)
-                        async with db.sessionmaker() as s:
-                            b = await s.get(ScanBatch, batch_id)
-                            s.add(_page_row(b, seq, res))
-                            b.processed = seq + 1
-                            await s.commit()
+                        try:
+                            async with db.sessionmaker() as s:
+                                b = await s.get(ScanBatch, batch_id)
+                                s.add(_page_row(b, seq, res))
+                                b.processed = seq + 1
+                                await s.commit()
+                        except Exception:  # noqa: BLE001 - one bad page must not fail the batch
+                            log.exception("scan batch %s: page %s could not be stored", batch_id, seq)
+                            res = {**res, "status": "unmatched", "student_id": None, "page_no": None,
+                                   "reason": "The page could not be read", "crops": {}}
+                            async with db.sessionmaker() as s:
+                                b = await s.get(ScanBatch, batch_id)
+                                s.add(_page_row(b, seq, res))
+                                b.processed = seq + 1
+                                await s.commit()
                     seq += 1
             async with db.sessionmaker() as s:
                 pages = list((await s.execute(
@@ -687,12 +709,12 @@ async def merge_pages(session: AsyncSession, e: Exam, pages: list[ScanPage]) -> 
     need: list[tuple[str, str]] = []
     touched: list[str] = []
     now = utcnow()
+    allowed = await _scan_allowed(session, e, set(by_student))
     for sid, pgs in by_student.items():
-        u = await session.get(User, sid)
-        if u is None or u.role != "student":
+        if sid not in allowed:
             for pg in pgs:
                 pg.status, pg.student_id = "unmatched", None
-                pg.reason = "The code names a student who is not in FairPlay"
+                pg.reason = "The code names a student who is not on this exam's list"
             continue
         a = (await session.execute(
             select(Attempt).where(Attempt.exam_id == e.id, Attempt.student_id == sid)
@@ -913,7 +935,7 @@ async def assign_page(exam_id: str, page_id: int, body: AssignIn, p: Principal =
     if pg is None or pg.exam_id != e.id:
         raise HTTPException(404, "Page not found")
     u = await session.get(User, body.student_id)
-    if u is None or u.role != "student":
+    if u is None or u.role != "student" or u.id not in await _scan_allowed(session, e, {u.id}):
         raise HTTPException(422, "Pick a student")
     row = await session.get(PrintLayout, e.id)
     if row is None or body.page_no > row.page_count:

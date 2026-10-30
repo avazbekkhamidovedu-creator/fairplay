@@ -236,3 +236,31 @@ def test_a_lost_source_file_is_reported_not_crashed(client, teacher, ai_off, mon
     assert b["status"] == "done", b
     um = client.get(f"/api/exams/{e['id']}/scans/unmatched", headers=teacher).json()
     assert any("upload it again" in (pg.get("reason") or "") for pg in um), um
+
+
+def test_qr_student_id_beyond_the_column_range_is_refused():
+    from app.scan.print import parse_qr
+    assert parse_qr("FP1|e1|99999999999999999999|1") is None
+    assert parse_qr("FP1|e1|42|1") == ("e1", 42, 1)
+
+
+def test_a_page_that_cannot_be_stored_is_unmatched_not_a_failed_batch(client, teacher, ai_off, monkeypatch):  # noqa: F811
+    real = pipeline.process_source_page
+
+    def poisoned(*a, **k):
+        res = real(*a, **k)
+        return {**res, "status": "matched", "student_id": 10 ** 20, "page_no": 1}
+    monkeypatch.setattr(pipeline, "process_source_page", poisoned)
+    e = client.post("/api/exams", json=PAPER_EXAM, headers=teacher).json()
+    client.put(f"/api/exams/{e['id']}/roster", json={"usernames": ["alice"]}, headers=teacher)
+    assert client.get(f"/api/exams/{e['id']}/print.pdf", headers=teacher).status_code == 200
+    doc = pymupdf.open()
+    doc.new_page()
+    buf = io.BytesIO()
+    doc.save(buf)
+    r = client.post(f"/api/exams/{e['id']}/scans", headers=teacher,
+                    files=[("files", ("p.pdf", buf.getvalue(), "application/pdf"))])
+    assert r.status_code == 202, r.text
+    b = _wait(client, teacher, e["id"])["batches"][0]
+    assert b["status"] == "done", b
+    assert len(client.get(f"/api/exams/{e['id']}/scans/unmatched", headers=teacher).json()) == 1

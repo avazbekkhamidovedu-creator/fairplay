@@ -29,6 +29,7 @@ TIMEOUT_S = 15.0
 MAX_ATTEMPTS = 4                 # 1 try + 3 retries on 429 / 5xx / network errors
 BACKOFF_BASE_S = 0.5             # 0.5 s, 1 s, 2 s (Retry-After honoured, capped)
 MAX_RETRY_AFTER_S = 10.0
+MAX_BODY_BYTES = 10 * 1024 * 1024    # decoded size of one LMS response
 MAX_PAGES = 50                   # safety cap on pagination loops
 
 
@@ -235,7 +236,9 @@ class LmsProvider:
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(TIMEOUT_S), transport=transport, follow_redirects=False,
             headers={"Accept": "application/json", "User-Agent": "FairPlay-LMS-Sync/1.0"})
-        self._host = urlsplit(self.base_url).netloc.lower()
+        base = urlsplit(self.base_url)
+        self._host = base.netloc.lower()
+        self._scheme = base.scheme.lower()
 
     async def __aenter__(self):
         return self
@@ -275,7 +278,28 @@ class LmsProvider:
 
     def same_host(self, url: str) -> bool:
         """Never follow a pagination link (and send the token) to another host."""
-        return urlsplit(url).netloc.lower() == self._host
+        parts = urlsplit(url)
+        return parts.scheme.lower() == self._scheme and parts.netloc.lower() == self._host
+
+    async def _send(self, method: str, url: str, **kw) -> httpx.Response:
+        """One request with the body read under MAX_BODY_BYTES; the LMS may not compress."""
+        kw["headers"] = {**kw["headers"], "Accept-Encoding": "identity"}
+        async with self._client.stream(method, url, **kw) as resp:
+            if resp.headers.get("content-encoding", "identity").strip().lower() not in ("", "identity"):
+                raise LmsError("The LMS sent a compressed answer that was refused")
+            declared = resp.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+                raise LmsError("The LMS answer is too large")
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in resp.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_BODY_BYTES:
+                    raise LmsError("The LMS answer is too large")
+                chunks.append(chunk)
+            headers = [(k, v) for k, v in resp.headers.multi_items() if k.lower() != "content-length"]
+            return httpx.Response(resp.status_code, headers=headers, content=b"".join(chunks),
+                                  request=resp.request)
 
     async def request(self, method: str, path: str, *, params: Any = None, json: Any = None,
                       data: list[tuple[str, str]] | None = None, auth: bool = True) -> httpx.Response:
@@ -291,8 +315,8 @@ class LmsProvider:
         last_exc: Exception | None = None
         for attempt in range(MAX_ATTEMPTS):
             try:
-                resp = await self._client.request(method, url, params=params, json=json,
-                                                  content=content, headers=headers)
+                resp = await self._send(method, url, params=params, json=json,
+                                        content=content, headers=headers)
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 log.warning("%s %s timed out (try %d)", method, url, attempt + 1)

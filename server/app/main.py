@@ -222,6 +222,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 0.6.2 review: the pack is requested as /app-assets/v/<version>/<file>; immutable when
         # <version> is the pack on disk, so a release that upgrades Pyodide or pdf.js never
         # mixes a cached old file with new page code (static_files.versioned_asset).
+        if "\x00" in path:
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         cache_override = None
         versioned = versioned_asset(path, static_root)
         if versioned is not None:

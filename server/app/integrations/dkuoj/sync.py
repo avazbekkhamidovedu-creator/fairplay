@@ -302,7 +302,7 @@ def apply_fairplay_settings(e: Exam, meta: dict) -> None:
         meta["websites_blocked"] = [b for b in ov.get("websites_blocked") or [] if isinstance(b, dict)][:40]
 
 
-async def take_pending(session: AsyncSession, e: Exam, meta: dict) -> tuple | None:
+async def take_pending(session: AsyncSession, e: Exam, meta: dict, editor_netids: set | None = None) -> tuple | None:
     """§11: settings DKU OJ saved for this key before FairPlay had the exam: they become its
     FairPlay settings now, and the pending row goes. Returns the pending (review, updated_at)
     for the caller to apply last (apply_review replaces external_meta), or None."""
@@ -317,6 +317,9 @@ async def take_pending(session: AsyncSession, e: Exam, meta: dict) -> tuple | No
     await session.delete(row)
     if not isinstance(pending, dict):
         return None
+    if pending.get("saved_by") not in (editor_netids or set()):
+        return None
+    pending.pop("saved_by", None)
     review = pending.pop("review", None), pending.pop("review_updated_at", None)
     if not e.external_frozen_version:
         have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
@@ -408,7 +411,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         if k in (e.external_meta or {}):
             meta[k] = e.external_meta[k]
     # §11: settings saved before the exam arrived (before external_meta is set: the query may flush)
-    pending_review = await take_pending(session, e, meta)
+    pending_review = await take_pending(session, e, meta, {n for n in (_netid(p) for p in item.get("editors") or [] if isinstance(p, dict)) if n})
     e.external_meta = meta
     e.external_removed = bool(item.get("removed"))
     e.external_synced_at = now

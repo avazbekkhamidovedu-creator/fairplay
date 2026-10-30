@@ -175,3 +175,12 @@ def test_payload_format_vector():
         hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
     s = ac.parse_seal(payload)
     assert s and s.client_seq == 5 and s.sealed_at == datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc).replace(tzinfo=None)
+
+
+def test_sealed_event_does_not_vouch_for_the_clients_clock(app_client, exam):
+    h, a, qs = setup(app_client, exam)
+    aid = a["attempt_id"]
+    _, answers = mcq_answer(qs)
+    assert post(app_client, h, aid, seal(aid, a["session"], answers)).status_code == 200
+    ev = next(e for e in results_row(app_client, exam)["events"] if e["type"] == "sealed_submit")
+    assert "in time by the seal's own clock" in ev["detail"] and "last app signal" in ev["detail"]

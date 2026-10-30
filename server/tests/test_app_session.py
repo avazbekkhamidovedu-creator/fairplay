@@ -426,3 +426,16 @@ def test_ipad_app_gap_in_allowed_app(app_client, exam, monkeypatch):
     res = app_client.get(f"/api/exams/{exam['id']}/results", headers=t).json()
     gaps = [e["detail"] for att in res["attempts"] for e in att["events"] if e["type"] == "app_gap"]
     assert gaps and "teacher-allowed app" in gaps[0]
+
+
+def test_exit_code_ends_writes_from_the_unlocked_session(app_client, exam):
+    h = login(app_client, "alice")
+    a = start(app_client, h, exam).json()
+    aid = a["attempt_id"]
+    hs = {**h, "X-FairPlay-Session": a["session"]}
+    r = app_client.post(f"/api/student/attempts/{aid}/exit-code", headers=hs, json={"code": exam["invigilator_code"]})
+    assert r.status_code == 200
+    r = app_client.put(f"/api/student/attempts/{aid}/answers", headers=hs, json={"answers": {}, "client_seq": 1})
+    assert r.status_code == 409
+    r = app_client.post(f"/api/student/attempts/{aid}/submit", headers=hs, json={"answers": {}})
+    assert r.status_code == 409

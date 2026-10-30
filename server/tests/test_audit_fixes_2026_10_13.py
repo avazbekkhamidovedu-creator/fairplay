@@ -119,15 +119,15 @@ def test_exit_code_reply_is_signed(app_client, exam):
     hs = {**h, "X-FairPlay-Session": sess}
     url = f"/api/student/attempts/{aid}/exit-code"
     assert app_client.post(url, headers=hs, json={"code": "1", "nonce": "a|b|c|d|e"}).status_code == 422
+    # a wrong code gets no proof at all
+    r = app_client.post(url, headers=hs, json={"code": "999999" if exam["invigilator_code"] != "999999"
+                                               else "888888", "nonce": "exit-nonce-5678"})
+    assert r.status_code == 403 and "proofs" not in r.json()
     r = app_client.post(url, headers=hs, json={"code": exam["invigilator_code"], "nonce": "exit-nonce-1234"})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True and body["nonce"] == "exit-nonce-1234"
     assert body["proofs"] == [sign(KEY, exit_message(aid, sess, "exit-nonce-1234"))]
-    # a wrong code gets no proof at all
-    r = app_client.post(url, headers=hs, json={"code": "999999" if exam["invigilator_code"] != "999999"
-                                               else "888888", "nonce": "exit-nonce-5678"})
-    assert r.status_code == 403 and "proofs" not in r.json()
 
 
 # ---------------------------------------------------------------- events cap
@@ -330,13 +330,13 @@ def test_windows_signed_verdicts(app_client, exam):
     a = start(app_client, h, exam).json()
     aid, sess = a["attempt_id"], a["session"]
     hs = {**h, "X-FairPlay-Session": sess}
-    r = app_client.post(f"/api/student/attempts/{aid}/exit-code", headers=hs,
-                        json={"code": exam["invigilator_code"], "nonce": "0123456789abcdef0123456789abcdef"})
-    assert r.json()["proof"] == sign(KEY, exit_verdict_message(aid, sess, "0123456789abcdef0123456789abcdef"))
     body = {"session": sess, "device_id": "device-aaaa-1111", "ts": 7,
             "signature": sign(KEY, offline_key_message(aid, sess, "device-aaaa-1111", 7))}
     k = app_client.post(f"/api/student/attempts/{aid}/offline-key", headers=hs, json=body).json()
     assert k["proof"] == sign(KEY, offkey_response_message(aid, sess, k["key"], 7))
+    r = app_client.post(f"/api/student/attempts/{aid}/exit-code", headers=hs,
+                        json={"code": exam["invigilator_code"], "nonce": "0123456789abcdef0123456789abcdef"})
+    assert r.json()["proof"] == sign(KEY, exit_verdict_message(aid, sess, "0123456789abcdef0123456789abcdef"))
 
 
 def test_made_up_session_on_same_device_is_not_moved(app_client, exam):

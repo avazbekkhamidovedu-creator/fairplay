@@ -163,3 +163,9 @@ def test_a_runaway_worker_is_killed_and_replaced(monkeypatch):
 def test_parse_has_no_builtins():
     with pytest.raises(m.MathError):
         m.parse("__import__('os')")
+
+
+@pytest.mark.parametrize("bad", ["(a+b+c+d+f+g)^(2*500)", "(a+b+c+d+f+g)^(1000+0)"])
+def test_unevaluated_constant_exponent_is_bounded(bad):
+    with pytest.raises(m.MathError):
+        m._parse_sync(bad)
