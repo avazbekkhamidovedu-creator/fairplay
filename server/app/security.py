@@ -82,11 +82,14 @@ def key_id(secret: str) -> str:
 
 
 def make_token(secret: str, user_id: int, role: str, ttl_s: int, now: float | None = None,
-               version: int = 0, scope: str = "") -> str:
+               version: int = 0, scope: str = "", login_at: int | None = None,
+               exp: int | None = None) -> str:
     """payload = "<uid>:<role>:<exp>:<token_version>:<key id>[:<exam id>]" (audit S-15). A scope
     (an access-code sign-in) ties the token to that one exam."""
-    exp = int((now or time.time()) + ttl_s)
+    exp = int(exp) if exp is not None else int((now or time.time()) + ttl_s)
     tail = f":{scope}" if scope else ""
+    if scope == HOMEWORK_SCOPE and login_at is not None:
+        tail += f":{int(login_at)}"
     payload = _b64(f"{user_id}:{role}:{exp}:{int(version)}:{key_id(secret)}{tail}".encode())
     sig = _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
@@ -107,11 +110,23 @@ def parse_scoped_token(secret: str, token: str) -> tuple[int, str, int, str] | N
         if not hmac.compare_digest(sig, expected):
             return None
         uid, role, exp, ver, kid, *rest = _unb64(payload).decode().split(":")
-        if int(exp) < time.time() or role not in ("teacher", "student") or kid != key_id(secret) or len(rest) > 1:
+        if int(exp) < time.time() or role not in ("teacher", "student") or kid != key_id(secret) or len(rest) > 2:
+            return None
+        if len(rest) == 2 and (rest[0] != HOMEWORK_SCOPE or not rest[1].isdigit()):
             return None
         return int(uid), role, int(ver), (rest[0] if rest else "")
     except (ValueError, UnicodeDecodeError):
         return None
+
+
+def homework_times(secret: str, token: str) -> tuple[int, int] | None:
+    """(exp, login_at) of a valid homework token; None for any other token. A homework token
+    from before login_at existed counts as signed in 8 hours before its expiry."""
+    if (parse_scoped_token(secret, token) or (0, "", 0, ""))[3] != HOMEWORK_SCOPE:
+        return None
+    parts = _unb64(token.split(".")[0]).decode().split(":")
+    exp = int(parts[2])
+    return exp, (int(parts[6]) if len(parts) > 6 else exp - LEGACY_HOMEWORK_TTL_S)
 
 
 # perf 0.6.2: 30 -> 300 s. Every request checks the account's token version; with 5,000
@@ -198,7 +213,15 @@ async def require_teacher(p: Principal = Depends(current_principal)) -> Principa
 
 ADMIN_SCOPE = "admin_test"
 HOMEWORK_SCOPE = "homework"
-HOMEWORK_TTL_S = 8 * 3600
+HOMEWORK_IDLE_S = 30 * 60
+HOMEWORK_ABSOLUTE_S = 4 * 3600
+LEGACY_HOMEWORK_TTL_S = 8 * 3600
+
+
+def homework_expiry(login_at: int, now: float | None = None) -> tuple[int, int]:
+    """(idle expiry, absolute expiry) as epoch seconds; the idle one never passes the absolute one."""
+    absolute = int(login_at) + HOMEWORK_ABSOLUTE_S
+    return min(int((now or time.time()) + HOMEWORK_IDLE_S), absolute), absolute
 ADMIN_TESTER_USER = "admin-tester"
 _ADMIN_PATHS = ("/api/student/exams",)
 SCOPED_AFTER_HANDIN_S = 300

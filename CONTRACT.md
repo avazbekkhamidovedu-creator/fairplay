@@ -1110,3 +1110,33 @@ DKU OJ side (fp -> oj signed, `docs/dkuoj-bridge-v2.md` §1): `POST /api/fairpla
 `{ticket, verifier}` -> 200 `{netid, first_name, last_name, email}`; 404 ticket unknown, used or older than 60 s;
 409 `base64url(sha256(verifier))` is not the `challenge` the ticket was minted with. The ticket is spent by any
 answer except 404. FairPlay then calls `GET /api/fairplay/v1/students/<netid>/classes`.
+
+## Homework session expiry and remember me
+
+Same switch as the homework sign-in (`FAIRPLAY_HOMEWORK_LOGIN`); with it off every route below answers 404.
+Replaces "8 hours" above.
+
+- The homework token carries `login_at` (payload `...:homework:<login_at>`; exam tokens and older homework tokens
+  parse as before, an older one counts as signed in 8 hours before its expiry). `exp = min(now + 30 min, login_at + 4 h)`.
+- `POST /api/homework/login/finish` -> `{token, name, netid, expires_at, absolute_expires_at, idle_seconds}`;
+  `expires_at` is the idle expiry, `idle_seconds` is 1800.
+- `GET /api/homework/me` -> `{name, netid, expires_at, absolute_expires_at}` (the two dates are absent for a plain
+  student token).
+- `POST /api/homework/session/renew` (Bearer homework token) -> `{token, expires_at, absolute_expires_at}`. The new
+  token keeps `login_at`. 401 when the token is expired or `login_at + 4 h` has passed; 403 for any other token;
+  429 above 12 per minute per user.
+- `POST /api/homework/remember/create` (Bearer homework token) `{label?}` (trimmed to 40 chars) ->
+  `{remember_token, expires_at}`. The token is 32 random bytes (base64url, 43 chars), shown once, stored as sha256
+  (table `homework_remember`). Lives 14 days from creation. A user keeps 5 devices; the 6th revokes the oldest.
+- `POST /api/homework/remember/exchange` (no auth) `{remember_token}` ->
+  `{token, expires_at, absolute_expires_at, remember_token, remember_expires_at, name, netid}`. Every exchange
+  replaces the token (store the new one); `remember_expires_at` stays the family's original 14-day date. The new
+  session has a fresh `login_at`. 401 `"This device is no longer remembered. Sign in again."` for unknown, expired,
+  revoked or malformed tokens; presenting a token that was already replaced revokes the whole family (401).
+  403 when the account is a teacher or has no classes any more (the token is kept); 503 DKU OJ unreachable;
+  429 above 20 per minute per IP or 10 per hour per user.
+- `POST /api/homework/remember/forget` `{remember_token}` (no auth) -> `{ok: true}` and revokes that device;
+  unknown tokens also answer `{ok: true}`. `POST /api/homework/remember/forget-all` (Bearer homework token) ->
+  `{ok: true, revoked: n}`.
+- A remember token is not a bearer token: every other route answers 401 to it. Neither token is logged (a sha256
+  prefix is). The homework token is still refused on all exam routes.

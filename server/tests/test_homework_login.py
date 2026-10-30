@@ -155,12 +155,14 @@ def test_full_flow_creates_account_and_token(hw, fake, caplog):
     s, ticket, r = sign_in(hw, fake)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"token", "name", "netid", "expires_at"}
+    assert set(body) == {"token", "name", "netid", "expires_at", "absolute_expires_at", "idle_seconds"}
+    assert body["idle_seconds"] == 1800
     assert body["name"] == "Ada Byron" and body["netid"] == "ab123"
     assert fake.last_redeem["ticket"] == ticket
     assert fk.challenge_of(fake.last_redeem["verifier"]) == fake.tickets[ticket]["challenge"]
     me = hw.get(ME, headers=bearer(body["token"]))
-    assert me.status_code == 200 and me.json() == {"name": "Ada Byron", "netid": "ab123"}
+    assert me.status_code == 200 and me.json() == {"name": "Ada Byron", "netid": "ab123", "expires_at": body["expires_at"],
+                                                 "absolute_expires_at": body["absolute_expires_at"]}
     u = db(hw, lambda s_: s_.execute(select(User).where(User.netid == "ab123")))
     row = u.scalar_one()
     assert row.username == "oj:ab123" and row.role == "student" and row.set_up_at is None
@@ -169,14 +171,14 @@ def test_full_flow_creates_account_and_token(hw, fake, caplog):
         assert secret not in caplog.text
 
 
-def test_token_is_homework_scoped_and_8h(hw, fake):
+def test_token_is_homework_scoped_and_30_min_idle(hw, fake):
     from app.security import parse_scoped_token
     import time
     _, _, r = sign_in(hw, fake)
     uid, role, _, scope = parse_scoped_token(SECRET, r.json()["token"])
     assert role == "student" and scope == HOMEWORK_SCOPE
     exp = int(__import__("base64").urlsafe_b64decode(r.json()["token"].split(".")[0] + "==").decode().split(":")[2])
-    assert abs(exp - (time.time() + 8 * 3600)) < 10
+    assert abs(exp - (time.time() + 1800)) < 10
 
 
 def test_existing_account_matched_and_set_up_at_kept(hw, fake):
