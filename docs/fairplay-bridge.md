@@ -46,11 +46,21 @@ editor before the editor lock (the option stays visible on them), or let them be
 * In the assignment editor, under **Anti-cheating**, the lock is one choice: **No lock**, **Safe Exam
   Browser** or **FairPlay** (same permission as the SEB option). FairPlay marks the assignment with the
   contest tag `fairplay` (made on first use; the tag picker does not offer it, and "Add new" refuses the
-  name). That radio is the only FairPlay control in the editor: it shows no explanation, status or
-  warning, and DKU OJ does not read or send the exam's settings from there (FairPlay keeps its own;
-  a settings payload sent to the editor's save endpoint is still accepted and forwarded). When a save is
+  name). Apart from the optional **Open exam** panel below, the radio is the only FairPlay control in
+  the editor: it shows no explanation, status or warning, and DKU OJ does not read or send the exam's
+  other settings from there (FairPlay keeps its own; a settings payload sent to the editor's save
+  endpoint is still accepted and forwarded). When a save is
   refused because FairPlay holds the exam, the editor shows one short line at the lock choice ("The
   lock can't be changed now."), only after Save.
+* With **FairPlay** chosen, an optional **Open exam** checkbox (off by default) reveals **Allowed
+  websites** (one site or link per line) and **Duke Box shared folder link** (a `https://duke.box.com/s/<token>`
+  or `https://duke.app.box.com/s/<token>` link). Student uploads (`open_book`) are not touched. On Save
+  DKU OJ sends `{"websites": [...], "box_link": "<url>"}` to `POST exams/<key>/settings` when either value
+  changed (switching the checkbox off sends empty values); the editor reads the saved values back from
+  `GET exams/<key>` (`settings.websites_input`, `settings.box_link`) when it opens. DKU OJ refuses any
+  other link before saving. If FairPlay answers `400` with a detail starting `box_link:` that detail is
+  shown under the field; `409` shows "The Duke Box folder cannot be changed after students have started."
+  The assignment itself is already saved in both cases. The link is never written to the logs.
 * A FairPlay assignment must be limited to a course, classes or selected students: that audience is the
   exam roster. It leaves out the same people as a class roster: admins and instructors of its courses,
   instructors of classes in them, authors, curators and testers of any FairPlay exam, site staff, and
@@ -217,7 +227,7 @@ redirect is https. No database change; the cache is the one DKU OJ already uses.
   the exam is not ready; DKU OJ then shows its own short line, never FairPlay's text. DKU OJ streams the
   bytes to the browser as `access-codes-<key>.pdf` (attachment, `Cache-Control: no-store`), at most 2 MB.
 * The editor waits at most 3 s for FairPlay when it saves settings it was given; if FairPlay does not take
-  them, only the `judge.fairplay` log says so.
+  them, only the `judge.fairplay` log says so (except a refused Duke Box link, shown on the form).
 * The sync ping runs in a daemon thread with a 1 s connect and 1 s read timeout, so a save never waits more
   than that on FairPlay. Saves of the same assignment within 3 s send one ping at once and one more when the
   3 s are over; one transaction sends one. Failures (FairPlay down, `4xx`, timeout) are only logged at
