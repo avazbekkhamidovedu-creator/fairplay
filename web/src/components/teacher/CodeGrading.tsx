@@ -14,6 +14,8 @@ import { CodeEditor } from "../code/LazyCodeEditor";
 import { DEFAULT_TIME_LIMIT_MS, LANGUAGE_LABEL, canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
 import { fmtSeconds } from "../../lib/code/runner";
 import { createRunner } from "../../lib/code/runners";
+import { RunnerPool, gradingPoolSize } from "../../lib/code/runnerPool";
+import type { Runner } from "../../lib/code/runner";
 import { STATUS_LABEL, TestsAborted, isAborted, runTests, scoreOutcomes, testSummary, type TestOutcome } from "../../lib/code/runTests";
 import { isBlankAnswer } from "../../pages/teacher/gradingLogic";
 import { errorText } from "./util";
@@ -51,20 +53,29 @@ export async function scoreCode(
   code: string,
   onProgress?: (o: TestOutcome[]) => void,
   signal?: AbortSignal,
+  pool?: RunnerPool,
 ): Promise<CodeScore> {
   if (signal?.aborted) throw new TestsAborted();
-  const r = createRunner(resolveLanguage(q.language));
+  const lang = resolveLanguage(q.language);
+  let r: Runner | null;
+  if (pool) r = await unlessAborted(pool.acquire(), signal);
+  else r = createRunner(lang);
   if (!r) throw new Error("This language cannot run in the browser.");
-  const stop = () => r.dispose();
+  const runner = r;
+  const stop = () => runner.dispose();
   signal?.addEventListener("abort", stop, { once: true });
-  let outcomes: TestOutcome[];
+  let outcomes: TestOutcome[] | null = null;
   try {
-    await unlessAborted(r.prepare(), signal);
+    await unlessAborted(runner.prepare(), signal);
     const tests: CodeTest[] = q.tests ?? [];
-    outcomes = await runTests(r, code, tests, q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS, onProgress, signal);
+    outcomes = await runTests(runner, code, tests, q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS, onProgress, signal, {
+      sqlSetup: q.sql_setup,
+      sqlCompare: q.sql_compare,
+    });
   } finally {
     signal?.removeEventListener("abort", stop);
-    r.dispose();
+    if (pool) pool.release(runner, !outcomes || outcomes.some((o) => o.status === "unavailable"));
+    else runner.dispose();
   }
   if (outcomes.some((o) => o.status === "unavailable")) throw new Error(outcomes.find((o) => o.stderr)?.stderr || "The tests could not run.");
   const s = scoreOutcomes(outcomes, q.points);
@@ -257,43 +268,75 @@ export function BulkCodeRun({
     let done = 0;
     let failed = 0;
     let skipped = 0;
+    let started = 0;
+    const t0 = Date.now();
     const list = [...todo];
-    for (const it of list) {
-      if (ac.signal.aborted) break;
+    const pools = new Map<string, RunnerPool>();
+    const size = Math.min(gradingPoolSize(), list.length);
+    const poolFor = (q: GradingQuestion) => {
+      const lang = resolveLanguage(q.language);
+      let p = pools.get(lang);
+      if (!p) pools.set(lang, (p = new RunnerPool(lang, size)));
+      return p;
+    };
+    const show = () => {
+      const finished = done + failed + skipped;
+      const perMin = done > 0 ? Math.round((done * 60000) / Math.max(1000, Date.now() - t0)) : 0;
+      setProgress(
+        `Running tests: ${finished} of ${list.length} answers done${started - finished > 1 ? `, ${started - finished} running` : ""}${perMin ? ` (${perMin} answers/min)` : ""}…`,
+      );
+    };
+    show();
+    const one = async (it: GradingItem) => {
       const q = byId.get(it.question_id)!;
-      setProgress(`Running tests: answer ${done + failed + skipped + 1} of ${list.length}…`);
       if (gradedNow(it)) {
         skipped += 1;
-        continue;
+        return;
       }
       try {
-        const s = await scoreCode(q, String(it.answer ?? ""), undefined, ac.signal);
-        if (ac.signal.aborted) break;
+        const s = await scoreCode(q, String(it.answer ?? ""), undefined, ac.signal, poolFor(q));
+        if (ac.signal.aborted) return;
         // graded by hand while the tests ran (here or in another tab): keep that grade
         if (gradedNow(it)) {
           skipped += 1;
-          continue;
+          return;
         }
         const fresh = await teacherApi.grading(examId);
-        if (ac.signal.aborted) break;
+        if (ac.signal.aborted) return;
         const there = fresh.items.find((x) => key(x) === key(it));
         if (there?.grade) {
           skipped += 1;
           onItemGraded({ ...it, ...there });
-          continue;
+          return;
         }
         if (gradedNow(it)) {
           skipped += 1;
-          continue;
+          return;
         }
         const input = { points: s.points, comment: s.comment, rubric_scores: null };
         const res = await teacherApi.saveGrade(examId, it.attempt_id, it.question_id, input);
         onItemGraded({ ...it, grade: res.grade ?? { ...input, graded_at: new Date().toISOString() } });
         done += 1;
       } catch (e) {
-        if (ac.signal.aborted || isAborted(e)) break;
+        if (ac.signal.aborted || isAborted(e)) return;
         failed += 1;
       }
+    };
+    let next = 0;
+    const lane = async () => {
+      while (!ac.signal.aborted && next < list.length) {
+        const it = list[next++]!;
+        started += 1;
+        show();
+        await one(it);
+        show();
+      }
+    };
+    ac.signal.addEventListener("abort", () => pools.forEach((p) => p.dispose()), { once: true });
+    try {
+      await Promise.all(Array.from({ length: size }, lane));
+    } finally {
+      pools.forEach((p) => p.dispose());
     }
     const stopped = ac.signal.aborted;
     if (run.current === ac) run.current = null;

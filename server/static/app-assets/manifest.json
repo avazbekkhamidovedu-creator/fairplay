@@ -1,5 +1,5 @@
 {
-  "version": "36b7234bdf03371a",
+  "version": "dc093b1b9c1fbf2c",
   "files": {
     "pdfjs/cmaps/78-EUC-H.bcmap": "d92a261336dc18b8c03a46eb4d462382d33f4338fa195d303256b2031434c874",
     "pdfjs/cmaps/78-EUC-V.bcmap": "61670bebc4e4827b67230c054fd0d820d6e30c3584d02e386804e62bbedc032a",
@@ -192,6 +192,8 @@
     "pyodide/pyodide.asm.wasm": "54309a5a2cfd757b1f0fdbc9093c92503f7b341500110329d932487183912718",
     "pyodide/pyodide.js": "7f832a350240263d9946a9c3c877f7bcdab6c37d6dc65f72cd3be5905dca62dd",
     "pyodide/pyodide.mjs": "510ca14305230018f50c40fb81be673afd68080e70ce7733fcce6600dd6a1714",
-    "pyodide/python_stdlib.zip": "831fd1e535084b972f87c6a35275de3d236efd5166f5e77ce89497710635e73c"
+    "pyodide/python_stdlib.zip": "831fd1e535084b972f87c6a35275de3d236efd5166f5e77ce89497710635e73c",
+    "sqlite/index.mjs": "0dcdd860e6ec672623b13b8b8e41bb6c78be7a5df80ec553fc4f69160161c8af",
+    "sqlite/sqlite3.wasm": "b8a92a19f441a90ff2339fe988fbe317c4adf3ed844096f12aee04aa72d58257"
   }
 }

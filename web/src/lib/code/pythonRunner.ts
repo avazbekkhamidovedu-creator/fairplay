@@ -48,6 +48,7 @@ export class PythonRunner implements Runner {
   private nextId = 1;
   /** ends the run in progress (dispose) */
   private stopCurrent: (() => void) | null = null;
+  private disposed = false;
 
   prepare(): Promise<void> {
     return this.ensure().then(() => undefined);
@@ -56,6 +57,7 @@ export class PythonRunner implements Runner {
   private ensure(): Promise<Worker> {
     if (this.ready) return this.ready;
     if (typeof Worker === "undefined") return Promise.reject(new Error("Run is not available in this browser."));
+    this.disposed = false;
     const base = assetBase();
     const p: Promise<Worker> = this.start(base).catch((e: unknown) => {
       if (!isAppBase(base) || e === STOPPED || this.ready !== p) throw e;
@@ -125,7 +127,7 @@ export class PythonRunner implements Runner {
         settled = true;
         clearTimeout(timer);
         if (this.stopCurrent === stop) this.stopCurrent = null;
-        if (kill) this.kill(w);
+        if (kill) this.kill(w, !this.disposed && r.status !== "unavailable");
         resolve(r);
       };
       const stop = () => end(unavailable("Stopped."), true);
@@ -167,16 +169,20 @@ export class PythonRunner implements Runner {
     });
   }
 
-  private kill(w: Worker): void {
+  /** Ends a worker. With `respawn` the replacement starts loading at once (the hot spare), so
+   *  the next run after a time limit, os._exit or crash finds Pyodide ready. */
+  private kill(w: Worker, respawn = false): void {
     w.terminate();
     if (this.worker === w) {
       this.worker = null;
       this.ready = null;
     }
+    if (respawn) this.ensure().catch(() => undefined);
   }
 
   /** Stops the run in progress (it resolves as "Stopped.") and frees the worker. */
   dispose(): void {
+    this.disposed = true;
     this.stopCurrent?.();
     if (this.worker) this.kill(this.worker);
   }

@@ -23,6 +23,12 @@ export const PYODIDE_FILES = [
   "pyodide-lock.json",
 ];
 
+// SQL questions: sqlite-wasm's browser build (glue module + wasm), loaded by the SQL worker.
+export const SQLITE_FILES = {
+  "index.mjs": "index.mjs",
+  "sqlite3.wasm": "sqlite3.wasm",
+};
+
 export const TYPES = {
   ".js": "text/javascript",
   ".mjs": "text/javascript",
@@ -51,6 +57,8 @@ export function packSources(nodeModules = resolve(root, "node_modules")) {
   const out = {};
   const py = join(nodeModules, "pyodide");
   for (const name of PYODIDE_FILES) out[`pyodide/${name}`] = join(py, name);
+  const sqlite = join(nodeModules, "@sqlite.org", "sqlite-wasm", "dist");
+  for (const [name, file] of Object.entries(SQLITE_FILES)) out[`sqlite/${name}`] = join(sqlite, file);
   const pdf = join(nodeModules, "pdfjs-dist");
   out["pdfjs/pdf.worker.min.mjs"] = join(pdf, "legacy/build/pdf.worker.min.mjs");
   for (const dir of ["cmaps", "standard_fonts"]) {

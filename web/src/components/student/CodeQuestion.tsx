@@ -159,7 +159,10 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
     setBusy("running");
     setResults([]);
     try {
-      const out = await runTests(x, codeRef.current, samples, limit, (done) => setResults(done));
+      const out = await runTests(x, codeRef.current, samples, limit, (done) => setResults(done), undefined, {
+        sqlSetup: question.sql_setup,
+        sqlCompare: question.sql_compare,
+      });
       setResults(out);
     } finally {
       setBusy(null);
@@ -178,7 +181,7 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
     setBusy("running");
     setCustom(null);
     try {
-      setCustom(await x.run(codeRef.current, customInput, limit));
+      setCustom(await x.run(codeRef.current, runLang === "sql" ? question.sql_setup ?? "" : customInput, limit));
     } finally {
       setBusy(null);
     }

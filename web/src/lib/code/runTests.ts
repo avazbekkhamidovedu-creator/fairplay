@@ -1,5 +1,6 @@
 // Phase 4: running a program against tests and summing the points of the passed ones.
-import { outputsMatch } from "./compare";
+import { outputsMatch, sqlOutputsMatch } from "./compare";
+import type { SqlCompare } from "../../api/types";
 import type { RunResult, Runner } from "./runner";
 
 export interface TestCase {
@@ -25,12 +26,20 @@ export interface TestOutcome {
   truncated?: boolean;
 }
 
-export function outcomeOf(index: number, t: TestCase, r: RunResult): TestOutcome {
+/** Options for SQL questions: the setup script and how rows are compared. */
+export interface RunTestsOptions {
+  sqlSetup?: string;
+  sqlCompare?: SqlCompare;
+}
+
+export function outcomeOf(index: number, t: TestCase, r: RunResult, opts?: RunTestsOptions): TestOutcome {
   let status: TestStatus;
   if (r.status === "timeout") status = "timeout";
   else if (r.status === "unavailable") status = "unavailable";
   else if (r.status === "error") status = "error";
-  else status = outputsMatch(r.stdout, t.expected) ? "pass" : "fail";
+  else if (opts?.sqlSetup !== undefined || opts?.sqlCompare !== undefined) {
+    status = sqlOutputsMatch(r.stdout, t.expected, opts.sqlCompare ?? "unordered") ? "pass" : "fail";
+  } else status = outputsMatch(r.stdout, t.expected) ? "pass" : "fail";
   return {
     index,
     status,
@@ -67,7 +76,12 @@ export async function runTests(
   timeLimitMs: number,
   onProgress?: (done: TestOutcome[]) => void,
   signal?: AbortSignal,
+  opts?: RunTestsOptions,
 ): Promise<TestOutcome[]> {
+  // a SQL test has no input: the run's second argument is the question's setup script
+  const sql = runner.language === "sql";
+  const o = sql ? { sqlSetup: opts?.sqlSetup ?? "", sqlCompare: opts?.sqlCompare } : undefined;
+  const inputOf = (t: TestCase) => (sql ? o!.sqlSetup! : t.input);
   const out: TestOutcome[] = [];
   let onAbort: (() => void) | null = null;
   const aborted = signal
@@ -82,12 +96,12 @@ export async function runTests(
     for (let i = 0; i < tests.length; i++) {
       if (signal?.aborted) throw new TestsAborted();
       const t = tests[i]!;
-      const r = aborted ? await Promise.race([runner.run(code, t.input, timeLimitMs), aborted]) : await runner.run(code, t.input, timeLimitMs);
+      const r = aborted ? await Promise.race([runner.run(code, inputOf(t), timeLimitMs), aborted]) : await runner.run(code, inputOf(t), timeLimitMs);
       if (signal?.aborted) throw new TestsAborted();
-      out.push(outcomeOf(i, t, r));
+      out.push(outcomeOf(i, t, r, o));
       onProgress?.([...out]);
       if (r.status === "unavailable") {
-        for (let j = i + 1; j < tests.length; j++) out.push(outcomeOf(j, tests[j]!, r));
+        for (let j = i + 1; j < tests.length; j++) out.push(outcomeOf(j, tests[j]!, r, o));
         break;
       }
     }

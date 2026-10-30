@@ -198,10 +198,9 @@ describe("coding question form", () => {
     render(<EditorHarness initial={codeQ()} />);
     const lang = screen.getByLabelText("Language") as HTMLSelectElement;
     expect(lang.options[0]!.textContent).toBe("Exam default (Python 3)");
-    expect([...lang.options].map((o) => o.value)).toEqual(["", "python", "javascript", "c", "cpp", "java"]);
-    await user.selectOptions(lang, "cpp");
-    expect(state().language).toBe("cpp");
-    expect(screen.getByText(/C\+\+ cannot run inside FairPlay yet/)).toBeInTheDocument();
+    expect([...lang.options].map((o) => o.value)).toEqual(["", "python", "javascript", "typescript", "sql", "c", "cpp", "java"]);
+    await user.selectOptions(lang, "javascript");
+    expect(state().language).toBe("javascript");
 
     const rows = screen.getAllByTestId("code-test-row");
     expect(rows).toHaveLength(2);

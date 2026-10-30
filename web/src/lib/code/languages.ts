@@ -2,11 +2,13 @@
 // default, or per question); students only see it as a label.
 import type { CodeLanguage } from "../../api/types";
 
-export const CODE_LANGUAGES: CodeLanguage[] = ["python", "javascript", "c", "cpp", "java"];
+export const CODE_LANGUAGES: CodeLanguage[] = ["python", "javascript", "typescript", "sql", "c", "cpp", "java"];
 
 export const LANGUAGE_LABEL: Record<CodeLanguage, string> = {
   python: "Python 3",
   javascript: "JavaScript",
+  typescript: "TypeScript",
+  sql: "SQL",
   c: "C",
   cpp: "C++",
   java: "Java",
@@ -22,14 +24,36 @@ export function resolveLanguage(own: unknown, examDefault?: unknown): CodeLangua
   return isCodeLanguage(examDefault) ? examDefault : "python";
 }
 
-/** Languages FairPlay can run inside the browser (no server runner yet). */
+export type LanguageRuntime = "browser" | "none";
+
+/** Where a language runs: inside the page ("browser") or nowhere yet ("none": read and grade by hand). */
+export const LANGUAGE_RUNTIME: Record<CodeLanguage, LanguageRuntime> = {
+  python: "browser",
+  javascript: "browser",
+  typescript: "browser",
+  sql: "browser",
+  c: "none",
+  cpp: "none",
+  java: "none",
+};
+
+/** Languages FairPlay can run inside the browser. */
 export function canRunInBrowser(lang: CodeLanguage): boolean {
-  return lang === "python" || lang === "javascript";
+  return LANGUAGE_RUNTIME[lang] === "browser";
 }
+
+/** The languages that can run, in picker order. */
+export function runnableLanguages(): CodeLanguage[] {
+  return CODE_LANGUAGES.filter(canRunInBrowser);
+}
+
+/** Help text for the teacher: what the TypeScript runner does and does not check. */
+export const TS_NOTE =
+  "TypeScript runs with its types removed and not checked: a type error is not reported, only a syntax error stops the program.";
 
 /** Indentation the editor inserts for Tab (spaces only). */
 export function indentFor(lang: CodeLanguage): string {
-  return lang === "javascript" ? "  " : "    ";
+  return lang === "javascript" || lang === "typescript" || lang === "sql" ? "  " : "    ";
 }
 
 export const DEFAULT_TIME_LIMIT_MS = 2000;

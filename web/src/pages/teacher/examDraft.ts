@@ -1,6 +1,6 @@
 // Editor state for an exam, plus validation and conversion to the API body.
 
-import type { CalculatorMode, CodeLanguage, Delivery, Exam, ExamInput, QuestionImage, QuestionInput, QuestionType } from "../../api/types";
+import type { CalculatorMode, CodeLanguage, Delivery, Exam, ExamInput, QuestionImage, QuestionInput, QuestionType, SqlCompare } from "../../api/types";
 import {
   DEFAULT_TIME_LIMIT_MS,
   MAX_TIME_LIMIT_MS,
@@ -52,6 +52,9 @@ export interface DraftQuestion {
   writeOnly: boolean;
   /** milliseconds, as typed */
   timeLimit: string;
+  /** SQL questions only */
+  sqlSetup: string;
+  sqlCompare: SqlCompare;
 }
 
 /** Phase 4: one test case row of a coding question. */
@@ -106,7 +109,7 @@ export interface DraftExam {
 export type QuestionErrors = Partial<
   Record<
     | "prompt" | "points" | "options" | "correct" | "answer" | "tolerance" | "accepted" | "rubric" | "words" | "topics"
-    | "tests" | "timeLimit",
+    | "tests" | "timeLimit" | "sqlSetup",
     string
   >
 >;
@@ -173,9 +176,19 @@ export function changeKind(q: DraftQuestion, kind: DraftKind): DraftQuestion {
   return { ...fresh, key: q.key, prompt: q.prompt, points: q.points || fresh.points, images: q.images, topics: q.topics };
 }
 
-const CODE_DEFAULTS = { language: "" as const, starter: "", writeOnly: false, timeLimit: String(DEFAULT_TIME_LIMIT_MS) };
+export const MAX_SQL_SETUP_CHARS = 50000;
 
-function codeDraft(q: Exam["questions"][number]): Pick<DraftQuestion, "language" | "starter" | "tests" | "writeOnly" | "timeLimit"> {
+export function isSqlQuestion(q: Pick<DraftQuestion, "type" | "language">, defaultLanguage: CodeLanguage): boolean {
+  return q.type === "code" && (q.language || defaultLanguage) === "sql";
+}
+
+const CODE_DEFAULTS = { language: "" as const, starter: "", writeOnly: false,
+  timeLimit: String(DEFAULT_TIME_LIMIT_MS),
+  sqlSetup: "",
+  sqlCompare: "unordered" as SqlCompare,
+};
+
+function codeDraft(q: Exam["questions"][number]): Pick<DraftQuestion, "language" | "starter" | "tests" | "writeOnly" | "timeLimit" | "sqlSetup" | "sqlCompare"> {
   if (q.type !== "code") return { ...CODE_DEFAULTS, tests: [] };
   return {
     language: isCodeLanguage(q.language) ? q.language : "",
@@ -183,6 +196,8 @@ function codeDraft(q: Exam["questions"][number]): Pick<DraftQuestion, "language"
     tests: (q.tests ?? []).map((t) => newTestRow(t.visible, t.input, t.expected, t.points ? String(t.points) : "")),
     writeOnly: q.write_only === true,
     timeLimit: String(q.time_limit_ms ?? DEFAULT_TIME_LIMIT_MS),
+    sqlSetup: q.sql_setup ?? "",
+    sqlCompare: q.sql_compare === "ordered" ? "ordered" : "unordered",
   };
 }
 
@@ -405,6 +420,8 @@ export function validateDraft(d: DraftExam): DraftErrors {
       else if (!e.points && testPointsSum(q.tests) > 0 && testPointsSum(q.tests) !== Number(q.points))
         e.tests = `Test points add up to ${testPointsSum(q.tests)}, but the question is worth ${q.points}.`;
       if (q.starter.length > 20000) e.tests = e.tests ?? "Keep the starter code under 20,000 characters.";
+      if (isSqlQuestion(q, d.defaultLanguage) && q.sqlSetup.length > MAX_SQL_SETUP_CHARS)
+        e.sqlSetup = `Keep the setup script under ${MAX_SQL_SETUP_CHARS.toLocaleString("en-US")} characters.`;
     }
     if (Object.keys(e).length) errors.byKey[q.key] = e;
   }
@@ -421,7 +438,7 @@ export function hasErrors(e: DraftErrors): boolean {
 const NON_ESSAY = { rubric: [], min_words: null, max_words: null };
 const NO_KEYS = { options: [], correct_index: null, answer_number: null, tolerance: null, accepted_answers: [] };
 
-export function toQuestionInput(q: DraftQuestion): QuestionInput {
+export function toQuestionInput(q: DraftQuestion, defaultLanguage: CodeLanguage = "python"): QuestionInput {
   const base = {
     type: q.type,
     prompt: q.prompt.trim(),
@@ -477,6 +494,7 @@ export function toQuestionInput(q: DraftQuestion): QuestionInput {
       })),
       write_only: q.writeOnly,
       time_limit_ms: Number(q.timeLimit),
+      ...(isSqlQuestion(q, defaultLanguage) ? { sql_setup: q.sqlSetup, sql_compare: q.sqlCompare } : {}),
     };
   }
   return {
@@ -503,7 +521,7 @@ export function toExamInput(d: DraftExam): ExamInput {
     closes_at: d.delivery === "paper" ? null : joinSchedule(d.closeDate ?? "", d.closeTime ?? ""),
     shuffle_questions: d.shuffle,
     class_id: d.classId ? Number(d.classId) : null,
-    questions: d.external.mode === "external" ? [] : d.questions.map(toQuestionInput),
+    questions: d.external.mode === "external" ? [] : d.questions.map((q) => toQuestionInput(q, d.defaultLanguage)),
     ...externalExamInput(d.external),
     ...(d.external.mode === "external" ? { external_points: Number(d.externalPoints) } : {}),
     delivery: d.external.mode === "external" ? "website" : d.delivery === "paper" ? "paper" : "computer",

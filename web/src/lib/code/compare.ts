@@ -21,3 +21,14 @@ export function firstDifferentLine(actual: string, expected: string): number | n
   for (let i = 0; i < n; i++) if (a[i] !== e[i]) return i + 1;
   return null;
 }
+
+/** SQL results: same header line and the same rows, in any order unless `ordered`. */
+export function sqlOutputsMatch(actual: string, expected: string, mode: "ordered" | "unordered" = "unordered"): boolean {
+  const a = normalizeOutput(actual);
+  const e = normalizeOutput(expected);
+  if (mode === "ordered" || a === e) return a === e;
+  const [ah = "", ...ar] = a.split("\n");
+  const [eh = "", ...er] = e.split("\n");
+  if (ah !== eh || ar.length !== er.length) return false;
+  return ar.sort().join("\n") === er.sort().join("\n");
+}

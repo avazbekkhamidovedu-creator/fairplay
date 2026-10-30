@@ -22,7 +22,7 @@ import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
 import { CodeQuestion, forgetCodeResults } from "../../components/student/CodeQuestion";
 import { preloadCodeEditor } from "../../components/code/LazyCodeEditor";
-import { prefetchRunner, resetSharedRunners } from "../../lib/code/runners";
+import { resetSharedRunners, warmUpRunners } from "../../lib/code/runners";
 import { canRunInBrowser, resolveLanguage } from "../../lib/code/languages";
 import { LockedBar } from "../../components/student/LockedBar";
 import { ReviewPanel } from "../../components/student/ReviewPanel";
@@ -750,7 +750,7 @@ function ExamTakingInner() {
   }, [hasCode]);
   useEffect(() => {
     if (phase !== "exam" && phase !== "review") return;
-    for (const l of runLangs) if (l === "python") prefetchRunner(l);
+    warmUpRunners(runLangs);
     // once per exam screen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runLangKey, phase === "exam" || phase === "review"]);

@@ -1193,7 +1193,10 @@ export interface ReadinessRow {
 // ---------- Phase 4: coding questions ----------
 
 /** Languages a coding question can use. The teacher picks; students never choose. */
-export type CodeLanguage = "python" | "javascript" | "c" | "cpp" | "java";
+export type CodeLanguage = "python" | "javascript" | "typescript" | "c" | "cpp" | "java" | "sql";
+
+/** SQL questions: how the result rows of a query are compared with the expected rows. */
+export type SqlCompare = "ordered" | "unordered";
 
 /** One test: stdin in, expected stdout out. Hidden tests (visible false) never reach students. */
 export interface CodeTest {
@@ -1216,6 +1219,10 @@ export interface Question {
   tests?: CodeTest[];
   write_only?: boolean;
   time_limit_ms?: number;
+  /** SQL questions only: a script run on a fresh in-memory SQLite database before each test. */
+  sql_setup?: string;
+  /** SQL questions only; default "unordered". */
+  sql_compare?: SqlCompare;
 }
 export interface StudentQuestion {
   /** resolved: the question's own language or the exam default */
@@ -1225,6 +1232,9 @@ export interface StudentQuestion {
   tests?: StudentCodeTest[];
   write_only?: boolean;
   time_limit_ms?: number;
+  /** SQL questions only: the setup script (students need it to run the visible tests). */
+  sql_setup?: string;
+  sql_compare?: SqlCompare;
 }
 export interface Exam {
   default_language?: CodeLanguage;
@@ -1238,6 +1248,9 @@ export interface GradingQuestion {
   tests?: CodeTest[];
   time_limit_ms?: number;
   write_only?: boolean;
+  /** SQL questions: the grading page runs the setup before each test. */
+  sql_setup?: string;
+  sql_compare?: SqlCompare;
 }
 export interface FeedbackQuestion {
   language?: CodeLanguage;

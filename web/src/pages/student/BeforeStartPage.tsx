@@ -13,6 +13,8 @@ import { BatteryIcon, LockIcon } from "../../components/student/icons";
 import { LogoMark } from "../../components/ui/Icon";
 import { batteryTone, useBattery } from "../../lib/battery";
 import * as bridge from "../../lib/bridge";
+import { canRunInBrowser, isCodeLanguage } from "../../lib/code/languages";
+import { warmUpRunners } from "../../lib/code/runners";
 import { resumeInfo, welcomeBack } from "../../lib/resumeState";
 import "../../styles/student.css";
 
@@ -75,6 +77,13 @@ export default function BeforeStartPage() {
       alive = false;
     };
   }, [examId]);
+
+  // Coding exams: the runtimes (Pyodide, SQLite) start loading now, while the student reads the
+  // rules, instead of at the first Run. Needs the exam summary to name its code languages.
+  useEffect(() => {
+    const langs = (exam as { code_languages?: unknown } | null)?.code_languages;
+    if (Array.isArray(langs)) warmUpRunners(langs.filter(isCodeLanguage).filter(canRunInBrowser));
+  }, [exam]);
 
   // The app's lock state while this page is open: a late "locked" (prelock) after the 4 s
   // "unsupported" guess, or a "state" that says the pre-exam lock is on.

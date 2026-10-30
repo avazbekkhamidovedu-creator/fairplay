@@ -3,7 +3,7 @@
 // the source exam's default language.
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Exam, GradingItem, GradingQuestion } from "../api/types";
 import { BulkCodeRun, CodeAnswerPanel, scoreCode } from "../components/teacher/CodeGrading";
 import { PythonRunner } from "../lib/code/pythonRunner";
@@ -201,6 +201,11 @@ describe("stopping runs", () => {
 // ------------------------------------------------------------------ bulk run
 
 describe("bulk run", () => {
+  // two cores: a pool of one runner, so answers run one after the other
+  beforeEach(() => {
+    vi.stubGlobal("navigator", Object.create(navigator, { hardwareConcurrency: { value: 2 } }));
+  });
+
   it("Cancel stops the run; no second run while one runs; unmount stops it", async () => {
     const runners: ReturnType<typeof manualRunner>[] = [];
     setRunnerFactoryForTests("python", () => {
@@ -254,15 +259,49 @@ describe("bulk run", () => {
     // the teacher saves a1 by hand on this page while its tests run
     items = items.map((it) => (it.attempt_id === "a1" ? { ...it, grade: manual } : it));
     rerender(ui(items));
+    // the pool's one runner is reused for the next answers
     await act(async () => runners[0]!.pending[0]!(ok("1\n")));
-    await waitFor(() => expect(runners).toHaveLength(2));
-    await act(async () => runners[1]!.pending[0]!(ok("1\n")));
-    await waitFor(() => expect(runners).toHaveLength(3));
-    await act(async () => runners[2]!.pending[0]!(ok("1\n")));
+    await waitFor(() => expect(runners[0]!.pending).toHaveLength(2));
+    await act(async () => runners[0]!.pending[1]!(ok("1\n")));
+    await waitFor(() => expect(runners[0]!.pending).toHaveLength(3));
+    await act(async () => runners[0]!.pending[2]!(ok("1\n")));
+    expect(runners).toHaveLength(1);
     expect(await screen.findByRole("status")).toHaveTextContent("Scored 1 answer from the tests, 2 graded by hand meanwhile (kept)");
     expect(api.saveGrade.mock.calls.map((c) => c[1])).toEqual(["a2"]);
     // the page learns about the grade from the other tab
     expect(graded).toHaveBeenCalledWith(expect.objectContaining({ attempt_id: "a3", grade: manual }));
+  });
+});
+
+describe("bulk run with a pool", () => {
+  it("runs up to min(4, cores / 2) answers at once and reports answers per minute", async () => {
+    vi.stubGlobal("navigator", Object.create(navigator, { hardwareConcurrency: { value: 8 } }));
+    const runners: ReturnType<typeof manualRunner>[] = [];
+    setRunnerFactoryForTests("python", () => {
+      const m = manualRunner();
+      runners.push(m);
+      return m.r;
+    });
+    const list = ["a1", "a2", "a3", "a4", "a5", "a6"].map((id) => item({ attempt_id: id }));
+    api.grading.mockResolvedValue({ items: list });
+    api.saveGrade.mockImplementation(async (_e: string, aid: string, qid: string, input: object) => ({
+      attempt_id: aid,
+      question_id: qid,
+      grade: { ...input, graded_at: "2026-10-23T00:00:00Z" },
+    }));
+    const user = userEvent.setup();
+    render(<BulkCodeRun examId="e_1" questions={[gq]} items={list} onItemGraded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Run all code tests (6)" }));
+    await user.click(screen.getByRole("button", { name: "Run and save" }));
+    await waitFor(() => expect(runners).toHaveLength(4));
+    await waitFor(() => expect(runners.every((r) => r.pending.length === 1)).toBe(true));
+    expect(screen.getByRole("status")).toHaveTextContent("4 running");
+    for (const r of runners) await act(async () => r.pending[0]!(ok("1\n")));
+    // the other two answers reuse pool runners; no fifth runner is made
+    await waitFor(() => expect(runners.reduce((n, r) => n + r.pending.length, 0)).toBe(6));
+    expect(runners).toHaveLength(4);
+    for (const r of runners) for (const p of r.pending.slice(1)) await act(async () => p(ok("1\n")));
+    expect(await screen.findByRole("status")).toHaveTextContent(/Scored \d+ answers? from the tests/);
   });
 });
 

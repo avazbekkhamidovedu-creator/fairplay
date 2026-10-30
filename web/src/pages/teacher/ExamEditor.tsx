@@ -6,7 +6,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ApiError, classesApi, lmsApi, slice6Api, teacherApi } from "../../api/client";
 import type { CodeLanguage, Exam, SchoolClass, TopicCount } from "../../api/types";
 import { CodeQuestionEditor } from "../../components/teacher/CodeQuestionEditor";
-import { CODE_LANGUAGES, LANGUAGE_LABEL } from "../../lib/code/languages";
+import { CODE_LANGUAGES, LANGUAGE_LABEL, canRunInBrowser } from "../../lib/code/languages";
 import { Icon } from "../../components/ui/Icon";
 import { Switch } from "../../components/ui/Switch";
 import { ExternalExamSettings } from "../../components/teacher/ExternalExamSettings";
@@ -388,8 +388,8 @@ export function ExamEditor({ exam, onSaved, cancelTo }: Props) {
                   aria-describedby="exam-default-language-hint"
                 >
                   {CODE_LANGUAGES.map((l) => (
-                    <option key={l} value={l}>
-                      {LANGUAGE_LABEL[l]}
+                    <option key={l} value={l} disabled={!canRunInBrowser(l) && l !== draft.defaultLanguage}>
+                      {canRunInBrowser(l) ? LANGUAGE_LABEL[l] : `${LANGUAGE_LABEL[l]} (runner coming soon)`}
                     </option>
                   ))}
                 </select>

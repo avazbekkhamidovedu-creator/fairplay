@@ -1,12 +1,12 @@
 // Phase 4: the teacher's form for a coding question: language (exam default or its own),
 // starter code, test cases (visible = sample shown to students, hidden = only for grading),
 // write-only mode and the time limit.
-import type { CodeLanguage } from "../../api/types";
+import type { CodeLanguage, SqlCompare } from "../../api/types";
 import { CodeEditor } from "../code/LazyCodeEditor";
 import { Icon } from "../ui/Icon";
 import { Switch } from "../ui/Switch";
-import { CODE_LANGUAGES, LANGUAGE_LABEL, canRunInBrowser } from "../../lib/code/languages";
-import { newTestRow, testPointsSum, type DraftQuestion, type DraftTest, type QuestionErrors } from "../../pages/teacher/examDraft";
+import { CODE_LANGUAGES, LANGUAGE_LABEL, TS_NOTE, canRunInBrowser } from "../../lib/code/languages";
+import { MAX_SQL_SETUP_CHARS, newTestRow, testPointsSum, type DraftQuestion, type DraftTest, type QuestionErrors } from "../../pages/teacher/examDraft";
 
 interface Props {
   q: DraftQuestion;
@@ -18,6 +18,7 @@ interface Props {
 
 export function CodeQuestionEditor({ q, id, errors: e, onChange, defaultLanguage }: Props) {
   const lang = q.language || defaultLanguage;
+  const isSql = lang === "sql";
   const setTest = (key: string, patch: Partial<DraftTest>) =>
     onChange({ tests: q.tests.map((t) => (t.key === key ? { ...t, ...patch } : t)) });
   const sum = testPointsSum(q.tests);
@@ -37,16 +38,18 @@ export function CodeQuestionEditor({ q, id, errors: e, onChange, defaultLanguage
           >
             <option value="">Exam default ({LANGUAGE_LABEL[defaultLanguage]})</option>
             {CODE_LANGUAGES.map((l) => (
-              <option key={l} value={l}>
-                {LANGUAGE_LABEL[l]}
+              <option key={l} value={l} disabled={!canRunInBrowser(l) && l !== q.language}>
+                {canRunInBrowser(l) ? LANGUAGE_LABEL[l] : `${LANGUAGE_LABEL[l]} (runner coming soon)`}
               </option>
             ))}
           </select>
-          <span className="hint">
-            {canRunInBrowser(lang)
-              ? "Students see the language as a label; they cannot change it."
-              : `${LANGUAGE_LABEL[lang]} cannot run inside FairPlay yet: students write without Run, and you grade by reading the code.`}
-          </span>
+          <span className="hint">Students see the language as a label; they cannot change it.</span>
+          {lang === "typescript" && <span className="hint">{TS_NOTE}</span>}
+          {!canRunInBrowser(lang) && (
+            <span className="hint">
+              No runner is available for this language yet: students cannot run code, answers are graded by you
+            </span>
+          )}
         </div>
         <div className="t-field">
           <label htmlFor={id("time-limit")}>Time limit per test (milliseconds)</label>
@@ -74,6 +77,44 @@ export function CodeQuestionEditor({ q, id, errors: e, onChange, defaultLanguage
         </span>
         <Switch id={id("write-only")} checked={q.writeOnly} onChange={(v) => onChange({ writeOnly: v })} describedBy={id("write-only-sub")} />
       </div>
+
+      {isSql && (
+        <div className="t-grid-2">
+          <div className="t-field">
+            <label htmlFor={id("sql-setup")}>Setup script</label>
+            <textarea
+              id={id("sql-setup")}
+              className="textarea mono"
+              rows={8}
+              spellCheck={false}
+              value={q.sqlSetup}
+              onChange={(ev) => onChange({ sqlSetup: ev.target.value })}
+              aria-invalid={!!e.sqlSetup}
+              aria-describedby={id("sql-setup-hint")}
+            />
+            <span className="hint" id={id("sql-setup-hint")}>
+              Runs on an empty in-memory SQLite database before every test: create tables and insert rows here. Students see this
+              script.
+            </span>
+            <span className={`hint${q.sqlSetup.length > MAX_SQL_SETUP_CHARS ? " field-error" : ""}`} aria-live="polite">
+              {q.sqlSetup.length.toLocaleString("en-US")} / {MAX_SQL_SETUP_CHARS.toLocaleString("en-US")}
+            </span>
+            {e.sqlSetup && <span className="field-error">{e.sqlSetup}</span>}
+          </div>
+          <div className="t-field">
+            <label htmlFor={id("sql-compare")}>Compare rows</label>
+            <select
+              id={id("sql-compare")}
+              className="t-select"
+              value={q.sqlCompare}
+              onChange={(ev) => onChange({ sqlCompare: ev.target.value as SqlCompare })}
+            >
+              <option value="unordered">Unordered (default)</option>
+              <option value="ordered">Ordered</option>
+            </select>
+          </div>
+        </div>
+      )}
 
       <div className="t-field">
         <span className="t-label" id={id("starter-label")}>
@@ -130,20 +171,26 @@ export function CodeQuestionEditor({ q, id, errors: e, onChange, defaultLanguage
                 <Icon name="close" size={16} />
               </button>
             </div>
-            <div className="t-grid-2">
+            <div className={isSql ? undefined : "t-grid-2"}>
+              {!isSql && (
+                <div className="t-field">
+                  <label htmlFor={id(`test-${i}-in`)}>Input (stdin)</label>
+                  <textarea
+                    id={id(`test-${i}-in`)}
+                    className="textarea mono"
+                    rows={3}
+                    spellCheck={false}
+                    value={t.input}
+                    onChange={(ev) => setTest(t.key, { input: ev.target.value })}
+                  />
+                </div>
+              )}
               <div className="t-field">
-                <label htmlFor={id(`test-${i}-in`)}>Input (stdin)</label>
-                <textarea
-                  id={id(`test-${i}-in`)}
-                  className="textarea mono"
-                  rows={3}
-                  spellCheck={false}
-                  value={t.input}
-                  onChange={(ev) => setTest(t.key, { input: ev.target.value })}
-                />
-              </div>
-              <div className="t-field">
-                <label htmlFor={id(`test-${i}-out`)}>Expected output</label>
+                <label htmlFor={id(`test-${i}-out`)}>
+                  {isSql
+                    ? "Expected result (first line: column names, then one row per line, values separated by a TAB, NULL for null)"
+                    : "Expected output"}
+                </label>
                 <textarea
                   id={id(`test-${i}-out`)}
                   className="textarea mono"

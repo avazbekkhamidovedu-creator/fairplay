@@ -11,6 +11,7 @@ as the fallback.
 - Contents:
   - `pyodide/` - Pyodide runtime (`pyodide.mjs`, `pyodide.asm.js`, `pyodide.asm.wasm`,
     `python_stdlib.zip`, `pyodide-lock.json`, `pyodide.js`)
+  - `sqlite/` - sqlite-wasm for SQL questions (`index.mjs`, `sqlite3.wasm`)
   - `pdfjs/pdf.worker.min.mjs`, `pdfjs/cmaps/*.bcmap`, `pdfjs/standard_fonts/*`
   - `manifest.json` = `{"version": "<16 hex>", "files": {"<relative path>": "<sha256 hex>", ...}}`
 - `version` = first 16 hex chars of sha256 over `"<path>\0<sha256>\n"` for every file in

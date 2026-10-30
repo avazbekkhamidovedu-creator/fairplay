@@ -9,6 +9,8 @@ import { JsRunner } from "./jsRunner";
 import { canRunInBrowser } from "./languages";
 import { PythonRunner } from "./pythonRunner";
 import type { Runner } from "./runner";
+import { SqlRunner } from "./sqlRunner";
+import { TsRunner } from "./tsRunner";
 
 const runners = new Map<CodeLanguage, Runner>();
 const overrides = new Map<CodeLanguage, Runner>();
@@ -17,6 +19,8 @@ const factories = new Map<CodeLanguage, () => Runner>();
 function create(lang: CodeLanguage): Runner | null {
   if (lang === "python") return new PythonRunner();
   if (lang === "javascript") return new JsRunner();
+  if (lang === "typescript") return new TsRunner();
+  if (lang === "sql") return new SqlRunner();
   return null; // C, C++, Java: no browser runner (a server runner can plug in here)
 }
 
@@ -71,4 +75,13 @@ export function prefetchRunner(lang: CodeLanguage): void {
   const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
   if (typeof w.requestIdleCallback === "function") w.requestIdleCallback(go, { timeout: 15000 });
   else setTimeout(go, 3000);
+}
+
+/** Prepare the runtimes of these languages now (the check-in screen, while the exam is surely
+ *  online and the student is reading the rules), instead of waiting for idle time. */
+export function warmUpRunners(languages: CodeLanguage[]): void {
+  for (const lang of new Set(languages)) {
+    const r = getRunner(lang);
+    if (r) void r.then((x) => x.prepare()).catch(() => undefined);
+  }
 }
