@@ -529,6 +529,7 @@ final class ExamViewController: UIViewController, LockSurface,
     private var deviceTestTimer: Timer?
     private var deviceTestObservers: [NSObjectProtocol] = []
 
+    private let remember = HomeworkRemember.system()
     private lazy var deviceTest = DeviceTest(
         begin: { [weak self] in self?.deviceTestBegan() },
         restore: { [weak self] in self?.deviceTestRestored() },
@@ -607,6 +608,11 @@ final class ExamViewController: UIViewController, LockSurface,
                           deviceTestRunning: deviceTest.isRunning, from: self) { [weak self] in self?.send($0) }
         case "clearHomeworkLogin":
             homework.clear()
+        case "rememberSave", "rememberUnlock", "rememberForget":
+            let lock = LockdownController.shared
+            remember.handle(action: action, body: body,
+                            busy: lock.isLocked || lock.lockInFlight || lock.preLockInFlight
+                                || AppSession.shared.exam != nil || external.isActive || deviceTest.isRunning) { [weak self] in self?.send($0) }
         case "hello":
             sendState()
         case "flushEvents":
@@ -799,7 +805,7 @@ final class ExamViewController: UIViewController, LockSurface,
         send(["type": "state", "locked": LockdownController.shared.isLocked, "trusted": true,
               "version": Config.version, "app_version": Config.version, "platform": "ipad",
               "sealed_pending": Sealed.hasPending, "prelock": LockdownController.shared.isPreLock,
-              "deviceTest": true, "homeworkLogin": true])
+              "deviceTest": true, "homeworkLogin": true, "homeworkRemember": remember.stateValue])
     }
 
     private var eventsReady = false

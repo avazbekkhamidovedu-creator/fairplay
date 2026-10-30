@@ -64,6 +64,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     /// The last page the pre-exam lock allowed and showed (not the sign-in page): where a
     /// route change goes back to when the exam id is not known. Cleared at unlock.
     private var lastPreLockPage: URL?
+    private let remember = HomeworkRemember.system()
     private lazy var deviceTest = DeviceTestSession(clock: { ProcessInfo.processInfo.systemUptime }, effects: self)
     private var deviceTestTimer: Timer?
     private var deviceTestTapOn = false
@@ -394,6 +395,11 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                           deviceTestRunning: deviceTest.isRunning) { [weak self] in self?.send($0) }
         case "clearHomeworkLogin":
             homework.clear()
+        case "rememberSave", "rememberUnlock", "rememberForget":
+            let lock = LockdownController.shared
+            remember.handle(action: action, body: body,
+                            busy: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil
+                                || external.isActive || deviceTest.isRunning) { [weak self] in self?.send($0) }
         case "flushEvents":
             flushEventQueue()
         case "fileRefused":
@@ -637,7 +643,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                                     "sealed_pending": Sealed.hasPending,
                                     "prelock": LockdownController.shared.isPreLock,
                                     "deviceTest": true,
-                                    "homeworkLogin": true]
+                                    "homeworkLogin": true,
+                                    "homeworkRemember": remember.stateValue]
         // 2026-10-22: a newer release the app can install (Updater.swift); never while locked.
         if let update = Updater.shared.available, !LockdownController.shared.isLocked {
             state["update"] = ["version": update.version]
