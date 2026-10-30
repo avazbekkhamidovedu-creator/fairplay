@@ -14,6 +14,7 @@ final class HomeworkLoginCoordinator {
         }
         guard window == nil else {
             window?.bringToFront()
+            send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
             return
         }
         guard let login = HomeworkLogin(body: body) else {

@@ -14,6 +14,8 @@ public struct HomeworkLogin {
     public static let startFailed = "Sign-in could not be started"
     public static let pageFailed = "The sign-in page stopped working"
     public static let maxResumes = 3
+    public static let maxHosts = 20
+    public static let maxResumePaths = 20
     public static let minTokenLength = 16
     public static let maxTokenLength = 128
 
@@ -56,15 +58,51 @@ public struct HomeworkLogin {
               let startRaw = body["start_url"] as? String, let start = URL(string: startRaw),
               let finishRaw = body["finish_url"] as? String, let finish = URL(string: finishRaw),
               finish.scheme?.lowercased() == "https", finish.host != nil else { return nil }
-        let hosts = AllowedSites.parse(body["allowed_hosts"])
-        guard !hosts.isEmpty, start.scheme?.lowercased() == "https",
-              AllowedSites.frameAllowed(start, allowed: hosts) else { return nil }
-        let paths = (body["resume_paths"] as? [Any] ?? []).compactMap { $0 as? String }.filter { $0.hasPrefix("/") }
+        guard let hosts = Self.parseHosts(body["allowed_hosts"]), start.scheme?.lowercased() == "https",
+              Self.allows(start, hosts: hosts), let paths = Self.parseResumePaths(body["resume_paths"]) else { return nil }
         self.state = state
         self.startURL = start
         self.allowedHosts = hosts
         self.finishURL = finish
-        self.resumePaths = paths.isEmpty ? ["/"] : paths
+        self.resumePaths = paths
+    }
+
+    /// Every entry must be a usable host or "*.base" (AllowedSites.normalizedEntry), at most `maxHosts`:
+    /// one bad entry refuses the whole message.
+    public static func parseHosts(_ raw: Any?) -> [String]? {
+        guard let list = raw as? [Any], !list.isEmpty, list.count <= maxHosts else { return nil }
+        var out: [String] = []
+        for item in list {
+            guard let s = item as? String, let e = AllowedSites.normalizedEntry(s) else { return nil }
+            if !out.contains(e) { out.append(e) }
+        }
+        return out
+    }
+
+    /// Missing or empty = ["/"]. A path that is not a string starting with "/" refuses the whole message.
+    public static func parseResumePaths(_ raw: Any?) -> [String]? {
+        if raw == nil || raw is NSNull { return ["/"] }
+        guard let list = raw as? [Any], list.count <= maxResumePaths else { return nil }
+        var out: [String] = []
+        for item in list {
+            guard let p = item as? String, p.hasPrefix("/"), p.utf8.count <= 200 else { return nil }
+            out.append(p)
+        }
+        return out.isEmpty ? ["/"] : out
+    }
+
+    /// https on the default port without user info on a listed host, or about:blank / about:srcdoc.
+    /// "*.base" is every subdomain of base, not base itself; a plain entry is that host (and its www. twin).
+    public static func allows(_ url: URL, hosts: [String]) -> Bool {
+        if url.scheme?.lowercased() == "about" { return AllowedSites.frameAllowed(url, allowed: hosts) }
+        guard url.scheme?.lowercased() == "https", let raw = url.host, url.user == nil, url.password == nil,
+              url.port == nil || url.port == 443, let host = AllowedSites.normalizedHost(raw),
+              !AllowedSites.isIPLiteral(host) else { return false }
+        return hosts.contains { entry in
+            guard entry.hasPrefix("*.") else { return AllowedSites.entryMatches(host, entry: entry) }
+            let base = String(entry.dropFirst(2))
+            return host.count > base.count && host.hasSuffix("." + base)
+        }
     }
 
     /// What to do with a navigation that is about to start. The finish URL is checked first and
@@ -75,7 +113,7 @@ public struct HomeworkLogin {
             guard let ticket = ticket(in: url) else { return .ignore }
             return .finish(ticket: ticket)
         }
-        return AllowedSites.frameAllowed(url, allowed: allowedHosts) ? .allow : .block
+        return Self.allows(url, hosts: allowedHosts) ? .allow : .block
     }
 
     /// After a top-level navigation FINISHED on `url`: the start page again when DKU's NetID
@@ -107,6 +145,7 @@ public struct HomeworkLogin {
             m["state"] = state ?? ""
             m["ticket"] = t
         case .cancelled:
+            if let state { m["state"] = state }
             m["cancelled"] = true
         case .failed(let text):
             if let state { m["state"] = state }

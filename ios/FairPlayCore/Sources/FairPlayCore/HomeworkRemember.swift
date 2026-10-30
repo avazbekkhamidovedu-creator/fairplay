@@ -50,16 +50,23 @@ public final class HomeworkRemember {
     }
 
     /// Handles rememberSave / rememberUnlock / rememberForget; returns false for other actions.
-    /// `reply` gets the rememberResult message for rememberUnlock only.
+    /// `reply` gets the rememberResult message: the token (or an error) for rememberUnlock, {saved} for rememberSave.
+    /// A save that is skipped or fails deletes the older item: the server replaced that token, so keeping it
+    /// would make the next unlock present a spent one.
+    /// `busy` is asked again after the device prompt: a lock or exam that started meanwhile gets no token.
     @discardableResult
-    public func handle(action: String, body: [String: Any], busy: Bool,
+    public func handle(action: String, body: [String: Any], busy: @autoclosure @escaping () -> Bool,
                        reply: @escaping ([String: Any]) -> Void) -> Bool {
         switch action {
         case "rememberSave":
-            guard isAvailable, let token = body["token"] as? String, let name = body["name"] as? String,
-                  !token.isEmpty, token.count <= Self.maxTokenLength else { return true }
-            let shown = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxNameLength))
-            try? store.save(token: token, name: shown)
+            var saved = false
+            if isAvailable, let token = body["token"] as? String, let name = body["name"] as? String,
+               !token.isEmpty, token.count <= Self.maxTokenLength {
+                let shown = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxNameLength))
+                saved = (try? store.save(token: token, name: shown)) != nil
+            }
+            if !saved { try? store.forget() }
+            reply(["type": "rememberResult", "saved": saved])
         case "rememberForget":
             try? store.forget()
         case "rememberUnlock":
@@ -70,8 +77,8 @@ public final class HomeworkRemember {
         return true
     }
 
-    private func unlock(busy: Bool, reply: @escaping ([String: Any]) -> Void) {
-        if busy { return reply(Self.result(error: Self.notDuringExam)) }
+    private func unlock(busy: @escaping () -> Bool, reply: @escaping ([String: Any]) -> Void) {
+        if busy() { return reply(Self.result(error: Self.notDuringExam)) }
         guard isAvailable else { return reply(Self.result(error: Self.unavailable)) }
         guard store.name() != nil else { return reply(Self.result(error: Self.nothingStored)) }
         guard !unlocking else { return reply(Self.result(error: Self.unavailable)) }
@@ -83,6 +90,7 @@ public final class HomeworkRemember {
             case .cancelled, .failed:
                 reply(["type": "rememberResult", "cancelled": true])
             case .passed:
+                if busy() { return reply(Self.result(error: Self.notDuringExam)) }
                 do {
                     if let token = try self.store.load() {
                         reply(["type": "rememberResult", "token": token])

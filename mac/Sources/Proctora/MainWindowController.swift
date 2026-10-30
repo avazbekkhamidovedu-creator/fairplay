@@ -378,7 +378,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         DebugLog.log("bridge", "page -> app: \(action)")
 
         if ["lock", "prelock", "session", "openExternal", "quitApps", "deviceTestStart"].contains(action) { homework.dismiss() }
-        if ["prelock", "openExternal", "quitApps"].contains(action) { box.close() }
+        if ["prelock", "openExternal", "quitApps", "seal"].contains(action) { box.close() }
+        if action == "session", (body["attempt_id"] as? String) != AppSession.shared.exam?.attemptId { box.close() }
         if ["lock", "prelock", "session", "openExternal", "quitApps"].contains(action) { deviceTest.end(.leave) }
 
         switch action {
@@ -400,14 +401,15 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         case "open_box":
             let lock = LockdownController.shared
             box.open(body: body, locked: lock.isLocked, preLock: lock.isPreLock,
-                     hasAttempt: AppSession.shared.exam?.attemptId != nil, container: window?.contentView) { [weak self] in self?.send($0) }
+                     hasAttempt: AppSession.shared.exam?.attemptId != nil, container: window?.contentView, above: webView) { [weak self] in self?.send($0) }
         case "close_box":
             box.close { [weak self] in self?.send($0) }
         case "rememberSave", "rememberUnlock", "rememberForget":
             let lock = LockdownController.shared
             remember.handle(action: action, body: body,
                             busy: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil
-                                || external.isActive || deviceTest.isRunning) { [weak self] in self?.send($0) }
+                                || self.external.isActive || self.deviceTest.isRunning) { [weak self] in self?.send($0) }
+            if action != "rememberUnlock" { sendState() }
         case "flushEvents":
             flushEventQueue()
         case "fileRefused":
@@ -1174,6 +1176,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         permissionShownAt = Date()
         content.addSubview(v, positioned: .above, relativeTo: webView)
         permissionView = v
+        updateBoxHold()
         startTrustPoll()
     }
 
@@ -1200,6 +1203,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         trustPoll?.invalidate(); trustPoll = nil
         permissionView?.removeFromSuperview()
         permissionView = nil; permissionStatus = nil
+        updateBoxHold()
     }
 
     @objc private func openAccessibility() {
@@ -1307,7 +1311,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             stack.widthAnchor.constraint(lessThanOrEqualTo: v.widthAnchor, constant: -80)
         ])
         blockingView = v; blockingLabel = l; blockingButton = b
+        updateBoxHold()
     }
+
+    private func updateBoxHold() { box.setHeld(blockingView != nil || permissionView != nil) }
 
     @objc private func blockingButtonPressed() {
         blockingAction?()
@@ -1317,6 +1324,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         if blockingView != nil { DebugLog.log("lock", "red blocking screen hidden") }
         blockingView?.removeFromSuperview()
         blockingView = nil; blockingLabel = nil; blockingButton = nil; blockingAction = nil
+        updateBoxHold()
     }
 
     // MARK: - Device test (DeviceTest.swift)

@@ -143,14 +143,24 @@ import WebKit
     }
 
     @Test func signInAndAssetHostsStayInsideTheBaseDomains() {
-        for good in ["a.box.com", "x.box.net", "cdn.boxcdn.net", "dl.boxcloud.com", "shib.oit.duke.edu", "*.duosecurity.com", "*.box.net"] {
-            #expect(BoxPolicy(body: Self.config(assets: [good]), allowDev: false) != nil, "\(good)")
+        for good in ["sso.services.box.net", "shib.oit.duke.edu", "*.duosecurity.com", "api-1234.duosecurity.com", "a.b.duosecurity.com"] {
             #expect(BoxPolicy(body: Self.config(signIn: [["host": good, "paths": NSNull()]]), allowDev: false) != nil, "\(good)")
         }
+        for good in ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com", "*.boxcloud.com", "dl.boxcloud.com"] {
+            #expect(BoxPolicy(body: Self.config(assets: [good]), allowDev: false) != nil, "\(good)")
+        }
         for bad in ["evil.com", "box.com.evil.com", "notbox.com", "duke.edu.cn", "*.com", "*", "xn--box-abc.box.com",
-                    "evil.test", "fakebox-login.test", "a.b.c.d.example.org", "https://a.box.com", "a.box.com/x", "A.BOX.COM.", ""] {
+                    "evil.test", "fakebox-login.test", "a.b.c.d.example.org", "https://a.box.com", "a.box.com/x", "A.BOX.COM.", "",
+                    "a.box.com", "x.box.net", "*.box.net", "*.box.com", "*.duke.edu", "www.duke.edu", "duke.edu", "duosecurity.com",
+                    "boxcloud.com", "cdn.boxcdn.net", "*.boxcdn.net", "evil.boxcdn.net", "api.box.net", "box.com"] {
             #expect(BoxPolicy(body: Self.config(assets: [bad]), allowDev: false) == nil, "\(bad)")
             #expect(BoxPolicy(body: Self.config(signIn: [["host": bad, "paths": NSNull()]]), allowDev: false) == nil, "\(bad)")
+        }
+        for badSignIn in ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com", "*.boxcloud.com"] {
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": badSignIn, "paths": NSNull()]]), allowDev: false) == nil, "\(badSignIn)")
+        }
+        for badAsset in ["sso.services.box.net", "shib.oit.duke.edu", "*.duosecurity.com", "duke.account.box.com"] {
+            #expect(BoxPolicy(body: Self.config(assets: [badAsset]), allowDev: false) == nil, "\(badAsset)")
         }
     }
 
@@ -181,7 +191,9 @@ import WebKit
     @Test func badListsAreRefused() {
         #expect(BoxPolicy(body: Self.config(signIn: [["host": "a.box.com", "paths": ["login"]]]), allowDev: false) == nil)
         #expect(BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "upload"]]), allowDev: false) == nil)
-        #expect(BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "/x", "methods": ["post"]]]), allowDev: false) == nil)
+        #expect(BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "/x", "methods": ["FETCH"]]]), allowDev: false) == nil)
+        #expect(BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "/x", "methods": ["CONNECT"]]]), allowDev: false) == nil)
+        #expect(BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "/x", "methods": []]]), allowDev: false) == nil)
         #expect(BoxPolicy(body: Self.config(blocked: [["host": "bad host", "path": "/x"]]), allowDev: false) == nil)
         var c = Self.config()
         c["asset_hosts"] = "cdn.boxcdn.net"
@@ -220,7 +232,7 @@ import WebKit
         #expect(BoxPolicy.openedDetail(URL(string: "https://duke.app.box.com/s/\(Self.token)")) == "duke.app.box.com")
         #expect(BoxPolicy.blockedDetail(URL(string: "https://duke.app.box.com/")) == "box duke.app.box.com /")
         #expect(BoxPolicy.pathClass(URL(string: "https://x.box.com/\(Self.token)/a")) == "?")
-        #expect(BoxPolicy.pathClass(URL(string: "https://x.box.com/1234567/a")) == "?")
+        #expect(BoxPolicy.pathClass(URL(string: "https://x.box.com/1234567/a")) == "1234567")
         #expect(!BoxPolicy.blockedDetail(u).contains("SECRET"))
         #expect(!BoxPolicy.blockedDetail(URL(string: "https://duke.app.box.com/s/\(Self.token)")).contains(Self.token))
         #expect(BoxPolicy.blockedDetail(nil) == "box ? ?")
@@ -255,6 +267,121 @@ import WebKit
         #expect(!BoxPolicy.glob("/a", "/a/b", caseInsensitive: false))
         #expect(BoxPolicy.glob("/A*", "/abc", caseInsensitive: true))
         #expect(!BoxPolicy.glob("/A*", "/abc", caseInsensitive: false))
+    }
+
+    // MARK: - review fixes
+
+    @Test func loginOnlyHostsNeedLoginPaths() {
+        for host in ["duke.account.box.com", "account.box.com"] {
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/login*"]]]), allowDev: false) != nil)
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/login", "/login/sso"]]]), allowDev: false) != nil)
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": NSNull()]]), allowDev: false) == nil)
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": []]]), allowDev: false) == nil)
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/login", "/settings"]]]), allowDev: false) == nil)
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/*"]]]), allowDev: false) == nil)
+        }
+    }
+
+    @Test func methodsAreTheSevenNamesInAnyCase() {
+        for m in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "post", "Patch"] {
+            let p = BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "/x", "methods": [m]]]), allowDev: false)
+            #expect(p?.blockedRequests.first?.methods == [m.uppercased()], "\(m)")
+        }
+        let p = Self.policy(Self.config(blocked: [["host": "*", "path": "/x", "methods": ["post"]]]))
+        #expect(p.decide(URL(string: "https://duke.app.box.com/x")!, mainFrame: true, method: "POST") == .block)
+    }
+
+    @Test func atMost128BlockedRules() {
+        let rule: [String: Any] = ["host": "*", "path": "/x"]
+        #expect(BoxPolicy(body: Self.config(blocked: Array(repeating: rule, count: 128)), allowDev: false) != nil)
+        #expect(BoxPolicy(body: Self.config(blocked: Array(repeating: rule, count: 129)), allowDev: false) == nil)
+    }
+
+    @Test func blockedPathsAreCaseInsensitiveWithOrWithoutSlash() {
+        #expect(decide("https://sso.services.box.net/Folder/1") == .block)
+        #expect(decide("https://sso.services.box.net/api/2.0/FOLDERS/", method: "POST") == .block)
+        #expect(decide("https://sso.services.box.net/api/2.0/folders", method: "POST") == .block)
+    }
+
+    @Test func signInPathsStayCaseSensitive() {
+        #expect(decide("https://duke.account.box.com/login") == .allow)
+        #expect(decide("https://duke.account.box.com/LOGIN") == .block)
+    }
+
+    @Test func scriptRulesCoverGetAndAnyMethod() {
+        let script = Self.policy().guardScript(handler: "fpbox")
+        #expect(script.contains("upload"))
+        #expect(script.contains("decodeURIComponent"))
+    }
+
+    @Test func openRefusedWhileACoverIsUp() {
+        #expect(BoxPolicy.openRefusal(locked: true, preLock: false, hasAttempt: true, covered: true) == BoxPolicy.notAvailable)
+        #expect(BoxPolicy.openRefusal(locked: true, preLock: false, hasAttempt: true, covered: false) == nil)
+        #expect(BoxPolicy.alreadyOpen == "Already open")
+    }
+
+    @Test func detailFromStringsNeverNeedsAURL() {
+        #expect(BoxPolicy.blockedDetail(host: "a", path: "/%zz") == "box a %zz".replacingOccurrences(of: "%zz", with: "?"))
+        #expect(BoxPolicy.blockedDetail(host: "Duke.App.Box.com", path: "/Folder/12") == "box duke.app.box.com folder")
+        #expect(BoxPolicy.blockedDetail(host: "a|b", path: "|") == "box ? ?")
+        #expect(BoxPolicy.blockedDetail(host: "", path: "") == "box ? /")
+        #expect(BoxPolicy.blockedDetail(host: "a.b", path: "no-slash/x") == "box a.b no-slash")
+        #expect(BoxPolicy.blockedDetail(host: String(repeating: "a", count: 101), path: "/") == "box ? /")
+        #expect(BoxPolicy.blockedDetail(host: "x.com", path: "/ünï") == "box x.com ?")
+    }
+
+    @Test func pathClassRules() {
+        #expect(BoxPolicy.pathClass(path: "/Upload") == "upload")
+        #expect(BoxPolicy.pathClass(path: "/a_b-c9/x") == "a_b-c9")
+        #expect(BoxPolicy.pathClass(path: "/1234567890123456") == "1234567890123456")
+        #expect(BoxPolicy.pathClass(path: "/12345678901234567") == "?")
+        #expect(BoxPolicy.pathClass(path: "/a.b") == "?")
+        #expect(BoxPolicy.pathClass(path: "/a%20b") == "?")
+        #expect(BoxPolicy.pathClass(path: "/") == "/")
+    }
+
+    // MARK: - URL change inside the pane
+
+    private func change(_ s: String?, watch: inout BoxPolicy.PrefixWatch, at t: TimeInterval = 0) -> BoxPolicy.PaneAction {
+        Self.policy().urlChange(s.flatMap { URL(string: $0) }, watch: &watch, now: Date(timeIntervalSince1970: 1_000 + t))
+    }
+
+    @Test func addressesUnderThePrefixAndOtherHostsStay() {
+        var w = BoxPolicy.PrefixWatch()
+        for s in ["https://duke.app.box.com/s/\(Self.token)", "https://duke.app.box.com/s/\(Self.token)/file/12?x=1#y",
+                  "https://duke.account.box.com/login", "https://sso.services.box.net/x", "about:blank", nil] {
+            #expect(change(s, watch: &w) == .stay, "\(s ?? "nil")")
+        }
+    }
+
+    @Test func anAppAddressOutsideThePrefixReloadsTheStartPage() {
+        var w = BoxPolicy.PrefixWatch()
+        #expect(change("https://duke.app.box.com/folder/0", watch: &w) == .reloadStart)
+        #expect(change("https://duke.box.com/", watch: &w, at: 10) == .reloadStart)
+        #expect(change("https://duke.app.box.com/s/\(Self.token)x", watch: &w, at: 20) == .reloadStart)
+        #expect(change("https://DUKE.app.box.com/search?q=a", watch: &w, at: 30) == .reloadStart)
+    }
+
+    @Test func hiddenSeparatorsAndDotSegmentsCountAsOutside() {
+        var w = BoxPolicy.PrefixWatch()
+        #expect(change("https://duke.app.box.com/s/\(Self.token)/../x", watch: &w, at: 0) == .reloadStart)
+        #expect(change("https://duke.app.box.com/s/\(Self.token)%2f..%2fx", watch: &w, at: 10) == .reloadStart)
+        #expect(change("https://duke.app.box.com:8443/s/\(Self.token)", watch: &w, at: 20) == .reloadStart)
+    }
+
+    @Test func threeInFiveSecondsClosesThePane() {
+        var w = BoxPolicy.PrefixWatch()
+        #expect(change("https://duke.app.box.com/a", watch: &w, at: 0) == .reloadStart)
+        #expect(change("https://duke.app.box.com/b", watch: &w, at: 1) == .reloadStart)
+        #expect(change("https://duke.app.box.com/c", watch: &w, at: 2) == .close)
+        #expect(change("https://duke.app.box.com/s/\(Self.token)", watch: &w, at: 3) == .stay)
+    }
+
+    @Test func slowRepeatsKeepReloading() {
+        var w = BoxPolicy.PrefixWatch()
+        for i in 0..<6 {
+            #expect(change("https://duke.app.box.com/a", watch: &w, at: Double(i) * 6) == .reloadStart)
+        }
     }
 
     @MainActor

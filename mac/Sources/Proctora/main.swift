@@ -63,8 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         main?.endDeviceTest(.leave)
-        main?.closeBox()
         let locked = LockdownController.shared.isLocked
+        if !locked { main?.closeBox() }
         DebugLog.log("app", locked ? "quit requested while locked: refused" : "quitting")
         return locked ? .terminateCancel : .terminateNow
     }

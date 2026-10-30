@@ -12,8 +12,16 @@ public struct BoxPolicy {
     public static let maxEntries = 64
     public static let maxText = 200
 
+    public static let alreadyOpen = "Already open"
+    public static let maxBlocked = 128
+    private static let methodNames: Set<String> = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
     private static let appCeiling: Set<String> = ["duke.box.com", "duke.app.box.com"]
-    private static let sharedBases = ["box.com", "box.net", "boxcdn.net", "boxcloud.com", "duke.edu", "duosecurity.com"]
+    private static let signInExact: Set<String> = ["duke.account.box.com", "account.box.com", "sso.services.box.net", "shib.oit.duke.edu"]
+    private static let loginPathOnly: Set<String> = ["duke.account.box.com", "account.box.com"]
+    private static let signInSubdomainsOf = ["duosecurity.com"]
+    private static let assetExact: Set<String> = ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com"]
+    private static let assetSubdomainsOf = ["boxcloud.com"]
 
     public struct SignInHost: Equatable {
         public let host: String
@@ -65,14 +73,14 @@ public struct BoxPolicy {
         guard let signRaw = body["sign_in_hosts"] as? [Any], signRaw.count <= Self.maxEntries else { return nil }
         for item in signRaw {
             guard let d = item as? [String: Any], let h = d["host"] as? String,
-                  let pattern = Self.pattern(h.lowercased()),
-                  Self.sharedCeilingOK(pattern, allowDev: allowDev) else { return nil }
+                  let pattern = Self.pattern(h.lowercased()) else { return nil }
             var paths: [String]?
             if let p = d["paths"], !(p is NSNull) {
                 guard let list = Self.strings(p), list.count <= Self.maxEntries,
                       list.allSatisfy({ $0.hasPrefix("/") && $0.utf8.count <= Self.maxText }) else { return nil }
                 paths = list
             }
+            guard Self.signInCeilingOK(pattern, paths: paths, allowDev: allowDev) else { return nil }
             signIn.append(SignInHost(host: h.lowercased(), paths: paths))
         }
 
@@ -80,12 +88,12 @@ public struct BoxPolicy {
         guard let assetRaw = body["asset_hosts"] as? [Any], assetRaw.count <= Self.maxEntries else { return nil }
         for item in assetRaw {
             guard let h = item as? String, let pattern = Self.pattern(h.lowercased()),
-                  Self.sharedCeilingOK(pattern, allowDev: allowDev) else { return nil }
+                  Self.assetCeilingOK(pattern, allowDev: allowDev) else { return nil }
             assets.append(h.lowercased())
         }
 
         var blocked: [BlockRule] = []
-        guard let blockRaw = body["blocked_requests"] as? [Any], blockRaw.count <= Self.maxEntries * 2 else { return nil }
+        guard let blockRaw = body["blocked_requests"] as? [Any], blockRaw.count <= Self.maxBlocked else { return nil }
         for item in blockRaw {
             guard let d = item as? [String: Any], let h = d["host"] as? String,
                   h == "*" || Self.pattern(h.lowercased()) != nil,
@@ -93,8 +101,8 @@ public struct BoxPolicy {
             var methods: [String]?
             if let m = d["methods"], !(m is NSNull) {
                 guard let list = Self.strings(m), !list.isEmpty, list.count <= 8,
-                      list.allSatisfy({ Self.matches($0, #"^[A-Z]{3,7}$"#) }) else { return nil }
-                methods = list
+                      list.allSatisfy({ Self.methodNames.contains($0.uppercased()) }) else { return nil }
+                methods = list.map { $0.uppercased() }
             }
             blocked.append(BlockRule(host: h.lowercased(), path: p, methods: methods))
         }
@@ -111,8 +119,8 @@ public struct BoxPolicy {
 
     /// The refusal text when the pane may not open now, else nil: only while an exam session is locked
     /// and running, never in the pre-exam lock and never unlocked.
-    public static func openRefusal(locked: Bool, preLock: Bool, hasAttempt: Bool) -> String? {
-        locked && !preLock && hasAttempt ? nil : notAvailable
+    public static func openRefusal(locked: Bool, preLock: Bool, hasAttempt: Bool, covered: Bool = false) -> String? {
+        locked && !preLock && hasAttempt && !covered ? nil : notAvailable
     }
 
     /// The pane never outlives the lock.
@@ -168,6 +176,43 @@ public struct BoxPolicy {
         }
     }
 
+    // MARK: - URL change inside the pane (single-page apps move without a page load)
+
+    public enum PaneAction: Equatable {
+        case stay
+        case reloadStart
+        case close
+    }
+
+    /// Three outside-the-prefix addresses within five seconds close the pane instead of reloading it again.
+    public struct PrefixWatch {
+        private var times: [Date] = []
+        public static let window: TimeInterval = 5
+        public static let limit = 3
+        public init() {}
+
+        public mutating func violation(at now: Date) -> PaneAction {
+            times = times.filter { now.timeIntervalSince($0) < Self.window }
+            times.append(now)
+            return times.count >= Self.limit ? .close : .reloadStart
+        }
+    }
+
+    /// True when `url` is on an app host but not under the shared item's path. Other hosts (sign-in,
+    /// assets) are the navigation rules' business; an app-host address that cannot be read cleanly counts as outside.
+    public func isOutsidePrefix(_ url: URL?) -> Bool {
+        guard let url, !Self.isBlankFrame(url),
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let host = comps.host?.lowercased(), appHosts.contains(host) else { return false }
+        guard url.scheme?.lowercased() == "https", comps.user == nil, comps.password == nil,
+              comps.port == nil || comps.port == 443, let path = Self.cleanPath(url) else { return true }
+        return !underPrefix(path)
+    }
+
+    public func urlChange(_ url: URL?, watch: inout PrefixWatch, now: Date = Date()) -> PaneAction {
+        isOutsidePrefix(url) ? watch.violation(at: now) : .stay
+    }
+
     public static func isBlankFrame(_ url: URL) -> Bool {
         let s = url.absoluteString.lowercased()
         return s == "about:blank" || s == "about:srcdoc"
@@ -179,21 +224,36 @@ public struct BoxPolicy {
         "box \(safeHost(url)) \(pathClass(url))"
     }
 
+    /// For a host and path the page script reported: plain strings, never turned into a URL.
+    public static func blockedDetail(host: String, path: String) -> String {
+        "box \(safeHostName(host)) \(pathClass(path: path))"
+    }
+
     public static func openedDetail(_ url: URL?) -> String { safeHost(url) }
 
-    public static func safeHost(_ url: URL?) -> String {
-        guard let h = url?.host?.lowercased(), !h.isEmpty, h.utf8.count <= 100,
+    public static func safeHost(_ url: URL?) -> String { safeHostName(url?.host) }
+
+    public static func safeHostName(_ host: String?) -> String {
+        guard let h = host?.lowercased(), !h.isEmpty, h.utf8.count <= 100,
               h.utf8.allSatisfy({ ($0 >= 0x61 && $0 <= 0x7A) || ($0 >= 0x30 && $0 <= 0x39) || $0 == 0x2E || $0 == 0x2D }) else { return "?" }
         return h
     }
 
-    /// The first path segment only; "/" for the root; "?" when it is not a short lowercase word (a token, an id).
+    /// The first path segment only, lowercased; "/" for the root; "?" when it is longer than 16 characters
+    /// or has anything but a-z 0-9 _ - (a token, an encoded name).
     public static func pathClass(_ url: URL?) -> String {
         guard let url, let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return "?" }
-        let seg = comps.percentEncodedPath.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        return pathClass(path: comps.percentEncodedPath)
+    }
+
+    public static func pathClass(path: String) -> String {
+        let seg = path.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
         if seg.isEmpty { return "/" }
-        let plain = seg.utf8.count <= 16 && seg.utf8.allSatisfy { ($0 >= 0x61 && $0 <= 0x7A) || $0 == 0x2D || $0 == 0x5F }
-        return plain ? seg : "?"
+        let low = seg.lowercased()
+        let plain = low.utf8.count <= 16 && low.utf8.allSatisfy {
+            ($0 >= 0x61 && $0 <= 0x7A) || ($0 >= 0x30 && $0 <= 0x39) || $0 == 0x2D || $0 == 0x5F
+        }
+        return plain ? low : "?"
     }
 
     /// The host as the strip shows it (punycode as WebKit reports it, so a look-alike shows).
@@ -227,9 +287,8 @@ public struct BoxPolicy {
     /// Rules the content rule list cannot express (a method that is not GET): the page script refuses
     /// those fetch / XHR / beacon calls and tells the app the host and first path segment.
     private var scriptRules: [[String: Any]] {
-        blockedRequests.compactMap { rule in
-            guard let m = rule.methods, !m.contains("GET") else { return nil }
-            return ["h": rule.host, "p": Self.globRegexSource(rule.path), "m": m]
+        blockedRequests.map { rule in
+            ["h": rule.host, "p": Self.globRegexSource(rule.path), "m": rule.methods ?? Self.methodNames.sorted()]
         }
     }
 
@@ -252,9 +311,12 @@ public struct BoxPolicy {
             var u;
             try { u = new URL(String(url), location.href); } catch (e) { return false; }
             var m = String(method || 'GET').toUpperCase();
+            var decoded = u.pathname;
+            try { decoded = decodeURIComponent(u.pathname); } catch (e) {}
             for (var i = 0; i < rules.length; i++) {
               var r = rules[i];
-              if (r.m.indexOf(m) >= 0 && hostOk(r.h, u.hostname.toLowerCase()) && new RegExp(r.p, 'i').test(u.pathname)) {
+              if (r.m.indexOf(m) >= 0 && hostOk(r.h, u.hostname.toLowerCase())
+                  && (new RegExp(r.p, 'i').test(u.pathname) || new RegExp(r.p, 'i').test(decoded))) {
                 if (sent < 20) {
                   sent++;
                   try { window.webkit.messageHandlers.\(handler).postMessage({ host: u.hostname, path: u.pathname }); } catch (e) {}
@@ -394,9 +456,26 @@ public struct BoxPolicy {
         return allowDev && h.hasPrefix("fakebox-") && h.hasSuffix(".test")
     }
 
-    private static func sharedCeilingOK(_ p: Pattern, allowDev: Bool) -> Bool {
+    /// An exact host from the list, or a name below one of the listed bases ("*.duosecurity.com" or
+    /// "api-x.duosecurity.com"; the base itself never).
+    private static func inCeiling(_ p: Pattern, exact: Set<String>, below: [String]) -> Bool {
+        if !p.wildcard, exact.contains(p.base) { return true }
+        return below.contains { p.base.hasSuffix("." + $0) || (p.wildcard && p.base == $0) }
+    }
+
+    private static func signInCeilingOK(_ p: Pattern, paths: [String]?, allowDev: Bool) -> Bool {
         if allowDev, p.base.hasSuffix(".test") { return true }
-        return sharedBases.contains { p.base.hasSuffix("." + $0) || (p.wildcard && p.base == $0) }
+        guard inCeiling(p, exact: signInExact, below: signInSubdomainsOf) else { return false }
+        if !p.wildcard, loginPathOnly.contains(p.base) {
+            guard let paths, !paths.isEmpty else { return false }
+            return paths.allSatisfy { $0.hasPrefix("/login") }
+        }
+        return true
+    }
+
+    private static func assetCeilingOK(_ p: Pattern, allowDev: Bool) -> Bool {
+        if allowDev, p.base.hasSuffix(".test") { return true }
+        return inCeiling(p, exact: assetExact, below: assetSubdomainsOf)
     }
 
     private static func strings(_ v: Any?) -> [String]? {

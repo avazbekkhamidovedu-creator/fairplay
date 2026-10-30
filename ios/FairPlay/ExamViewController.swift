@@ -598,7 +598,8 @@ final class ExamViewController: UIViewController, LockSurface,
         DebugLog.log("bridge", "page -> app: \(action)")
         if ["lock", "session", "prelock", "openExternal"].contains(action) { deviceTest.end(.leave) }
         if ["lock", "session", "prelock", "openExternal"].contains(action) { homework.dismiss() }
-        if ["prelock", "openExternal"].contains(action) { box.close() }
+        if ["prelock", "openExternal", "seal"].contains(action) { box.close() }
+        if action == "session", (body["attempt_id"] as? String) != AppSession.shared.exam?.attemptId { box.close() }
 
         switch action {
         case "deviceTestLeave":
@@ -613,14 +614,16 @@ final class ExamViewController: UIViewController, LockSurface,
         case "open_box":
             let lock = LockdownController.shared
             box.open(body: body, locked: lock.isLocked, preLock: lock.isPreLock || lock.preLockInFlight,
-                     hasAttempt: AppSession.shared.exam?.attemptId != nil, container: view) { [weak self] in self?.send($0) }
+                     hasAttempt: AppSession.shared.exam?.attemptId != nil, container: shield.content, above: webView,
+                     top: bar.bottomAnchor, raise: { [weak self] in self?.raiseCovers() }) { [weak self] in self?.send($0) }
         case "close_box":
             box.close { [weak self] in self?.send($0) }
         case "rememberSave", "rememberUnlock", "rememberForget":
             let lock = LockdownController.shared
             remember.handle(action: action, body: body,
                             busy: lock.isLocked || lock.lockInFlight || lock.preLockInFlight
-                                || AppSession.shared.exam != nil || external.isActive || deviceTest.isRunning) { [weak self] in self?.send($0) }
+                                || AppSession.shared.exam != nil || self.external.isActive || self.deviceTest.isRunning) { [weak self] in self?.send($0) }
+            if action != "rememberUnlock" { sendState() }
         case "hello":
             sendState()
         case "flushEvents":
@@ -1320,6 +1323,7 @@ final class ExamViewController: UIViewController, LockSurface,
             stack.widthAnchor.constraint(lessThanOrEqualTo: v.widthAnchor, constant: -80),
         ])
         blockingView = v; blockingLabel = l; blockingButton = b
+        updateBoxHold()
         // Re-review N3: covering is not enough; the exam also loses the keyboard (on-screen
         // and hardware), touches and VoiceOver until the problem is fixed.
         webView.endEditing(true)
@@ -1335,12 +1339,13 @@ final class ExamViewController: UIViewController, LockSurface,
         DebugLog.log("lock", "red blocking screen hidden")
         blockingView?.removeFromSuperview()
         blockingView = nil; blockingLabel = nil; blockingButton = nil; blockingAction = nil
+        updateBoxHold()
         webView.isUserInteractionEnabled = true
         webView.accessibilityElementsHidden = false
     }
 
     func setPrivacyCover(_ on: Bool) {
-        if !on { privacyCover?.removeFromSuperview(); privacyCover = nil; return }
+        if !on { privacyCover?.removeFromSuperview(); privacyCover = nil; updateBoxHold(); return }
         guard privacyCover == nil else { return }
         let v = UIView()
         v.backgroundColor = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
@@ -1358,6 +1363,15 @@ final class ExamViewController: UIViewController, LockSurface,
             l.centerXAnchor.constraint(equalTo: v.centerXAnchor), l.centerYAnchor.constraint(equalTo: v.centerYAnchor),
         ])
         privacyCover = v
+        updateBoxHold()
+    }
+
+    private func updateBoxHold() { box.setHeld(blockingView != nil || privacyCover != nil) }
+
+    private func raiseCovers() {
+        shield.content.bringSubviewToFront(bar)
+        if let blockingView { shield.content.bringSubviewToFront(blockingView) }
+        if let privacyCover { shield.content.bringSubviewToFront(privacyCover) }
     }
 
     // MARK: - Website exam finish confirmation

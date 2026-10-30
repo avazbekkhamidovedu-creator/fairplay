@@ -107,4 +107,58 @@ import Foundation
         let (r, _, _) = make()
         #expect(r.handle(action: "hello", body: [:], busy: false) { _ in } == false)
     }
+
+    @Test func savedResultAndFailedSaveForgetsTheOlderItem() throws {
+        let (r, s, _) = make()
+        var out: [String: Any] = [:]
+        r.handle(action: "rememberSave", body: ["token": "one", "name": "A"], busy: false) { out = $0 }
+        #expect(out["type"] as? String == "rememberResult")
+        #expect(out["saved"] as? Bool == true)
+        r.handle(action: "rememberSave", body: ["token": "", "name": "A"], busy: false) { out = $0 }
+        #expect(out["saved"] as? Bool == false)
+        #expect(try s.load() == nil)
+        #expect(s.name() == nil)
+    }
+
+    @Test func throwingSaveForgetsTheOlderItem() throws {
+        let s = FailingSaveStore()
+        let r = HomeworkRemember(store: s, canGate: { true }, gate: { _, done in done(.passed) })
+        s.preload("old", "Old")
+        var out: [String: Any] = [:]
+        r.handle(action: "rememberSave", body: ["token": "new", "name": "A"], busy: false) { out = $0 }
+        #expect(out["saved"] as? Bool == false)
+        #expect(try s.load() == nil)
+    }
+
+    @Test func unavailableSaveForgetsAndAnswersNotSaved() throws {
+        let (r, s, _) = make(canGate: false)
+        try s.save(token: "old", name: "Old")
+        var out: [String: Any] = [:]
+        r.handle(action: "rememberSave", body: ["token": "new", "name": "A"], busy: false) { out = $0 }
+        #expect(out["saved"] as? Bool == false)
+        #expect(s.name() == nil)
+    }
+
+    @Test func unlockRefusesWhenAnExamStartedDuringThePrompt() {
+        var busy = false
+        let g = Gate()
+        let s = MemoryRememberStore()
+        let r = HomeworkRemember(store: s, canGate: { true }, gate: { reason, done in busy = true; g.asked.append(reason); done(.passed) })
+        r.handle(action: "rememberSave", body: ["token": "tok", "name": "A"], busy: false) { _ in }
+        var out: [String: Any] = [:]
+        r.handle(action: "rememberUnlock", body: [:], busy: busy) { out = $0 }
+        #expect(out["token"] == nil)
+        #expect(out["error"] as? String == HomeworkRemember.notDuringExam)
+    }
+
+    private final class FailingSaveStore: RememberStore {
+        private var token: String?
+        private var savedName: String?
+        var isWorking = true
+        func preload(_ t: String, _ n: String) { token = t; savedName = n }
+        func save(token: String, name: String) throws { throw NSError(domain: "x", code: 1) }
+        func load() throws -> String? { token }
+        func forget() throws { token = nil; savedName = nil }
+        func name() -> String? { token == nil ? nil : savedName }
+    }
 }

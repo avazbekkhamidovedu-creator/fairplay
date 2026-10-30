@@ -27,7 +27,7 @@ import Foundation
         let l = login()
         #expect(l.state == state)
         #expect(l.resumePaths == ["/"])
-        #expect(login(resume: ["/home", "bad", "/"]).resumePaths == ["/home", "/"])
+        #expect(login(resume: ["/home", "/"]).resumePaths == ["/home", "/"])
         #expect(login(resume: []).resumePaths == ["/"])
     }
 
@@ -54,7 +54,8 @@ import Foundation
     @Test func allowsOnlyHttpsOnAllowedHosts() {
         #expect(decide("https://oj.dukekunshan.edu.cn/x") == .allow)
         #expect(decide("https://login.dukekunshan.edu.cn/idp?a=1") == .allow)
-        #expect(decide("https://DUKEKUNSHAN.edu.cn/") == .allow)
+        #expect(decide("https://DUKEKUNSHAN.edu.cn/") == .block)
+        #expect(decide("https://WWW.dukekunshan.edu.cn/") == .allow)
         #expect(decide("https://oj.dukekunshan.edu.cn:443/x") == .allow)
         #expect(decide("http://oj.dukekunshan.edu.cn/x") == .block)
         #expect(decide("https://example.com/") == .block)
@@ -146,7 +147,8 @@ import Foundation
         #expect(ok["ticket"] as? String == "Tick-0123456789ab")
         let cancelled = l.message(for: .cancelled)
         #expect(cancelled["cancelled"] as? Bool == true)
-        #expect(cancelled["state"] == nil && cancelled["ticket"] == nil)
+        #expect(cancelled["state"] as? String == state && cancelled["ticket"] == nil)
+        #expect(HomeworkLogin.message(state: nil, outcome: .cancelled)["state"] == nil)
         let failed = HomeworkLogin.message(state: state, outcome: .failed("x"))
         #expect(failed["state"] as? String == state)
         #expect(failed["error"] as? String == "x")
@@ -156,5 +158,36 @@ import Foundation
     @Test func displayHostShowsPunycode() {
         #expect(HomeworkLogin.displayHost(URL(string: "https://OJ.DukeKunshan.edu.cn/x")) == "oj.dukekunshan.edu.cn")
         #expect(HomeworkLogin.displayHost(nil) == "")
+    }
+
+    @Test func wildcardMatchesSubdomainsOnly() {
+        let hosts = ["*.dukekunshan.edu.cn", "oj.example.org"]
+        func allowed(_ s: String) -> Bool { HomeworkLogin.allows(URL(string: s)!, hosts: hosts) }
+        #expect(allowed("https://a.dukekunshan.edu.cn/"))
+        #expect(allowed("https://a.b.dukekunshan.edu.cn/"))
+        #expect(!allowed("https://dukekunshan.edu.cn/"))
+        #expect(!allowed("https://xdukekunshan.edu.cn/"))
+        #expect(!allowed("https://dukekunshan.edu.cn.evil.com/"))
+        #expect(allowed("https://oj.example.org/"))
+        #expect(!allowed("https://sub.oj.example.org/"))
+    }
+
+    @Test func oneBadHostOrResumePathRefusesTheWholeMessage() {
+        #expect(HomeworkLogin(body: body(hosts: ["oj.dukekunshan.edu.cn", "https://x.com"])) == nil)
+        #expect(HomeworkLogin(body: body(hosts: ["oj.dukekunshan.edu.cn", "*.github.io"])) == nil)
+        #expect(HomeworkLogin(body: body(hosts: ["oj.dukekunshan.edu.cn", "10.0.0.1"])) == nil)
+        var notStrings = body(); notStrings["allowed_hosts"] = ["oj.dukekunshan.edu.cn", 5]
+        #expect(HomeworkLogin(body: notStrings) == nil)
+        #expect(HomeworkLogin(body: body(resume: ["/ok", "bad"])) == nil)
+        var badResume = body(); badResume["resume_paths"] = ["/ok", 7]
+        #expect(HomeworkLogin(body: badResume) == nil)
+        badResume["resume_paths"] = "/ok"
+        #expect(HomeworkLogin(body: badResume) == nil)
+    }
+
+    @Test func atMostTwentyHosts() {
+        let many = (0..<21).map { "h\($0).dukekunshan.edu.cn" }
+        #expect(HomeworkLogin(body: body(hosts: Array(many.prefix(20)), start: "https://h0.dukekunshan.edu.cn/")) != nil)
+        #expect(HomeworkLogin(body: body(hosts: many, start: "https://h0.dukekunshan.edu.cn/")) == nil)
     }
 }

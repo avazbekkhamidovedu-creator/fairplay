@@ -15,7 +15,10 @@ final class HomeworkLoginCoordinator {
             send(HomeworkLogin.message(state: state, outcome: .failed(text)))
             return
         }
-        guard sheet == nil else { return }
+        guard sheet == nil else {
+            send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
+            return
+        }
         guard let login = HomeworkLogin(body: body) else {
             send(HomeworkLogin.message(state: state, outcome: .failed(HomeworkLogin.startFailed)))
             return
@@ -44,6 +47,7 @@ final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate,
     private let hostLabel = UILabel()
     private let noteLabel = UILabel()
     private var completion: ((HomeworkLogin.Outcome?) -> Void)?
+    private var ended = false
 
     init(login: HomeworkLogin, completion: @escaping (HomeworkLogin.Outcome?) -> Void) {
         self.login = login
@@ -57,6 +61,7 @@ final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate,
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
+        guard !ended else { return }
 
         let config = WKWebViewConfiguration()
         config.websiteDataStore = store
@@ -113,16 +118,26 @@ final class HomeworkLoginViewController: UIViewController, WKNavigationDelegate,
 
     /// Close, wipe the data store and answer once. nil = no answer (sign-out, exam start).
     func end(_ outcome: HomeworkLogin.Outcome?) {
-        guard let done = completion else { return }
+        let done = completion
         completion = nil
+        ended = true
         webView?.navigationDelegate = nil
         webView?.uiDelegate = nil
         webView?.stopLoading()
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
         webView?.removeFromSuperview()
         webView = nil
+        if !isBeingDismissed { dismissSheet() }
+        if let done { done(outcome) }
+    }
+
+    /// A dismiss during the present transition is ignored by UIKit: wait for the transition, then dismiss.
+    private func dismissSheet(attempt: Int = 0) {
+        if isBeingPresented, attempt < 30 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.dismissSheet(attempt: attempt + 1) }
+            return
+        }
         presentingViewController?.dismiss(animated: true)
-        done(outcome)
     }
 
     private func handle(_ nav: HomeworkLogin.Navigation) -> Bool {
