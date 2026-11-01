@@ -51,14 +51,25 @@ import CoreGraphics
         #expect(!hit("https://c.edu/courses/999/quizzes/456/submissions/9"))
     }
 
-    @Test func overlayIgnoresSizeAndUnresolvedInputBundleFailsClosed() {
+    @Test func overlayMinimumSizeAndSystemOwners() {
         let level = 2_000
-        let list: [[String: Any]] = [
-            [kCGWindowOwnerPID as String: NSNumber(value: 10), kCGWindowLayer as String: NSNumber(value: level),
-             kCGWindowOwnerName as String: "Tiny", kCGWindowBounds as String: ["Width": 2, "Height": 2]]]
-        #expect(SystemChecks.overlays(in: list, myPid: 99, myLevel: level).count == 1)
+        func win(_ pid: Int, _ owner: String, _ w: Int, _ h: Int, alpha: Double = 1) -> [String: Any] {
+            [kCGWindowOwnerPID as String: NSNumber(value: pid), kCGWindowLayer as String: NSNumber(value: level),
+             kCGWindowOwnerName as String: owner, kCGWindowAlpha as String: NSNumber(value: alpha),
+             kCGWindowBounds as String: ["Width": w, "Height": h]]
+        }
+        let list = [win(10, "Small", 12, 12), win(11, "Hairline", 1, 400), win(12, "Clear", 300, 200, alpha: 0),
+                    win(13, "Window Server", 30, 30), win(14, "Dock", 300, 20), win(15, "SystemUIServer", 30, 22),
+                    win(16, "ControlCenter", 30, 22), win(17, "loginwindow", 300, 200), win(99, "FairPlay", 300, 200)]
+        #expect(SystemChecks.overlays(in: list, myPid: 99, myLevel: level) == [SystemChecks.Overlay(pid: 10, owner: "Small")])
+    }
+
+    @Test func unresolvedInputBundleFallsBackToApplePrefix() {
+        #expect(SystemChecks.inputMethodBundleIsApple(nil, bundleId: "com.apple.inputmethod.SCIM"))
+        #expect(SystemChecks.inputMethodBundleIsApple(nil, bundleId: "com.apple.keylayout.ABC"))
+        #expect(!SystemChecks.inputMethodBundleIsApple(nil, bundleId: "com.sogou.inputmethod"))
         #expect(!SystemChecks.inputMethodBundleIsApple(nil))
         #expect(SystemChecks.inputMethodBundleIsApple(URL(fileURLWithPath: "/System/Library/Input Methods/X.app")))
-        #expect(!SystemChecks.inputMethodBundleIsApple(URL(fileURLWithPath: "/Applications/X.app")))
+        #expect(!SystemChecks.inputMethodBundleIsApple(URL(fileURLWithPath: "/Applications/X.app"), bundleId: "com.apple.inputmethod.Fake"))
     }
 }

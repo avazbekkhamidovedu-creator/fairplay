@@ -266,7 +266,12 @@ enum SystemChecks {
 
     /// From CGWindowListCopyWindowInfo: on-screen windows of other processes whose layer is
     /// at or above ours (our locked window sits at the maximum level, so only a window at
-    /// that same level can be drawn over it), and visible, whatever their size.
+    /// that same level can be drawn over it) and visible. Windows under 2 pt, fully transparent
+    /// ones and those of system UI processes (cursor, indicators) are ignored.
+    static let overlayIgnoredOwners: Set<String> = [
+        "windowserver", "window server", "dock", "systemuiserver", "controlcenter", "loginwindow",
+    ]
+
     static func overlays(in list: [[String: Any]], myPid: pid_t, myLevel: Int) -> [Overlay] {
         var out: [Overlay] = []
         for w in list {
@@ -274,7 +279,13 @@ enum SystemChecks {
                   let layer = (w[kCGWindowLayer as String] as? NSNumber)?.intValue, layer >= myLevel else { continue }
             let alpha = (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
             guard alpha > 0.01 else { continue }
+            if let b = w[kCGWindowBounds as String] as? [String: Any] {
+                let width = (b["Width"] as? NSNumber)?.doubleValue ?? 0
+                let height = (b["Height"] as? NSNumber)?.doubleValue ?? 0
+                if width < 2 || height < 2 { continue }
+            }
             let owner = (w[kCGWindowOwnerName as String] as? String) ?? "pid \(pid)"
+            if overlayIgnoredOwners.contains(owner.lowercased()) { continue }
             if !out.contains(where: { $0.pid == pid }) { out.append(Overlay(pid: pid, owner: owner)) }
         }
         return out
@@ -305,12 +316,15 @@ enum SystemChecks {
         guard inputSourceAllowed(id) else { return false }
         guard let bPtr = TISGetInputSourceProperty(src, kTISPropertyBundleID) else { return true }
         let bundleId = Unmanaged<CFString>.fromOpaque(bPtr).takeUnretainedValue() as String
-        return inputMethodBundleIsApple(NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId))
+        return inputMethodBundleIsApple(NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId), bundleId: bundleId)
     }
 
-    static func inputMethodBundleIsApple(_ url: URL?) -> Bool {
-        guard let url else { return false }
-        return url.path.hasPrefix("/System/")
+    /// A bundle that resolves must live in /System. One that cannot be resolved (background-only
+    /// Apple input methods) falls back to the Apple bundle-id prefixes.
+    static func inputMethodBundleIsApple(_ url: URL?, bundleId: String = "") -> Bool {
+        if let url { return url.path.hasPrefix("/System/") }
+        let id = bundleId.lowercased()
+        return ["com.apple.inputmethod.", "com.apple.keylayout.", "com.apple."].contains { id.hasPrefix($0) }
     }
 
     /// Switch to an Apple ASCII-capable keyboard; false if none is enabled.

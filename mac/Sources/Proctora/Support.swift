@@ -219,6 +219,7 @@ final class EventLog {
         case canvasUploadUnsupported
         case canvasSsoPopup(String)
         case boxOpened(String)
+        case deviceKeyUnavailable(String)
 
         /// (type, detail) as sent to the server.
         var pair: (String, String) {
@@ -255,6 +256,7 @@ final class EventLog {
             case .canvasUploadUnsupported: return ("canvas_upload_unsupported", "file questions need a file panel")
             case .canvasSsoPopup(let s): return ("canvas_sso_popup", s)
             case .boxOpened(let s): return ("box_opened", s)
+            case .deviceKeyUnavailable(let s): return ("device_key_unavailable", s)
             }
         }
     }

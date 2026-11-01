@@ -27,6 +27,7 @@ final class AppSession {
     private(set) var offlineKey: Data?
     private var offlineKeyTries = 0
     let deviceId: String
+    private let binding: DeviceBinding
     /// Short check summary for beats, e.g. "vm=0,disp=1,mir=0,tap=1,inp=1,proc=0".
     var checksProvider: (() -> String)?
     /// Called on the main thread with the attempt status from each beat ("submitted"...).
@@ -39,7 +40,32 @@ final class AppSession {
     private var lastTs: Int64 = 0
 
     private init() {
-        deviceId = AppSession.loadDeviceId()
+        let evidence = AppSession.legacyEvidence()
+        binding = DeviceBinding.resolve(legacyId: AppSession.loadDeviceId(), evidence: { evidence },
+                                        store: KeychainDeviceKeyStore(namespace: "ai.proctora.student.mac"))
+        deviceId = binding.deviceId
+    }
+
+    /// An earlier FairPlay run left files or preferences behind, so the server may already
+    /// know this Mac by its hardware / file id (the hardware id itself leaves no trace).
+    private static func legacyEvidence() -> LegacyEvidence {
+        let fm = FileManager.default
+        if let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let folder = base.appendingPathComponent("FairPlay", isDirectory: true)
+            if let items = try? fm.contentsOfDirectory(atPath: folder.path), !items.isEmpty { return .present }
+        }
+        if let id = Bundle.main.bundleIdentifier,
+           let domain = UserDefaults.standard.persistentDomain(forName: id), !domain.isEmpty { return .present }
+        return .absent
+    }
+
+    private var keyFailureReported = false
+
+    private func reportKeyFailureOnce() {
+        guard !keyFailureReported, let why = binding.failure else { return }
+        keyFailureReported = true
+        DebugLog.log("app", "device key unavailable, legacy device proof: \(why)")
+        EventLog.shared.record(.deviceKeyUnavailable(why))
     }
 
     // MARK: - Identity + signing
@@ -108,9 +134,16 @@ final class AppSession {
         guard AppSession.isSafeToken(nonce, min: 8, max: 128) else {
             return ["type": "attestationFailed", "nonce": nonce, "reason": "bad_nonce"]
         }
-        return ["type": "attestation", "nonce": nonce, "device_id": deviceId,
-                "signature": AppSession.sign(AppSession.startMessage(nonce: nonce, deviceId: deviceId)),
+        let proof = binding.proof { AppSession.startMessage(nonce: nonce, deviceId: $0) }
+        reportKeyFailureOnce()
+        var reply: [String: Any] = ["type": "attestation", "nonce": nonce, "device_id": proof.deviceId,
+                "signature": AppSession.sign(AppSession.startMessage(nonce: nonce, deviceId: proof.deviceId)),
                 "version": Config.version, "build": Config.isDevBuild ? "dev" : "release"]
+        if let pub = proof.publicKey, let sig = proof.signature {
+            reply["device_pub"] = pub
+            reply["device_sig"] = sig
+        }
+        return reply
     }
 
     // MARK: - Exam session + beats

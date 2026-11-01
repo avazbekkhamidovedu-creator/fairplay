@@ -516,7 +516,8 @@ final class ExternalExamController {
     }
 
     func blocksExamHostFrame(_ url: URL) -> Bool {
-        url.host?.lowercased() == examHost && blocksMainFrame(url)
+        guard let scope = session?.scope, url.host?.lowercased() == examHost else { return false }
+        return !CanvasNavigation.isHelperFrame(url, scope: scope) && blocksMainFrame(url)
     }
 
     func allowsMainFrame(_ url: URL) -> Bool {
