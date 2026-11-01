@@ -218,6 +218,9 @@ final class AppSession {
 
     /// Invigilator exit code, checked (and rate-limited) by the server; "ok" only counts
     /// with the server's signature.
+    /// Seconds the server asked us to wait after the last 429 (nil when it did not say).
+    private(set) var exitRetryAfter: Int?
+
     func checkExitCode(_ code: String, _ done: @escaping @MainActor (Signing.ExitResult) -> Void) {
         guard let exam else { done(.noSession); return }
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -226,6 +229,7 @@ final class AppSession {
             let r = Signing.exitResult(key: Config.appKey, status: status, json: json, attemptId: exam.attemptId,
                                        session: exam.session, nonce: nonce)
             if r == .serverError(200) { EventLog.shared.record("server_reply_unsigned", "exit-code answer") }
+            self.exitRetryAfter = r == .tooMany ? ExitCodeInput.retryAfterSeconds(json: json) : nil
             done(r)
         }
     }

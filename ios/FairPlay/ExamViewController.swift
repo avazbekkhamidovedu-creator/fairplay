@@ -1246,6 +1246,10 @@ final class ExamViewController: UIViewController, LockSurface,
     }
 
     func exitLockedMode() {
+        exitTicker?.invalidate(); exitTicker = nil
+        exitBusy = false
+        exitBlockedUntil = .distantPast
+        bar.setExit(title: "Invigilator exit", enabled: true)
         ExamViewController.lastLockedPage = nil
         allowedSites = []                            // the next exam sends its own
         lastStartExamId = nil                        // 2026-10-23 (review): the next pre-exam lock sets its own
@@ -1400,7 +1404,26 @@ final class ExamViewController: UIViewController, LockSurface,
 
     /// The code is per exam, lives only on the server (teacher's live room) and is
     /// rate-limited there. No server / an error: the offline code instead.
-    func promptEmergencyExit() {
+    private var exitBusy = false
+    private var exitBlockedUntil = Date.distantPast
+    private var exitTicker: Timer?
+
+    private func refreshExitButton() {
+        let left = Int(exitBlockedUntil.timeIntervalSinceNow.rounded(.up))
+        if left > 0 {
+            bar.setExit(title: "Wait \(ExitCodeInput.waitText(seconds: left))", enabled: false)
+            if exitTicker == nil {
+                exitTicker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshExitButton() }
+                }
+            }
+        } else {
+            exitTicker?.invalidate(); exitTicker = nil
+            bar.setExit(title: exitBusy ? "Checking…" : "Invigilator exit", enabled: !exitBusy)
+        }
+    }
+
+    func promptEmergencyExit(hint: String? = nil) {
         DebugLog.log("exit", "invigilator exit opened (locked=\(LockdownController.shared.isLocked))")
         // 2026-10-23: the pre-exam lock has no attempt to protect: this just unlocks (no
         // code, no server, no exit event).
@@ -1412,17 +1435,24 @@ final class ExamViewController: UIViewController, LockSurface,
             sendState()
             return
         }
-        guard LockdownController.shared.isLocked, presentedViewController == nil else { return }
+        guard LockdownController.shared.isLocked, presentedViewController == nil, !exitBusy else { return }
+        let waitLeft = Int(exitBlockedUntil.timeIntervalSinceNow.rounded(.up))
+        if waitLeft > 0 {
+            notice("Too many wrong codes. Try again in \(ExitCodeInput.waitText(seconds: waitLeft)).")
+            return
+        }
         let a = UIAlertController(title: "Invigilator exit",
-                                  message: "Enter the invigilator code from the teacher's live room to end locked mode. The teacher will see this."
+                                  message: (hint.map { $0 + "\n\n" } ?? "")
+                                    + "Enter the 6-digit invigilator code from the teacher's live room to end locked mode. The teacher will see this."
                                     + "\n\nNo connection or an error? Choose \"Offline code\"."
                                     + (Config.isDevBuild ? "\n\nDev build: 0000 also works." : ""),
                                   preferredStyle: .alert)
         a.addTextField { f in
-            f.placeholder = "Invigilator code"
+            f.placeholder = "6-digit code"
             f.isSecureTextEntry = true
             f.keyboardType = .asciiCapableNumberPad
             f.accessibilityIdentifier = "invigilatorCode"
+            f.accessibilityLabel = "Invigilator code, 6 digits"
         }
         a.addAction(UIAlertAction(title: "End locked mode", style: .destructive) { [weak self, weak a] _ in
             self?.checkInvigilatorCode(a?.textFields?.first?.text ?? "")
@@ -1442,13 +1472,28 @@ final class ExamViewController: UIViewController, LockSurface,
             endLock()
             return
         }
-        AppSession.shared.checkExitCode(typed) { [weak self] result in
+        guard let code = ExitCodeInput.normalized(typed) else {
+            DispatchQueue.main.async { self.promptEmergencyExit(hint: "The code is exactly 6 digits.") }
+            return
+        }
+        exitBusy = true
+        refreshExitButton()
+        AppSession.shared.checkExitCode(code) { [weak self] result in
             DebugLog.log("exit", "server exit-code result: \(result)")
-            guard let self, LockdownController.shared.isLocked else { return }
+            guard let self else { return }
+            self.exitBusy = false
+            if result == .tooMany {
+                let wait = AppSession.shared.exitRetryAfter ?? Int(OfflineExitCode.waitAfterWrong)
+                self.exitBlockedUntil = Date().addingTimeInterval(TimeInterval(wait))
+            }
+            self.refreshExitButton()
+            guard LockdownController.shared.isLocked else { return }
             switch result {
             case .ok: self.endLock()
-            case .wrong: self.notice("Wrong invigilator code. Hold the lock bar again to retry.")
-            case .tooMany: self.notice("Too many wrong codes. Wait 5 minutes.")
+            case .wrong: self.notice("Wrong invigilator code. Tap \"Invigilator exit\" to try again.")
+            case .tooMany:
+                let left = Int(self.exitBlockedUntil.timeIntervalSinceNow.rounded(.up))
+                self.notice("Too many wrong codes. Try again in \(ExitCodeInput.waitText(seconds: left)).")
             case .unreachable: self.promptOfflineExit(reason: "The exam server cannot be reached.")
             case .noSession: self.promptOfflineExit(reason: "This exam has not reached the server yet.")
             case .serverError(let status): self.promptOfflineExit(reason: "The exam server answered with an error (\(status)).")
