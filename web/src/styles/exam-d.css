@@ -697,3 +697,31 @@
   font-weight: 600;
   text-align: center;
 }
+
+/* the Locked badge and the logo never shrink under the title; the title ellipsizes instead */
+.exam-d .stu-lb-left > * {
+  flex: none;
+}
+.exam-d .stu-lb-left > .stu-lockbar-title {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.exam-d .stu-lb-right {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.stu-offline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--s-warn-dark);
+  white-space: nowrap;
+}
+.stu-offline-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--s-warn-dark);
+}

@@ -204,7 +204,7 @@ describe("offline start", () => {
 
     // answer while offline: kept on this computer
     await user.click(screen.getByText("6"));
-    expect(screen.getByText("Saved on this computer")).toBeInTheDocument();
+    expect(screen.queryByText("Saved on this computer")).toBeNull();
 
     // connection is back: the next save/heartbeat starts the real attempt with offline_started_at
     s6.startAfterOffline.mockResolvedValue(attempt({ attempt_id: "a_real" }));

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, NetworkError, ServerBusyError, SwapNeededError, studentApi } from "../../api/client";
 import { CODE_LENGTH, StartCodeBoxes, emptyCode, type StartCodeBoxesHandle } from "./StartCodeBoxes";
+import { clearExited } from "../../lib/examExit";
 import { PackageLockedError, WrongCodeError, startOffline, storedPackage } from "../../lib/offline";
 
 /** S4: how often a computer waiting for the teacher's "Approve swap" tries to start. */
@@ -10,6 +11,8 @@ export const SWAP_RETRY_MS = 5000;
 export const START_BUSY_TRIES = 4;
 /** Wait before the next try: 2 s, 4 s, 6 s. */
 export const START_BUSY_WAIT_MS = 2000;
+/** A start that has not finished after this long offers Retry instead of spinning for ever. */
+export const START_SLOW_MS = 15000;
 
 /** S4: ask the teacher to move this student's attempt to this computer. False when this
  *  computer can't take over (a browser has no app device id) or the attempt is unknown. */
@@ -29,6 +32,7 @@ export function startErrorMessage(err: unknown): string {
   if (err instanceof ServerBusyError) return "The server is busy right now. Wait a moment and press Start exam again.";
   if (err instanceof NetworkError) return "Cannot reach the server. Check the connection and try again.";
   if (err instanceof ApiError) {
+    if (err.code === "start_code_required") return "Enter the start code from your invigilator";
     // audit 2026-10-12: app-only start and one computer per attempt
     if (err.status === 403 && /FairPlay app/i.test(err.detail)) return err.detail;
     // audit S-03: not in the exam's class
@@ -82,6 +86,8 @@ export function StartCodeForm({
   const [now, setNow] = useState(() => Date.now());
   const [shake, setShake] = useState(0);
   const [readyAgain, setReadyAgain] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const runRef = useRef(0);
   // S4: asked the teacher to move the exam here; start is retried every SWAP_RETRY_MS.
   const [waitingSwap, setWaitingSwap] = useState(false);
   const swapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,6 +110,7 @@ export function StartCodeForm({
   const go = (attempt: { attempt_id: string }) => {
     // 2026-10-23 review: never navigate from a form that is gone (the student left)
     if (!mounted.current) return;
+    clearExited(attempt.attempt_id);
     navigate(`/student/exam/${encodeURIComponent(attempt.attempt_id)}`, { state: { attempt } });
   };
   const boxes = useRef<StartCodeBoxesHandle>(null);
@@ -158,9 +165,27 @@ export function StartCodeForm({
     }, SWAP_RETRY_MS);
   }
 
+  useEffect(() => {
+    if (!busy || waitingSwap) {
+      setSlow(false);
+      return;
+    }
+    const t = setTimeout(() => setSlow(true), START_SLOW_MS);
+    return () => clearTimeout(t);
+  }, [busy, waitingSwap]);
+
+  function retry() {
+    runRef.current += 1;
+    setSlow(false);
+    setBusy(false);
+    inFlight(false);
+    setTimeout(() => startBtn.current?.click(), 0);
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (waiting || pausedRef.current) return;
+    const run = ++runRef.current;
     setReadyAgain(false);
     if (!complete) {
       setError(`The start code has ${CODE_LENGTH} digits.`);
@@ -196,9 +221,11 @@ export function StartCodeForm({
           throw offErr instanceof WrongCodeError ? new ApiError(403, "Wrong start code") : err;
         }
       }
+      if (run !== runRef.current) return;
       inFlight(false);
       go(attempt);
     } catch (err) {
+      if (run !== runRef.current) return;
       if (err instanceof SwapNeededError && (await requestSwap(examId, err).catch(() => false))) {
         inFlight(false);
         if (!mounted.current) return;
@@ -257,6 +284,14 @@ export function StartCodeForm({
       {readyAgain && !error && (
         <div className="stu-alert success" role="status">
           You can try again.
+        </div>
+      )}
+      {slow && (
+        <div className="stu-alert warn" role="alert" data-testid="start-slow">
+          <p style={{ margin: "0 0 8px" }}>This is taking too long. Check the connection, then press Retry.</p>
+          <button type="button" className="stu-btn sm" onClick={retry}>
+            Retry
+          </button>
         </div>
       )}
       {waitingSwap && (

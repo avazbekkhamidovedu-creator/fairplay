@@ -247,7 +247,7 @@ describe("review and submit", () => {
         error={null}
       />,
     );
-    expect(screen.getByTestId("count-answered")).toHaveTextContent("2");
+    expect(screen.getByTestId("count-answered")).toHaveTextContent(/2 \/ 4\s*answered/);
     expect(screen.getByTestId("count-marked")).toHaveTextContent("1");
     expect(screen.getByTestId("count-empty")).toHaveTextContent("2");
     const list = screen.getByRole("list", { name: "Questions to check" });
@@ -316,13 +316,14 @@ describe("exam taking page", () => {
     const user = userEvent.setup();
     renderExam();
     expect((await screen.findAllByText(/Question 1 of 3/))[0]).toBeInTheDocument();
-    // layout D: the save status is in the footer, next to the name
-    expect(screen.getByRole("img", { name: "All answers saved" })).toHaveTextContent("Saved");
+    // the footer shows only the name and NetID: no version, no save status
+    const who = screen.getByTestId("student-identity");
+    expect(who).not.toHaveTextContent(/Saved|v\d|FairPlay \d/);
+    expect(screen.queryByRole("img", { name: "All answers saved" })).toBeNull();
 
     // MCQ: radio semantics, clickable by option text
     await user.click(screen.getByText("6"));
     expect(screen.getByRole("radio", { name: /6/ })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("img", { name: "Saved on this computer" })).toHaveTextContent("Saved on this computer");
 
     // Mark for review is a checkbox (not a button) and is stored per attempt
     const mark = screen.getByRole("checkbox", { name: /Mark for review/ });
@@ -339,7 +340,7 @@ describe("exam taking page", () => {
     // the first button matching /Review/ must be "Review and submit" (e2e relies on it)
     await user.click(screen.getAllByRole("button", { name: /Review/i })[0]);
     expect(screen.getByRole("heading", { name: "Ready to submit?" })).toBeInTheDocument();
-    expect(screen.getByTestId("count-answered")).toHaveTextContent("3");
+    expect(screen.getByTestId("count-answered")).toHaveTextContent(/3 \/ 3\s*answered/);
     expect(screen.getByTestId("count-marked")).toHaveTextContent("1");
     expect(screen.getByTestId("count-empty")).toHaveTextContent("0");
 

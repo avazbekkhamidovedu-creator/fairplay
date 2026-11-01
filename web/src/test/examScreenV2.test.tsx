@@ -1,9 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnswerValue, StudentQuestion } from "../api/types";
 import { AnswerInput } from "../components/student/AnswerInput";
-import { LockedBar } from "../components/student/LockedBar";
+import { LockedBar, OFFLINE_ANNOUNCE_MS } from "../components/student/LockedBar";
 import { batteryTone } from "../lib/battery";
 import {
   stepTextSize,
@@ -165,13 +165,35 @@ describe("exam top bar", () => {
     expect(screen.queryByRole("dialog", { name: "Help" })).toBeNull();
   });
 
-  it("shows the save status in our words (or leaves it to the question screen's footer)", () => {
+  it("shows no save status; a small Offline chip only once answers wait for the server", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} />);
+      expect(screen.queryByText("All answers saved")).toBeNull();
+      expect(screen.queryByTestId("offline-chip")).toBeNull();
+      rerender(<LockedBar title="Midterm" locked native sync="pending" remaining={60_000} />);
+      expect(screen.queryByText("Saved on this computer")).toBeNull();
+      expect(screen.queryByTestId("offline-chip")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(OFFLINE_ANNOUNCE_MS + 100);
+      });
+      expect(screen.getByTestId("offline-chip")).toHaveTextContent("Offline");
+      rerender(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} />);
+      expect(screen.queryByTestId("offline-chip")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lists Take a break in More only inside the app, and it asks for the exit prompt", () => {
+    const onTakeBreak = vi.fn();
     const { rerender } = render(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} />);
-    expect(screen.getByText("All answers saved")).toBeInTheDocument();
-    rerender(<LockedBar title="Midterm" locked native sync="pending" remaining={60_000} />);
-    expect(screen.getByText("Saved on this computer")).toBeInTheDocument();
-    rerender(<LockedBar title="Midterm" locked native sync="pending" remaining={60_000} showSync={false} />);
-    expect(screen.queryByText("Saved on this computer")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /More/ }));
+    expect(screen.queryByRole("menuitem", { name: /Take a break/ })).toBeNull();
+    rerender(<LockedBar title="Midterm" locked native sync="synced" remaining={60_000} onTakeBreak={onTakeBreak} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Take a break/ }));
+    expect(onTakeBreak).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menuitem", { name: /Invigilator exit/ })).toBeNull();
   });
 
   it("shows the battery from the app and warns when low", () => {

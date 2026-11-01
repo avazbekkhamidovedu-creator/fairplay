@@ -8,6 +8,8 @@ import { UpcomingExamCard } from "../../components/student/ExamCard";
 import { ActiveList, PastList, TestsSection, activeCount, scheduledExams, useExamTab, useStudentGrades } from "../../components/student/ExamTabs";
 import { JoinClass } from "../../components/student/JoinClass";
 import { StartCodeForm } from "../../components/student/StartCodeForm";
+import { ResumeExam } from "../../components/student/ResumeExam";
+import { EXIT_NOTICE, isExited, takeExitNotice } from "../../lib/examExit";
 import { StudentLayout, StuLoading } from "../../components/student/StudentLayout";
 import { TrialCard } from "../../components/student/TrialCard";
 import { useLegacyStudentUi } from "../../lib/features";
@@ -29,6 +31,7 @@ function FullHome() {
   // 2026-10-22: back from the sample exam (DonePage sends this once the computer unlocked).
   const trialDone = (useLocation().state as { trialDone?: string } | null)?.trialDone;
   const [trialNote, setTrialNote] = useState(!!trialDone);
+  const [exitNotice, setExitNotice] = useState(takeExitNotice);
   // 2026-10-24: course cards (each opens its course page) above "Your tests [Active | Past]"
   const courses = useStudentClasses();
   const grades = useStudentGrades();
@@ -95,6 +98,15 @@ function FullHome() {
             </div>
             <TrialCard />
           </div>
+
+          {exitNotice && (
+            <div className="stu-alert warn stu-row" role="status" data-testid="exit-notice">
+              <span style={{ flex: 1 }}>{EXIT_NOTICE}</span>
+              <button type="button" className="stu-btn sm quiet" onClick={() => setExitNotice(false)}>
+                OK
+              </button>
+            </div>
+          )}
 
           {trialNote && (
             <div className="stu-alert success stu-row" role="status" data-testid="trial-note">
@@ -251,6 +263,12 @@ function ExamHero({
           Your teacher opened this exam for some students first. It shows a Start button here when it opens for you.
         </div>
       ) : inProgress ? (
+        isExited(exam.attempt?.attempt_id) ? (
+          <>
+            <div className="stu-exam-hero-note">You left the exam. Your answers are saved. The timer kept running.</div>
+            <ResumeExam examId={exam.id} onChanged={onChanged} />
+          </>
+        ) : (
         <>
           <div className="stu-exam-hero-note">Your answers are saved. Continue where you stopped — the timer kept running.</div>
           <div className="stu-row">
@@ -263,6 +281,7 @@ function ExamHero({
             </button>
           </div>
         </>
+        )
       ) : active ? (
         <StartCodeForm examId={exam.id} autoFocus onCancel={onCancel} onConflict={onChanged} />
       ) : (

@@ -103,7 +103,9 @@ export type NativeMessage =
   /** 2026-10-22 (Mac): an update install is on its way ("downloading", then "installing"). */
   | { type: "updateProgress"; stage: string }
   /** 2026-10-22 (Mac): the update was not installed (see UpdateFailure). */
-  | { type: "updateFailed"; reason: string };
+  | { type: "updateFailed"; reason: string }
+  /** 2026-11-01: the invigilator's exit code was accepted and the app unlocked. */
+  | { type: "exited"; attempt_id?: string };
 
 /** The attempt the app is locking for: it sends its own signed beats with these. */
 export interface ExamSessionParams {
@@ -175,6 +177,7 @@ type OutMessage =
   | { action: "sealedToken"; token: string }
   | { action: "openSettings"; pane: string }
   | { action: "installUpdate" }
+  | { action: "exitPrompt" }
   | { action: "deviceTestStart"; seconds: number }
   | { action: "deviceTestLeave" }
   | ({ action: "openHomeworkLogin" } & HomeworkLoginParams)
@@ -292,7 +295,7 @@ function onWindowEvent(e: Event) {
     offerSealedToken(tokenSource());
   }
   else if (detail.type === "locked") locked = true;
-  else if (detail.type === "unlocked" || detail.type === "lockFailed") locked = false;
+  else if (detail.type === "unlocked" || detail.type === "lockFailed" || detail.type === "exited") locked = false;
   listeners.forEach((l) => l(detail));
 }
 
@@ -540,6 +543,13 @@ export function exitShortcut(platform: "mac" | "windows" | "ipad" | null = nativ
 
 export function unlock(): void {
   post({ action: "unlock" });
+}
+
+/** Ask the app to show its invigilator exit-code prompt. False outside the app. */
+export function requestExitPrompt(): boolean {
+  if (!isNative()) return false;
+  post({ action: "exitPrompt" });
+  return true;
 }
 
 /**

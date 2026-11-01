@@ -9,9 +9,8 @@ import {
   BookIcon,
   CalculatorIcon,
   ChevronIcon,
+  CoffeeIcon,
   GlobeIcon,
-  CloudCheckIcon,
-  DiskIcon,
   EyeIcon,
   EyeOffIcon,
   HelpIcon,
@@ -50,7 +49,7 @@ export function LockedBar({
   websites,
   box,
   moreButtonRef,
-  showSync = true,
+  onTakeBreak,
 }: {
   title: string;
   course?: string;
@@ -78,13 +77,12 @@ export function LockedBar({
   box?: { onOpen: () => void };
   /** 2026-10-23: the More button, so focus can come back to it when a side panel closes. */
   moreButtonRef?: Ref<HTMLButtonElement>;
-  /** 2026-10-24 (layout D): false while the question screen shows the save status in its
-   *  footer (the screen-reader announcements stay here). */
-  showSync?: boolean;
+  /** Native app only: "Take a break" opens the app's invigilator exit-code prompt. */
+  onTakeBreak?: () => void;
 }) {
   const lowTime = remaining < TIMER_FORCE_SHOW_MS;
   const showTime = !timerHidden || lowTime;
-  const synced = sync === "synced";
+  const offline = useOfflineWarning(sync);
   const announce = useAnnouncements(sync, trial ? Number.POSITIVE_INFINITY : remaining);
   const battery = useBattery();
   const [open, setOpen] = useState<null | "directions" | "more" | "help" | "battery">(null);
@@ -184,17 +182,11 @@ export function LockedBar({
         <span className="sr-only" role="status" aria-live="polite">
           {announce}
         </span>
-        {/* 2026-10-23 review: on narrow screens only the icon shows; the words stay its label */}
-        {showSync && (
-        <span
-          className={`stu-sync ${synced ? "synced" : "pending"}`}
-          role="img"
-          aria-label={synced ? "All answers saved" : "Saved on this computer"}
-          title={synced ? "All answers saved" : "Saved on this computer"}
-        >
-          {synced ? <CloudCheckIcon /> : <DiskIcon />}
-          <span className="stu-sync-text">{synced ? "All answers saved" : "Saved on this computer"}</span>
-        </span>
+        {offline && (
+          <span className="stu-offline" role="status" data-testid="offline-chip" title="Answers are not reaching the server">
+            <span className="stu-offline-dot" aria-hidden="true" />
+            Offline
+          </span>
         )}
         {battery && (
           <span
@@ -229,7 +221,7 @@ export function LockedBar({
             aria-haspopup="menu"
             aria-expanded={open === "more"}
             aria-controls="exam-more-menu"
-            title="More: materials, text size, help"
+            title="More: materials, text size, help, take a break"
             onClick={() => setOpen((o) => (o === "more" || o === "help" ? null : "more"))}
           >
             <MoreVerticalIcon />
@@ -320,6 +312,20 @@ export function LockedBar({
             <HelpIcon />
             Help
           </button>
+          {onTakeBreak && (
+            <button
+              type="button"
+              role="menuitem"
+              className="stu-menu-item"
+              onClick={() => {
+                close();
+                onTakeBreak();
+              }}
+            >
+              <CoffeeIcon />
+              Take a break
+            </button>
+          )}
         </div>
       )}
       {open === "battery" && (
@@ -398,6 +404,21 @@ export function TextSizeRow({ size, onChange }: { size: TextSize; onChange: (siz
 }
 
 export const OFFLINE_ANNOUNCE_MS = 5000;
+
+/** True once answers have waited OFFLINE_ANNOUNCE_MS without reaching the server (a normal
+ *  save in flight never flashes it). */
+export function useOfflineWarning(sync: SyncStatus): boolean {
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    if (sync !== "pending") {
+      setOffline(false);
+      return;
+    }
+    const t = setTimeout(() => setOffline(true), OFFLINE_ANNOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [sync]);
+  return offline;
+}
 
 /** Audit W-14: what a screen reader hears -- "kept on this computer" only after answers have
  *  waited OFFLINE_ANNOUNCE_MS, "saved" when they get through after that, and one cue each at

@@ -3,6 +3,8 @@
 import { Link, useNavigate } from "react-router-dom";
 import type { StudentExamSummary } from "../../api/types";
 import { NOT_OPEN_FOR_YOU, isWaiting } from "../../pages/student/useStudentExams";
+import { isExited } from "../../lib/examExit";
+import { ResumeExam } from "./ResumeExam";
 import { dateTime, examName, isToday, monthDay, plural, shortDate, shortTime } from "./format";
 
 export function UpcomingExamCard({
@@ -73,6 +75,8 @@ export function UpcomingExamCard({
         <span className="stu-muted" data-testid="not-open-for-you">
           Wait for your teacher
         </span>
+      ) : inProgress && isExited(exam.attempt?.attempt_id) ? (
+        <ResumeExam examId={exam.id} className="stu-btn primary" />
       ) : inProgress ? (
         <button
           type="button"

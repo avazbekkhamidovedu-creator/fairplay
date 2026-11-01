@@ -65,8 +65,10 @@ export function ReviewPanel({ questions, answers, marked, onGoTo, onKeepWorking,
         <p className="stu-review-lede">Check the questions below before you hand in your exam.</p>
         <div className="stu-counts">
           <div className="stu-count" data-testid="count-answered">
-            <b>{counts.answered}</b>
-            <span>Answered</span>
+            <b>
+              {counts.answered} / {questions.length}
+            </b>
+            <span>answered</span>
           </div>
           <div className={`stu-count marked${counts.marked === 0 ? " zero" : ""}`} data-testid="count-marked">
             <b>{counts.marked}</b>

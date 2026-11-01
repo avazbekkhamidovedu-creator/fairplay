@@ -17,7 +17,7 @@ import { attemptAssetContext, forgetAssets, prefetchAssets } from "../../lib/que
 import { forgetAnswerNotes, rememberUpload } from "../../lib/answerTypes";
 import { assetNames, isRichFormat } from "../../lib/markdown";
 import { isCodeLanguage } from "../../lib/code/languages";
-import { AppVersion } from "../../components/AppVersion";
+import { isExitError, isExited, markExited } from "../../lib/examExit";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { AnswerInput, RubricPanel } from "../../components/student/AnswerInput";
 import { CodeQuestion, forgetCodeResults } from "../../components/student/CodeQuestion";
@@ -73,7 +73,7 @@ import { TrialExit } from "../../components/student/TrialExit";
 import { Calculator } from "../../components/student/Calculator";
 import { DukeBoxPane, useDukeBox } from "../../components/student/DukeBox";
 import { MaterialFileView, MaterialsPaneContent, WebsitesPaneContent } from "../../components/student/ExamToolPanes";
-import { CloudCheckIcon, DiskIcon, WidenIcon } from "../../components/student/icons";
+import { WidenIcon } from "../../components/student/icons";
 import "../../styles/exam-d.css";
 import { forgetAttemptMaterials, loadAttemptMaterials } from "../../lib/materials";
 import "../../styles/student.css";
@@ -144,9 +144,12 @@ export function examDirections(durationMin: number, count: number, totalPoints?:
   ];
 }
 
+/** How long "Locking this computer" may take before the student gets a Retry button. */
+export const LOCK_STUCK_MS = 15000;
+
 type Phase =
   | "loading" | "locking" | "preflight" | "closeApps" | "lockFailed" | "exam" | "review" | "submitting"
-  | "loadError" | "reenter"
+  | "loadError" | "reenter" | "exited"
   // sample exam: the app refused the lock for this attempt (offer to start again)
   | "trialEnded";
 
@@ -372,6 +375,10 @@ function ExamTakingInner() {
         finish({ receipt: res.receipt, submitted_at: res.submitted_at, title: attempt?.title ?? "", answered, total, lms: isLmsAttempt(attempt) });
       } catch (e) {
         submittingRef.current = false;
+        if (isExitError(e)) {
+          leaveRef.current();
+          return;
+        }
         // Audit W-05: a 4xx the student can't fix by waiting is final. 409/404 (already
         // handed in, moved to another computer, gone): leave the exam; the app checks with
         // the server before it unlocks.
@@ -407,6 +414,30 @@ function ExamTakingInner() {
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
 
+  // The invigilator let this student out: no questions or answers stay on screen, nothing
+  // is sent any more (the offline answer copies stay on this computer, untouched).
+  const leaveExam = useCallback(() => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    queueRef.current?.stop();
+    if (eventTimerRef.current) clearTimeout(eventTimerRef.current);
+    if (submitRetryRef.current) clearTimeout(submitRetryRef.current);
+    eventsRef.current = [];
+    lockingRef.current = false;
+    markExited(realAidRef.current ?? attemptId);
+    if (realAidRef.current && realAidRef.current !== attemptId) markExited(attemptId);
+    forgetCodeResults(attemptId);
+    resetSharedRunners();
+    forgetAnswerNotes(attemptId);
+    bridge.closeBox();
+    setAnswers({});
+    setAttempt(null);
+    setPhase("exited");
+    navigate("/student", { replace: true });
+  }, [attemptId, navigate]);
+  const leaveRef = useRef(leaveExam);
+  leaveRef.current = leaveExam;
+
   // S5: "Submit later from this computer": the app seals exactly these answers.
   const sealAnswers = useCallback(async (): Promise<boolean> => {
     const q = queueRef.current;
@@ -421,6 +452,11 @@ function ExamTakingInner() {
     let alive = true;
     const fromState = (location.state as { attempt?: AttemptView } | null)?.attempt;
     let load: Promise<AttemptView>;
+    if (!fromState && isExited(attemptId)) {
+      setLoadError("You left the exam.");
+      setPhase("reenter");
+      return;
+    }
     if (fromState && fromState.attempt_id === attemptId) load = Promise.resolve(fromState);
     else if (offline) {
       // reload during an offline attempt: the local copy is the source (local clock)
@@ -449,11 +485,20 @@ function ExamTakingInner() {
           finish(null);
           return;
         }
-        const queue = new AnswerQueue(attemptId, (ans, seq) => call((aid) => studentApi.saveAnswers(aid, ans, seq)), {
-          owner: currentStudentId(),      // audit 2026-10-13: this account's copy only
-          onClosed: () => void doSubmitRef.current(true),
-        });
+        const queue = new AnswerQueue(
+          attemptId,
+          (ans, seq) =>
+            call((aid) => studentApi.saveAnswers(aid, ans, seq)).catch((e: unknown) => {
+              if (isExitError(e)) leaveRef.current();
+              throw e;
+            }),
+          {
+            owner: currentStudentId(),      // audit 2026-10-13: this account's copy only
+            onClosed: () => void doSubmitRef.current(true),
+          },
+        );
         queue.subscribe((s) => {
+          if (finishedRef.current) return;
           setSync(s);
           setAnswers(queue.getAnswers());
         });
@@ -474,7 +519,7 @@ function ExamTakingInner() {
           setPhase("trialEnded");      // sample exam: no start code, offer a new one
           return;
         }
-        if (e instanceof ApiError && isSessionConflict(e.status, e.detail)) {
+        if (e instanceof ApiError && (e.code === "start_code_required" || isSessionConflict(e.status, e.detail))) {
           setLoadError(e.detail);       // audit W-01: offer the start code instead of a dead end
           setPhase("reenter");
           return;
@@ -493,13 +538,14 @@ function ExamTakingInner() {
       alive = false;
       queueRef.current?.stop();
     };
+    // location.key: the start code form of "reenter" navigates to this same URL with the fresh attempt
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attemptId]);
+  }, [attemptId, location.key]);
 
   // ----- lock before showing questions -----
 
   const lockingRef = useRef(false);
-  const lock = useCallback(async () => {
+  const lockInner = useCallback(async () => {
     if (lockingRef.current || finishedRef.current) return;
     lockingRef.current = true;
     setPhase("locking");
@@ -554,6 +600,33 @@ function ExamTakingInner() {
       setPhase("lockFailed");
     }
   }, []);
+
+  const lock = useCallback(async () => {
+    try {
+      await lockInner();
+    } catch {
+      lockingRef.current = false;
+      if (finishedRef.current) return;
+      setLockReason("unknown");
+      setPhase("lockFailed");
+    }
+  }, [lockInner]);
+
+  // A lock that never finishes (no answer from the app, a stuck step) must not spin for ever.
+  const [lockStuck, setLockStuck] = useState(false);
+  useEffect(() => {
+    if (phase !== "locking") {
+      setLockStuck(false);
+      return;
+    }
+    const t = setTimeout(() => setLockStuck(true), LOCK_STUCK_MS);
+    return () => clearTimeout(t);
+  }, [phase]);
+  const retryLock = () => {
+    lockingRef.current = false;
+    setLockStuck(false);
+    void lock();
+  };
 
   useEffect(() => {
     if (phase === "locking" && attempt) void lock();
@@ -649,6 +722,16 @@ function ExamTakingInner() {
     }
   }, [call]);
 
+  useEffect(
+    () =>
+      bridge.onNative((msg) => {
+        if (msg.type !== "exited") return;
+        if (msg.attempt_id && msg.attempt_id !== attemptId && msg.attempt_id !== realAidRef.current) return;
+        leaveRef.current();
+      }),
+    [attemptId],
+  );
+
   useEffect(() => {
     const off = bridge.onNative((msg) => {
       if (msg.type === "state" || msg.type === "locked" || msg.type === "unlocked" || msg.type === "lockFailed") {
@@ -685,7 +768,8 @@ function ExamTakingInner() {
           // closed by the teacher (or submitted elsewhere): finish and unlock
           if (!submittingRef.current) void doSubmitRef.current(true);
         }
-      } catch {
+      } catch (e) {
+        if (isExitError(e)) leaveRef.current();
         /* offline: keep going, answers stay on this computer */
       }
     };
@@ -997,6 +1081,7 @@ function ExamTakingInner() {
         </main>
   );
   if (phase === "trialEnded" && !attempt) return <div className="stu stu-exam">{trialEndedPanel}</div>;
+  if (phase === "exited") return null;
   if (phase === "reenter") return <ReenterExam attemptId={attemptId} detail={loadError} />;
   if (phase === "loadError")
     return (
@@ -1176,7 +1261,7 @@ function ExamTakingInner() {
             : undefined
         }
         box={tools?.box && toolsShown ? { onOpen: () => openTab({ id: "box", kind: "box" }) } : undefined}
-        showSync={!(showExam && q)}
+        onTakeBreak={bridge.isNative() && !attempt.trial ? () => bridge.requestExitPrompt() : undefined}
         directions={
           attempt.trial ? undefined : examDirections(attempt.duration_min, questions.length, richExam ? totalPoints : undefined)
         }
@@ -1211,7 +1296,24 @@ function ExamTakingInner() {
 
       {phase === "locking" && (
         <div className="stu-center">
-          <StuLoading label="Locking this computer for the exam…" />
+          {lockStuck ? (
+            <div className="stu-card" style={{ gap: 14, maxWidth: 520 }} role="alert" data-testid="lock-stuck">
+              <h1 style={{ margin: 0, fontSize: 20 }}>This is taking too long</h1>
+              <p style={{ margin: 0 }}>
+                The exam could not lock this computer yet. Press Retry. If it keeps failing, raise your hand.
+              </p>
+              <div className="stu-row">
+                <button type="button" className="stu-btn primary" onClick={retryLock}>
+                  Retry
+                </button>
+                <Link to="/student" className="stu-btn">
+                  Back to home
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <StuLoading label="Locking this computer for the exam…" />
+          )}
         </div>
       )}
 
@@ -1514,21 +1616,9 @@ function ExamTakingInner() {
                 {me && (
                   <>
                     <b>{me.name}</b>
-                    <AppVersion />
                     <span className="netid">{me.netId}</span>
                   </>
                 )}
-                <span
-                  className={`stu-sync xd-sync ${sync === "synced" ? "synced" : "pending"}`}
-                  role="img"
-                  aria-label={sync === "synced" ? "All answers saved" : "Saved on this computer"}
-                  title={sync === "synced" ? "All answers saved" : "Saved on this computer"}
-                >
-                  {sync === "synced" ? <CloudCheckIcon /> : <DiskIcon />}
-                  <span className="stu-sync-text" aria-hidden="true">
-                    {sync === "synced" ? "Saved" : "Saved on this computer"}
-                  </span>
-                </span>
               </span>
 
               <button

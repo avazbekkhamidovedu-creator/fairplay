@@ -8,6 +8,8 @@ import { newestExam } from "../../components/student/NewestExamCard";
 import { LogoMark, Wordmark } from "../../components/ui/Icon";
 import { clearExamDataOnSignOut } from "../../lib/offline";
 import { useMe } from "../../lib/useMe";
+import { ResumeExam } from "../../components/student/ResumeExam";
+import { EXIT_NOTICE, isExited, takeExitNotice } from "../../lib/examExit";
 import { useStudentExams } from "./useStudentExams";
 import "../../styles/dashboard.css";
 
@@ -61,6 +63,8 @@ function ExamCard({ exam }: { exam: StudentExamSummary }) {
         <button type="button" className="sd-btn" disabled>
           Waiting for the exam to open
         </button>
+      ) : inProgress && isExited(exam.attempt?.attempt_id) ? (
+        <ResumeExam examId={exam.id} className="sd-btn" />
       ) : inProgress ? (
         <button type="button" className="sd-btn" onClick={() => navigate(`/student/exam/${encodeURIComponent(exam.attempt!.attempt_id)}`)}>
           Continue exam
@@ -79,6 +83,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const me = useMe("student");
   const { exams, error } = useStudentExams(POLL_MS);
+  const [exitNotice, setExitNotice] = useState(takeExitNotice);
   const scoped = !!tokenScope(getToken("student"));
   const exam = exams ? newestExam(exams) : null;
   const open = !!exam && (exam.attempt?.status === "in_progress" || exam.status === "live");
@@ -103,6 +108,14 @@ export default function Dashboard() {
         <p className="sd-sub" aria-live="polite">
           {exam ? (open ? "Your exam is open now." : "Your exam opens in a few minutes.") : exams ? "You have no exam to start." : ""}
         </p>
+        {exitNotice && (
+          <div className="sd-empty" role="status" data-testid="exit-notice">
+            {EXIT_NOTICE}{" "}
+            <button type="button" className="sd-btn" onClick={() => setExitNotice(false)}>
+              OK
+            </button>
+          </div>
+        )}
         {error && (
           <div className="sd-empty" role="alert">
             {error}

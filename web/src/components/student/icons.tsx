@@ -185,6 +185,16 @@ export function MoreVerticalIcon({ size = 20 }: { size?: number }) {
   );
 }
 
+export function CoffeeIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 8h12v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8z" />
+      <path d="M16 10h2a2.5 2.5 0 0 1 0 5h-2" />
+      <path d="M8 3v2M12 3v2" />
+    </svg>
+  );
+}
+
 export function TextSizeIcon({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
