@@ -377,8 +377,8 @@ class Settings:
             raise RuntimeError("FAIRPLAY_RUNNER_URL is not a valid address.") from None
         loopback = host in ("localhost", "127.0.0.1", "::1")
         if not host or parts.username is not None or not (
-                parts.scheme == "https" or (self.dev and parts.scheme == "http" and loopback)):
-            raise RuntimeError("FAIRPLAY_RUNNER_URL must be https:// (http://localhost only with FAIRPLAY_DEV=1).")
+                parts.scheme == "https" or (parts.scheme == "http" and loopback)):
+            raise RuntimeError("FAIRPLAY_RUNNER_URL must be https:// (plain http only to 127.0.0.1, ::1 or localhost).")
         if len(self.runner_secret) < 32:
             raise RuntimeError("FAIRPLAY_RUNNER_SECRET must be at least 32 characters.")
         if not 1 <= self.runner_timeout_s <= 300:

@@ -177,12 +177,26 @@ def test_bad_runner_settings_refuse_to_start(tmp_path, static_dir, kw, msg):
             pass
 
 
-def test_http_loopback_only_in_dev(tmp_path, static_dir):
-    s = make_settings(tmp_path, static_dir, **{**RUNNER_KW, "runner_url": "http://127.0.0.1:9000"})
-    with pytest.raises(RuntimeError, match="https"):
-        s.check_runner()
-    s.dev = True
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8080", "http://127.0.0.1", "http://localhost:8080",
+                                 "http://[::1]:8080", "https://runner.test"])
+@pytest.mark.parametrize("dev", [False, True])
+def test_runner_url_accepted(tmp_path, static_dir, url, dev):
+    s = make_settings(tmp_path, static_dir, **{**RUNNER_KW, "runner_url": url})
+    s.dev = dev
     s.check_runner()
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1@evil.com", "http://127.0.0.1:80@evil.com", "http://127.0.0.1.evil.com",
+    "http://localhost.evil.com", "http://127.0.0.2", "http://127.evil.com", "http://localhost@evil.com",
+    "http://", "http:///x", "http://runner.test", "http://10.0.0.5:8080", "ftp://127.0.0.1",
+])
+@pytest.mark.parametrize("dev", [False, True])
+def test_runner_url_rejected(tmp_path, static_dir, url, dev):
+    s = make_settings(tmp_path, static_dir, **{**RUNNER_KW, "runner_url": url})
+    s.dev = dev
+    with pytest.raises(RuntimeError):
+        s.check_runner()
 
 
 # ---------------------------------------------------------------- health

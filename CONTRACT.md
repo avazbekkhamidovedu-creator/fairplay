@@ -1248,7 +1248,7 @@ A bad value stops the server at startup with a message.
 
 ## External code runner (C, C++, Java)
 
-The server never executes code. When `FAIRPLAY_RUNNER_URL`, `FAIRPLAY_RUNNER_TENANT` and `FAIRPLAY_RUNNER_SECRET` are set, it sends programs to `fp-runner` over signed HTTP. None set = feature off and every language behaves as before. Only some of the three set, a non-https URL (http loopback only with `FAIRPLAY_DEV=1`) or a secret under 32 characters: the server refuses to start. `FAIRPLAY_RUNNER_TIMEOUT_S` (default 30) bounds one runner call.
+The server never executes code. When `FAIRPLAY_RUNNER_URL`, `FAIRPLAY_RUNNER_TENANT` and `FAIRPLAY_RUNNER_SECRET` are set, it sends programs to `fp-runner` over signed HTTP. None set = feature off and every language behaves as before. Only some of the three set, a non-https URL (plain http only to a loopback host: `127.0.0.1`, `::1` or `localhost`) or a secret under 32 characters: the server refuses to start. `FAIRPLAY_RUNNER_TIMEOUT_S` (default 30) bounds one runner call.
 
 Hidden tests and expected outputs never go to the runner or to a student: the server compares outputs itself, with the same rule as `web/src/lib/code/compare.ts` (line endings unified, trailing spaces and tabs per line ignored, empty lines at the end ignored).
 
