@@ -88,6 +88,17 @@ import AppKit
         #expect(!s.setExam(attemptId: "a_1", token: "", session: "sess-12345678"))
     }
 
+    @Test func sameAttemptWithNewSessionIsAcceptedAfterExit() {
+        let s = AppSession.shared
+        defer { s.clearExam() }
+        #expect(s.setExam(attemptId: "a_1", token: token(7), session: "sess-12345678"))
+        s.clearExam()
+        #expect(s.exam == nil)
+        #expect(s.setExam(attemptId: "a_1", token: token(7), session: "sess-87654321"))
+        #expect(s.exam?.session == "sess-87654321")
+        #expect(s.offlineKey == nil)
+    }
+
     @Test func offlineCodeLocksOutAfterFiveWrong() { OfflineExitTestLock.run {
         OfflineExit.reset(); defer { OfflineExit.reset() }
         let key = Data((0..<32).map { UInt8($0) })

@@ -13,6 +13,17 @@ enum ExitCodeInput {
         return t
     }
 
+    /// Only the ASCII digits of what was typed or pasted, at most `length` of them.
+    static func digitsOnly(_ typed: String) -> String {
+        String(typed.unicodeScalars.filter { $0.value >= 48 && $0.value <= 57 }.prefix(length).map(Character.init))
+    }
+
+    /// Exit stays disabled until the field holds a full code. Dev builds also accept a
+    /// shorter one so the fixed test code can be typed.
+    static func canSubmit(_ typed: String, allowShort: Bool) -> Bool {
+        normalized(typed) != nil || (allowShort && !typed.isEmpty)
+    }
+
     /// The 429 body carries the seconds left as "retry_after", either at the top or under
     /// "detail" (FastAPI); the header is not exposed by the app's network layer.
     static func retryAfterSeconds(json: [String: Any]?) -> Int? {

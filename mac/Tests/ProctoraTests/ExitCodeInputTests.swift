@@ -14,6 +14,20 @@ import Foundation
         #expect(ExitCodeInput.normalized("") == nil)
     }
 
+    @Test func digitsOnlyFiltersAndCaps() {
+        #expect(ExitCodeInput.digitsOnly("12a3-4 5") == "12345")
+        #expect(ExitCodeInput.digitsOnly("1234567890") == "123456")
+        #expect(ExitCodeInput.digitsOnly("１２３") == "")
+        #expect(ExitCodeInput.digitsOnly("") == "")
+    }
+
+    @Test func submitNeedsFullCode() {
+        #expect(ExitCodeInput.canSubmit("123456", allowShort: false))
+        #expect(!ExitCodeInput.canSubmit("1234", allowShort: false))
+        #expect(!ExitCodeInput.canSubmit("", allowShort: true))
+        #expect(ExitCodeInput.canSubmit("0000", allowShort: true))
+    }
+
     @Test func retryAfterFromBody() {
         #expect(ExitCodeInput.retryAfterSeconds(json: ["retry_after": 120]) == 120)
         #expect(ExitCodeInput.retryAfterSeconds(json: ["detail": ["retry_after": 299, "code": "too_many_codes"]]) == 299)
