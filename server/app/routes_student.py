@@ -326,11 +326,11 @@ async def start(exam_id: str, body: StartIn, request: Request,
     device_id = proof.device_id if proof else None
     device_pub = proof.pub if proof else None
     if proof is not None and proof.pub and not proof.derived:
-        # only a legacy attempt (bound to this exact id) may present a key its id is not derived
-        # from: it takes its first key, or keeps proving the one it took
+        # a legacy id with a key binds on first use; an attempt that exists must be this id's
+        # own, taking its first key or keeping the one it took
         old = await find_attempt(session, exam_id, p.user_id)
-        if old is None or old.status != "in_progress" or old.device_id != device_id \
-                or old.device_pub not in (None, device_pub):
+        if old is not None and (old.status != "in_progress" or old.device_id != device_id
+                                or old.device_pub not in (None, device_pub)):
             raise HTTPException(403, ac.APP_PROOF_DETAIL)
     # access codes: the student signed in with their code on this device, which is the authorisation
     from .integrations.dkuoj.access_codes import signed_in_here

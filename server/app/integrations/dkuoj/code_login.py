@@ -287,9 +287,6 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
     reason: str | None = "malformed"
     if re.fullmatch(r"[A-Z0-9]{%d}" % access_codes.CODE_LENGTH, code):
         row, e, reason = await _pick(session, s.secret, code, device)
-    if pub and not proof.derived and not (
-            reason is None and row.bound_device == device and row.bound_device_pub in (None, pub)):
-        raise HTTPException(403, ac.APP_PROOF_DETAIL)     # an id not derived from the key: legacy upgrade only
     if reason is None and _other_device(row, device, pub) \
             and not await _freed(session, row.exam_id, row.netid):
         await _second_device(session, e, row, device)

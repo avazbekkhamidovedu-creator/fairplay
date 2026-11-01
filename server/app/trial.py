@@ -173,8 +173,6 @@ async def trial_start(body: TrialStartIn, request: Request, p: Principal = Depen
     proof = await verify_start_proof_keyed(store, settings, p.user_id, TRIAL_EXAM_ID, body.client)
     device_id = proof.device_id if proof else None
     device_pub = proof.pub if proof else None
-    if proof is not None and device_pub and not proof.derived:
-        raise HTTPException(403, ac.APP_PROOF_DETAIL)
     now = utcnow()
     for _ in range(3):
         old = await find_attempt(session, TRIAL_EXAM_ID, p.user_id)

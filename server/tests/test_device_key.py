@@ -113,13 +113,14 @@ def test_base32_id_is_accepted(oj, ready, live):
     assert start(oj, body, eid, b32, k, code).status_code == 200
 
 
-def test_chosen_id_with_a_key_is_refused(oj, ready, live):
+def test_legacy_id_with_a_key_binds_on_first_start(oj, ready, live):
     _, eid, code = live
     k = Dev()
     body = code_sign_in(oj, ready["alice"], "DEVICE-LEGACY-0001")
     r = start(oj, body, eid, "DEVICE-CHOSEN-001", k, code)
-    assert r.status_code == 403 and r.json()["detail"] == ac.APP_PROOF_DETAIL
-    assert attempt_row(oj) is None
+    assert r.status_code == 200, r.text
+    a = attempt_row(oj)
+    assert (a.device_id, a.device_pub) == ("DEVICE-CHOSEN-001", k.pub)
 
 
 @pytest.mark.parametrize("how", ["bad_sig", "other_key_sig", "pub_only", "garbage_pub"])
@@ -233,11 +234,11 @@ def test_code_login_binds_the_key_and_refuses_copied_id(oj, ready):
     assert (row.bound_device, row.bound_device_pub) == (k.id, k.pub)
     r = code_enter(oj, ready["alice"], k.id, None)
     assert r.status_code == 400 and r.json() == {"detail": "That code is not valid."}
-    assert code_enter(oj, ready["alice"], k.id, Dev()).status_code == 403
+    assert code_enter(oj, ready["alice"], k.id, Dev()).status_code == 400
     j = Dev()
     assert code_enter(oj, ready["alice"], j.id, j).status_code == 400
     from .test_access_code_login import _events
-    assert len(db(oj, _events("access_code_second_device"))) == 2
+    assert len(db(oj, _events("access_code_second_device"))) == 3
     assert code_enter(oj, ready["alice"], k.id, k).status_code == 200
 
 
@@ -261,14 +262,30 @@ def test_code_login_legacy_upgrade(oj, ready):
     assert (row.bound_device, row.bound_device_pub) == (legacy, k.pub)
     assert code_enter(oj, ready["alice"], legacy, None).status_code == 400
     assert code_enter(oj, ready["alice"], legacy, k).status_code == 200
-    assert code_enter(oj, ready["alice"], legacy, Dev()).status_code == 403
+    assert code_enter(oj, ready["alice"], legacy, Dev()).status_code == 400
     j = Dev()
     assert code_enter(oj, ready["alice"], j.id, j).status_code == 400
 
 
-def test_code_login_refuses_non_derived_id_for_a_new_bind(oj, ready):
-    r = code_enter(oj, ready["alice"], "DEVICE-CHOSEN-0001", Dev())
-    assert r.status_code == 403 and r.json()["detail"] == ac.APP_PROOF_DETAIL
+def test_code_login_binds_a_legacy_id_with_a_key_on_first_use(oj, ready):
+    legacy = "DEVICE-LEGACY-0001"
+    k = Dev()
+    code_sign_in(oj, ready["alice"], legacy, k)
+    row = code_row(oj)
+    assert (row.bound_device, row.bound_device_pub) == (legacy, k.pub)
+    assert code_enter(oj, ready["alice"], legacy, Dev()).status_code == 400
+    assert code_enter(oj, ready["alice"], legacy, None).status_code == 400
+    assert code_enter(oj, ready["alice"], legacy, k).status_code == 200
+
+
+def test_legacy_id_with_a_key_is_a_second_device_on_a_code_bound_elsewhere(oj, ready):
+    code_sign_in(oj, ready["alice"], "DEVICE-LEGACY-0001")
+    assert code_enter(oj, ready["alice"], "DEVICE-LEGACY-0002", Dev()).status_code == 400
+    assert code_row(oj).bound_device == "DEVICE-LEGACY-0001"
+
+
+def test_legacy_id_without_a_key_still_signs_in(oj, ready):
+    code_sign_in(oj, ready["alice"], "DEVICE-LEGACY-0001")
 
 
 def test_release_unbinds_the_code_key(oj, ready, live):
