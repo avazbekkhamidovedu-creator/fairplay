@@ -42,6 +42,21 @@ def new_invigilator_code() -> str:
     return f"{secrets.randbelow(10 ** 6):06d}"
 
 
+async def unique_invigilator_code(session, exam_id: str | None = None) -> str:
+    """A code no other live exam shows right now (any class, any teacher)."""
+    from sqlalchemy import select
+    from .models import Exam
+    q = select(Exam.invigilator_code).where(Exam.status == "live", Exam.invigilator_code.is_not(None))
+    if exam_id:
+        q = q.where(Exam.id != exam_id)
+    taken = set((await session.execute(q)).scalars())
+    for _ in range(100):
+        code = new_invigilator_code()
+        if code not in taken:
+            return code
+    raise RuntimeError("no free invigilator code")
+
+
 def new_session_id() -> str:
     return secrets.token_urlsafe(24)
 

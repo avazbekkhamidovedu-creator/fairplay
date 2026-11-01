@@ -38,7 +38,7 @@ from ...db import get_session
 from ...models import Attempt, Exam, User
 from ...routes_auth import client_ip
 from ...schemas import ClientProofIn
-from ...security import ADMIN_SCOPE, make_token
+from ...security import ADMIN_SCOPE, SEALED_SCOPE, SEALED_TTL_S, make_token
 from ...store import get_store
 from ...timeutil import iso, utcnow
 from . import access_codes, admin_test
@@ -241,16 +241,21 @@ async def _pick(session: AsyncSession, secret: str, code: str, device: str | Non
     if not found:
         return None, None, "unknown"
     now = utcnow()
-    usable, why, early = [], "revoked", None
+    usable, why, early, stranded = [], "revoked", None, []
     for row, e in found:
         if row.revoked_at is not None:
             continue
         if not await access_codes.in_window(session, e, now):
             why = "outside_window"
+            if e.delivery != "paper" and await access_codes.has_unsent_attempt(session, e, row.netid):
+                stranded.append((row, e))
+                continue
             if early is None and access_codes.not_yet_open(e, now):
                 early = (row, e)
             continue
         usable.append((row, e))
+    if not usable and stranded:
+        return stranded[0][0], stranded[0][1], None
     if not usable and early is not None:
         return early[0], early[1], "too_early"
     if not usable:
@@ -306,12 +311,14 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
         log.info("access code refused (%s) from %s device %s", reason, ip, (device or "-")[:8])
         raise HTTPException(400, NOT_VALID)
 
+    sealed_only = not await access_codes.in_window(session, e, utcnow())
     token = make_kind_token(s.secret, KIND, {"row": row.id, "dev": device or "", "bound": row.bound_device or "",
                              "pub": pub or "", "bpub": row.bound_device_pub or "",
                              "ch": row.code_hmac},
                             CONFIRM_TTL_S)
     return _no_store({"first_name": row.first_name, "last_name": row.last_name, "netid": row.netid,
-                      "exam_title": e.title, "resume": await _resuming(session, e.id, row.netid),
+                      "exam_title": e.title,
+                      "resume": False if sealed_only else await _resuming(session, e.id, row.netid),
                       "confirm_token": token})
 
 
@@ -341,7 +348,10 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     row = await session.get(ExamAccessCode, tok["row"])
     e = await session.get(Exam, row.exam_id) if row is not None else None
     device = str(tok.get("dev") or "") or None
-    if row is None or e is None or row.revoked_at is not None or not await access_codes.in_window(session, e, utcnow()):
+    if row is None or e is None or row.revoked_at is not None:
+        raise HTTPException(400, NOT_VALID)
+    sealed_only = not await access_codes.in_window(session, e, utcnow())
+    if sealed_only and not (e.delivery != "paper" and await access_codes.has_unsent_attempt(session, e, row.netid)):
         raise HTTPException(400, NOT_VALID)
     bound = str(tok.get("bound") or "") or None
     pub = str(tok.get("pub") or "") or None
@@ -358,7 +368,7 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
 
     u = await ensure_user(session, {"username": row.netid, "first_name": row.first_name,
                                     "last_name": row.last_name}, "student")
-    if u is None or not await integration_for(e).can_take(session, e.id, u.id):
+    if u is None or (not sealed_only and not await integration_for(e).can_take(session, e.id, u.id)):
         await session.rollback()
         raise HTTPException(400, NOT_VALID)
     now = utcnow()
@@ -382,6 +392,12 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     await _audit(session, e, "access_code_signin", row.netid,
                  f"exam {e.id}: signed in on device {(device or '-')[:8]}")
     await remember_user(u.id, u.role, int(u.token_version or 0))
+    if sealed_only:
+        await _audit(session, e, "access_code_sealed_only", row.netid,
+                     f"exam {e.id}: closed exam, token for the sealed hand-in only")
+        return _no_store({"token": make_token(s.secret, u.id, u.role, SEALED_TTL_S,
+                                              version=u.token_version or 0, scope=SEALED_SCOPE + e.id),
+                          "role": u.role, "name": u.name, "resume": False})
     return _no_store({"token": make_token(s.secret, u.id, u.role, s.student_token_ttl_s,
                                           version=u.token_version or 0, scope=e.id),
                       "role": u.role, "name": u.name, "resume": await _resuming(session, e.id, row.netid)})

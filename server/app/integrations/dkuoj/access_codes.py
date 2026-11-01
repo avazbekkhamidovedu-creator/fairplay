@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...lms import secretbox
-from ...models import Exam, User
+from ...models import Attempt, Exam, User
 from ...timeutil import utcnow
 from .models import ExamAccessCode, OjRosterEntry
 
@@ -187,12 +187,23 @@ def not_yet_open(e: Exam, now: datetime) -> bool:
             and now < e.scheduled_at - WINDOW_LEAD)
 
 
+async def has_unsent_attempt(session: AsyncSession, e: Exam, netid: str) -> bool:
+    """The student's attempt on this exam never reached a hand-in of their own: still running,
+    or closed by the server (a sealed hand-in may still be on its way)."""
+    if e.status == "draft":
+        return False
+    return (await session.execute(
+        select(Attempt.id).join(User, User.id == Attempt.student_id)
+        .where(Attempt.exam_id == e.id, User.netid == netid,
+               or_(Attempt.status == "in_progress", Attempt.auto_submitted.is_(True))).limit(1))).first() is not None
+
+
 async def matches(session: AsyncSession, secret: str, code: str) -> list[tuple[ExamAccessCode, Exam]]:
-    """Every row with this code (revoked ones too) on a draft or live exam, newest exam first."""
+    """Every row with this code (revoked ones too) on a draft, live or closed exam, newest exam first."""
     h = code_hmac(secret, code)
     rows = (await session.execute(
         select(ExamAccessCode, Exam).join(Exam, Exam.id == ExamAccessCode.exam_id)
-        .where(ExamAccessCode.code_hmac == h, Exam.status.in_(("draft", "live")))
+        .where(ExamAccessCode.code_hmac == h, Exam.status.in_(("draft", "live", "closed")))
         .order_by(Exam.created_at.desc()))).all()
     return [(r, e) for r, e in rows]
 

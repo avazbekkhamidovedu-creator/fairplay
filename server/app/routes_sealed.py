@@ -27,7 +27,7 @@ from .grading import handin_grade
 from .models import Attempt, Exam
 from .routes_student import LATE_GRACE, _known_answers, _own_attempt, count_answered
 from .schemas import AnswersIn, SealedSubmitIn
-from .security import Principal, require_student
+from .security import SEALED_SCOPE, Principal, require_student
 from .services import cache_attempt, new_receipt
 from .store import get_store
 from .timeutil import iso, utcnow
@@ -68,10 +68,13 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
     if await store.incr(f"sealrate:{aid}", 60) > SEALED_PER_MIN:
         raise HTTPException(429, "Too many tries, wait a minute")
     a = await _own_attempt(session, aid, p)
+    if p.scope.startswith(SEALED_SCOPE) and p.scope[len(SEALED_SCOPE):] != a.exam_id:
+        raise HTTPException(403, "This sign-in is for another exam.")
     seal, answers = open_seal(ac.settings_of(request).secret, aid, body)
     now = utcnow()
     if seal.sealed_at < a.started_at:
         raise HTTPException(422, "The sealed time is outside this exam")
+    await _note_late(session, store, a, seal, body.proof, now)
     ahead = seal.sealed_at - now
     if ahead > timedelta(0):      # the student's clock runs fast: judge the seal as of arrival, tell the teacher
         seal.sealed_at = now
@@ -150,6 +153,26 @@ async def _note_ahead(session: AsyncSession, store, a: Attempt, proof: str, ahea
         await ac.add_event(session, store, a.id, a.exam_id, "sealed_clock_ahead",
                            f"the app's clock was {int(ahead.total_seconds())} s ahead of the server when it sealed; "
                            "the seal time was set to the arrival time")
+
+
+async def _note_late(session: AsyncSession, store, a: Attempt, seal: ac.Seal, proof: str, now) -> None:
+    """A verified seal that arrived after the exam's close plus the largest extra time."""
+    from .closing import max_extra
+    from .services import exam_closes_at
+    exam = await session.get(Exam, a.exam_id)
+    if exam is None:
+        return
+    ends = [x for x in (exam_closes_at(exam), exam.closed_at) if x is not None]
+    if not ends:
+        return
+    window_end = min(ends) + await max_extra(session, exam)
+    if now <= window_end:
+        return
+    if await ac.once_per(store, f"sealate:{a.id}:{proof[:32]}", SEAL_EVENT_TTL):
+        await ac.add_event(session, store, a.id, a.exam_id, "sealed_received_late",
+                           f"received {iso(now)}, sealed at {iso(seal.sealed_at)}, "
+                           f"{int((now - window_end).total_seconds() // 60)} min after the close and extra time ended "
+                           f"({iso(window_end)})")
 
 
 async def _seen(store, aid: str, now) -> str:

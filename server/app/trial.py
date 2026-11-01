@@ -37,7 +37,7 @@ from .models import Attempt, Exam, IntegrityEvent, User
 from .schemas import ClientProofIn, QuestionIn
 from .security import Principal, require_student
 from .services import (attempt_key, attempt_view, cache_attempt, find_attempt, get_exam_cached,
-                       invalidate_exam, new_id, new_invigilator_code, new_session_id)
+                       invalidate_exam, new_id, unique_invigilator_code, new_session_id)
 from .store import get_store
 from .timeutil import iso, utcnow
 
@@ -97,7 +97,7 @@ async def seed_trial_exam(db: Database) -> None:
                 id=TRIAL_EXAM_ID, teacher_id=owner, title=TRIAL_TITLE, duration_min=TRIAL_DURATION_MIN,
                 status="live", start_code=None, questions=qs, question_count=len(qs), total_points=total,
                 created_at=now, updated_at=now, course="", room="", mode="questions", delivery="computer",
-                class_id=None, course_link_id=None, allowed_apps=[], invigilator_code=new_invigilator_code(),
+                class_id=None, course_link_id=None, allowed_apps=[], invigilator_code=await unique_invigilator_code(session),
                 # No teacher is there to approve a comeback or watch for a weak lock.
                 resume_needs_approval=False, require_strong_lock=False, is_trial=True))
             try:
@@ -117,7 +117,7 @@ async def seed_trial_exam(db: Database) -> None:
                 setattr(e, k, v)
                 changed = True
         if not e.invigilator_code:
-            e.invigilator_code = new_invigilator_code()
+            e.invigilator_code = await unique_invigilator_code(session, e.id)
             changed = True
         if changed:
             e.updated_at = now

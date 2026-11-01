@@ -18,7 +18,7 @@ from .access import eligible_students
 from .closing import close_exam_now, max_extra
 from .integrations.registry import integration_for
 from .models import Attempt, Exam
-from .services import (attempt_key, exam_closes_at, exam_delivery, invalidate_exam, new_invigilator_code,
+from .services import (attempt_key, exam_closes_at, exam_delivery, invalidate_exam, unique_invigilator_code,
                        new_session_id, new_start_code)
 from .store import get_store
 from .timeutil import iso, utcnow
@@ -72,7 +72,7 @@ async def open_exam(session: AsyncSession, e: Exam, open_to="all") -> None:
     e.open_to = open_to_value
     e.status = "live"
     e.start_code = new_start_code()
-    e.invigilator_code = new_invigilator_code()
+    e.invigilator_code = await unique_invigilator_code(session, e.id)
     e.closed_at = None
     e.auto_closed = False
     e.updated_at = now

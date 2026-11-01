@@ -205,11 +205,14 @@ async def current_principal(request: Request) -> Principal:
     if not parsed:
         raise HTTPException(401, "Invalid or expired token")
     uid, role, ver, scope = parsed
+    if scope.startswith(SEALED_SCOPE) and (request.method != "POST" or not _SEALED_PATH.match(request.url.path)):
+        raise HTTPException(403, "This sign-in can only upload the sealed answers.")
     # Audit S-15: signed out everywhere (version bumped), deleted, or role changed -> refused.
     cur = await _current_user(uid)
     if cur is None or cur[0] != role or cur[1] != ver:
         raise HTTPException(401, "Signed out. Please sign in again.")
-    if scope and scope not in (ADMIN_SCOPE, HOMEWORK_SCOPE) and await scope_over(uid, scope):
+    if scope and scope not in (ADMIN_SCOPE, HOMEWORK_SCOPE) and not scope.startswith(SEALED_SCOPE) \
+            and await scope_over(uid, scope):
         raise HTTPException(401, "Signed out. Please sign in again.")
     return Principal(uid, role, scope)
 
@@ -223,6 +226,9 @@ async def require_teacher(p: Principal = Depends(current_principal)) -> Principa
 
 
 ADMIN_SCOPE = "admin_test"
+SEALED_SCOPE = "sealed-"
+SEALED_TTL_S = 15 * 60
+_SEALED_PATH = re.compile(r"^/api/student/attempts/[^/]+/sealed-submit/?$")
 HOMEWORK_SCOPE = "homework"
 HOMEWORK_REMEMBERED = "rm"
 HOMEWORK_IDLE_S = 30 * 60
