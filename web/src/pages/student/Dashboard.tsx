@@ -5,7 +5,7 @@ import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime } from "../../components/student/format";
 import { newestExam } from "../../components/student/NewestExamCard";
-import { LogoMark, Wordmark } from "../../components/ui/Icon";
+import { StudentLayout } from "../../components/student/StudentLayout";
 import { clearExamDataOnSignOut } from "../../lib/offline";
 import { useMe } from "../../lib/useMe";
 import { ResumeExam } from "../../components/student/ResumeExam";
@@ -96,12 +96,9 @@ export default function Dashboard() {
   return (
     <>
       <NotLockedBanner />
+      <StudentLayout>
       <div className="sd">
         <header className="sd-top">
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }} aria-label="FairPlay">
-            <LogoMark size={30} />
-            <Wordmark />
-          </span>
           {me && <span className="sd-pill">{[me.name, me.netid ?? me.username].join(" · ")}</span>}
         </header>
         <h1 className="sd-hi">{name ? `Hi ${name}` : "Hi"}</h1>
@@ -129,6 +126,7 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+      </StudentLayout>
     </>
   );
 }

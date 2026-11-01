@@ -93,7 +93,8 @@ describe("sticky student top bar", () => {
     routes["GET /api/student/exams"] = { status: 200, body: [] };
     routes["GET /api/student/classes"] = { status: 200, body: [] };
     renderHome();
-    const bar = await screen.findByTestId("stu-topnav");
+    await screen.findByTestId("courses");
+    const bar = screen.getByTestId("stu-topnav");
     expect(bar.tagName).toBe("HEADER");
     expect(bar).toHaveClass("stu-topnav", "stu-topnav-sticky");
     expect(bar).not.toHaveClass("scrolled");
