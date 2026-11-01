@@ -109,14 +109,13 @@ def test_selected_students(client, teacher, alice, bob):
     # lockout (more tries than MAX_WRONG_CODES)
     for _ in range(7):
         r = start(client, bob, e["id"], "000000")
-        assert r.status_code == 403 and r.json()["detail"] == NOT_OPEN
+        assert r.status_code == 404 and r.json()["detail"] == "Exam not found"
     r = start(client, bob, e["id"], code)
-    assert r.status_code == 403 and r.json()["detail"] == NOT_OPEN
-    # listed, but not open for him: no start, no offline package
-    row = next(x for x in client.get("/api/student/exams", headers=bob).json() if x["id"] == e["id"])
-    assert row["open_for_me"] is False and row["package_id"] is None and row["status"] == "live"
-    assert client.get(f"/api/student/exams/{e['id']}/package-key", headers=bob).status_code == 403
-    assert client.get(f"/api/student/exams/{e['id']}/package", headers=bob).status_code == 403
+    assert r.status_code == 404 and r.json()["detail"] == "Exam not found"
+    # private: not listed, no start, no offline package
+    assert all(x["id"] != e["id"] for x in client.get("/api/student/exams", headers=bob).json())
+    assert client.get(f"/api/student/exams/{e['id']}/package-key", headers=bob).status_code == 404
+    assert client.get(f"/api/student/exams/{e['id']}/package", headers=bob).status_code == 404
 
     a = start(client, alice, e["id"], code)
     assert a.status_code == 200, a.text
@@ -145,7 +144,7 @@ def test_selected_students(client, teacher, alice, bob):
 
     # carol never selected; back to everyone -> she may start
     carol = login(client, "carol")
-    assert start(client, carol, e["id"], code).json()["detail"] == NOT_OPEN
+    assert start(client, carol, e["id"], code).status_code == 404
     r = client.put(f"/api/exams/{e['id']}/open-to", json={"open_to": "all"}, headers=teacher)
     assert r.json()["open_to"] == "all"
     assert start(client, carol, e["id"], code).status_code == 200
@@ -158,11 +157,11 @@ def test_remove_from_everyone_and_empty_selection(client, teacher, alice, bob):
     # removing one student from "everyone" = everyone else
     r = client.put(f"/api/exams/{e['id']}/open-to", json={"remove": [ids["bob"]]}, headers=teacher)
     assert r.json()["open_to"] == sorted([ids["alice"], ids["carol"]])
-    assert start(client, bob, e["id"], e["start_code"]).json()["detail"] == NOT_OPEN
+    assert start(client, bob, e["id"], e["start_code"]).status_code == 404
     # an empty selection: nobody new may start
     r = client.put(f"/api/exams/{e['id']}/open-to", json={"open_to": []}, headers=teacher)
     assert r.json()["open_to"] == []
-    assert start(client, alice, e["id"], e["start_code"]).json()["detail"] == NOT_OPEN
+    assert start(client, alice, e["id"], e["start_code"]).status_code == 404
     # other teachers can't change it
     other = client.put(f"/api/exams/{e['id']}/open-to", json={"open_to": "all"}, headers=alice)
     assert other.status_code in (401, 403)
@@ -316,7 +315,7 @@ def test_external_selection_and_auto_close(oj, fake):  # noqa: F811
     e = oj.post(f"/api/exams/{e['id']}/open", json={"open_to": [ids["alice"]]}, headers=teacher).json()
     assert e["status"] == "live" and e["open_to"] == [ids["alice"]]
     r = oj_start(oj, carol, e["id"], e["start_code"])
-    assert r.status_code == 403 and r.json()["detail"] == NOT_OPEN
+    assert r.status_code == 404
     a = oj_start(oj, alice, e["id"], e["start_code"])
     assert a.status_code == 200, a.text
     a = a.json()

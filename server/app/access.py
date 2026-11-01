@@ -112,3 +112,16 @@ async def require_open_for(session: AsyncSession, exam_id: str, user_id: int) ->
         Attempt.exam_id == exam_id, Attempt.student_id == user_id).limit(1))).first()
     if started is None:
         raise HTTPException(403, NOT_OPEN_FOR_YOU)
+
+
+async def require_listed(session: AsyncSession, exam_id: str, user_id: int) -> None:
+    """A selected-students exam is private: for anyone else (without an attempt) it answers
+    exactly like an unknown exam id."""
+    from .models import Attempt
+    open_to = (await session.execute(select(Exam.open_to).where(Exam.id == exam_id))).scalar()
+    if is_open_for(open_to, user_id):
+        return
+    started = (await session.execute(select(Attempt.id).where(
+        Attempt.exam_id == exam_id, Attempt.student_id == user_id).limit(1))).first()
+    if started is None:
+        raise HTTPException(404, "Exam not found")

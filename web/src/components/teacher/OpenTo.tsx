@@ -114,7 +114,7 @@ export function OpenToChoice({
     {
       all: false,
       title: "Selected students",
-      hint: "Only the students you tick can start. The others see “not open for you yet”.",
+      hint: "Only the students you tick can start. The exam is hidden from the others.",
     },
   ];
   return (

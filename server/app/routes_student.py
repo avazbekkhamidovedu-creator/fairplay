@@ -18,7 +18,7 @@ from .grading import exam_questions, grade_attempt, graded_externally, is_answer
 from .integrations.registry import integration_for
 from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
-from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_member, require_open_for
+from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_listed, require_member, require_open_for
 from .app_version import CANVAS_LINK_DETAIL, check_app_version, check_canvas_platform
 from .canvas_mode import scope_of
 from .question_types import AnswerError, check_answer, is_extended
@@ -188,9 +188,10 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                        "percent": percent(score or 0.0, total) if show else None}
             if integ is not None:          # native exams have no review setting
                 attempt["review"] = level
-        # 2026-10-23: open to selected students only -> listed, but "not open for you yet"
-        # (no package, no start) unless this student already started
+        # 2026-10-23: open to selected students only -> hidden from everyone else unless they already started
         open_for_me = aid is not None or is_open_for(open_to, p.user_id)
+        if not open_for_me:
+            continue          # selected-students exams are private
         row = {"id": eid, "title": title, "duration_min": dur,
                "question_count": None if window or eid in waiting_ids else qc,
                     "status": status, "course": course or "", "room": room or "",
@@ -254,6 +255,7 @@ async def challenge(exam_id: str, p: Principal = Depends(require_student),
     exam = await get_exam_cached(get_store(), session, exam_id)
     if exam is None or exam.get("is_trial"):     # the sample exam: /api/student/trial/...
         raise HTTPException(404, "Exam not found")
+    await require_listed(session, exam_id, p.user_id)
     await require_member(session, exam, p.user_id)
     return await issue_challenge(p.user_id, exam_id)
 
@@ -306,6 +308,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
     # slice 6: paper is never started; the sample exam starts at /api/student/trial/start
     if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
+    await require_listed(session, exam_id, p.user_id)
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
     if exam.get("external_kind") == "canvas":

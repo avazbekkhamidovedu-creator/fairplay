@@ -41,7 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .access import require_member, require_open_for
+from .access import require_listed, require_member, require_open_for
 from .db import get_session
 from .models import Exam
 from .security import Principal, require_student
@@ -198,6 +198,7 @@ async def package(exam_id: str, request: Request, p: Principal = Depends(require
     exam = await get_exam_cached(store, session, exam_id)
     if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
+    await require_listed(session, exam_id, p.user_id)
     if (exam.get("mode") or "questions") == "external":
         raise HTTPException(409, "This exam runs on another website and needs the internet")
     await _not_code_exam(session, exam_id)
@@ -251,6 +252,7 @@ async def package_key(exam_id: str, p: Principal = Depends(require_student),
     exam = await get_exam_cached(get_store(), session, exam_id)
     if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
+    await require_listed(session, exam_id, p.user_id)
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
     await _not_code_exam(session, exam_id)
