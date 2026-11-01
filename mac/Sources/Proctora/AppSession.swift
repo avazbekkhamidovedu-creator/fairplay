@@ -404,6 +404,9 @@ final class AppSession {
     /// Invigilator exit code, checked (and rate-limited) by the server. Audit 2026-10-13:
     /// "ok" counts only with the server's signature over exit|aid|session|ok|nonce, like
     /// the hand-in status, so a man in the middle can't answer {"ok": true}.
+    /// Seconds the server asked us to wait after the last 429 (nil when it did not say).
+    private(set) var exitRetryAfter: Int?
+
     func checkExitCode(_ code: String, _ done: @escaping (ExitResult) -> Void) {
         guard let exam else { done(.noSession); return }
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -413,6 +416,7 @@ final class AppSession {
             let r = AppSession.exitResult(status: status, json: json, attemptId: exam.attemptId,
                                           session: exam.session, nonce: nonce)
             if r == .serverError(200) { EventLog.shared.record(.serverReplyUnsigned("exit-code answer")) }
+            self.exitRetryAfter = r == .tooMany ? ExitCodeInput.retryAfterSeconds(json: json) : nil
             done(r)
         }
     }

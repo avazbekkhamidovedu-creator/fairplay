@@ -1258,9 +1258,11 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         takeFocus()
         win.makeFirstResponder(webView)
         applyFileAccess()
+        installExitButton()
     }
 
     func exitLockedMode() {
+        removeExitButton()
         allowedSites = []                       // the next exam sends its own
         lastStartExamId = nil                   // 2026-10-23 (review): the next pre-exam lock sets its own
         lastPreLockPage = nil
@@ -1316,6 +1318,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         stack.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(stack)
         content.addSubview(v)   // topmost
+        if let exitButton { content.addSubview(exitButton, positioned: .above, relativeTo: nil) }
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: v.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: v.centerYAnchor),
@@ -1386,7 +1389,60 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     /// 2026-10-12: when the server cannot answer (offline, server error, exam never reached
     /// it) the invigilator uses the offline code instead (OfflineExit.swift), so a stuck
     /// lock never needs a Mac restart.
-    func promptEmergencyExit() {
+    private var exitButton: NSButton?
+    private var exitBusy = false
+    private var exitBlockedUntil = Date.distantPast
+    private var exitTicker: Timer?
+
+    /// Always-visible entry to the same exit-code path as Ctrl-Opt-Cmd-E (top right of the lock).
+    private func installExitButton() {
+        guard exitButton == nil, let content = window?.contentView else { return }
+        let b = NSButton(title: "Invigilator exit", target: self, action: #selector(exitButtonPressed))
+        b.bezelStyle = .rounded
+        b.controlSize = .small
+        b.setAccessibilityLabel("Invigilator exit")
+        b.setAccessibilityHelp("Opens a field for the 6-digit invigilator code. Students must not use this.")
+        b.sizeToFit()
+        let size = NSSize(width: max(b.frame.width, 130), height: b.frame.height)
+        b.frame = NSRect(x: content.bounds.maxX - size.width - 12, y: content.bounds.maxY - size.height - 12,
+                         width: size.width, height: size.height)
+        b.autoresizingMask = [.minXMargin, .minYMargin]
+        content.addSubview(b, positioned: .above, relativeTo: nil)
+        exitButton = b
+        refreshExitButton()
+    }
+
+    private func removeExitButton() {
+        exitTicker?.invalidate(); exitTicker = nil
+        exitButton?.removeFromSuperview()
+        exitButton = nil
+        exitBusy = false
+        exitBlockedUntil = .distantPast
+    }
+
+    private func refreshExitButton() {
+        guard let b = exitButton else { return }
+        let left = Int(exitBlockedUntil.timeIntervalSinceNow.rounded(.up))
+        if left > 0 {
+            b.isEnabled = false
+            b.title = "Wait \(ExitCodeInput.waitText(seconds: left))"
+            if exitTicker == nil {
+                exitTicker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                    self?.refreshExitButton()
+                }
+            }
+        } else {
+            exitTicker?.invalidate(); exitTicker = nil
+            b.isEnabled = !exitBusy
+            b.title = exitBusy ? "Checking…" : "Invigilator exit"
+        }
+    }
+
+    @objc private func exitButtonPressed() {
+        promptEmergencyExit()
+    }
+
+    func promptEmergencyExit(hint: String? = nil) {
         DebugLog.log("exit", "Ctrl-Opt-Cmd-E pressed (locked=\(LockdownController.shared.isLocked))")
         if deviceTest.isRunning {
             deviceTest.end(.leave)
@@ -1402,14 +1458,21 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             sendState()
             return
         }
-        guard LockdownController.shared.isLocked, let win = window, win.attachedSheet == nil else { return }
+        guard LockdownController.shared.isLocked, let win = window, win.attachedSheet == nil, !exitBusy else { return }
+        let waitLeft = Int(exitBlockedUntil.timeIntervalSinceNow.rounded(.up))
+        if waitLeft > 0 {
+            notice("Too many wrong codes. Try again in \(ExitCodeInput.waitText(seconds: waitLeft)).")
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "Invigilator exit"
-        alert.informativeText = "Enter the invigilator code from the teacher's live room to end locked mode. "
+        alert.informativeText = (hint.map { $0 + "\n\n" } ?? "")
+            + "Enter the 6-digit invigilator code from the teacher's live room to end locked mode. "
             + "The teacher will see this.\n\nNo connection or an error? Choose \"Offline code\"."
             + (Config.isDevBuild ? "\n\nDev build: 0000 also works." : "")
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.placeholderString = "Invigilator code"
+        field.placeholderString = "6-digit code"
+        field.setAccessibilityLabel("Invigilator code, 6 digits")
         alert.accessoryView = field
         alert.addButton(withTitle: "End locked mode")
         alert.addButton(withTitle: "Cancel")
@@ -1439,7 +1502,20 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                 AppSession.shared.clearExam()   // after unlock: its last beat (locked=0) still needs the session
                 return
             }
-            AppSession.shared.checkExitCode(typed) { result in
+            guard let code = ExitCodeInput.normalized(typed) else {
+                NSSound.beep()
+                DispatchQueue.main.async { self?.promptEmergencyExit(hint: "The code is exactly 6 digits.") }
+                return
+            }
+            self?.exitBusy = true
+            self?.refreshExitButton()
+            AppSession.shared.checkExitCode(code) { result in
+                self?.exitBusy = false
+                if result == .tooMany {
+                    let wait = AppSession.shared.exitRetryAfter ?? Int(OfflineExit.waitAfterWrong)
+                    self?.exitBlockedUntil = Date().addingTimeInterval(TimeInterval(wait))
+                }
+                self?.refreshExitButton()
                 DebugLog.log("exit", "server exit-code result: \(result)")
                 guard LockdownController.shared.isLocked else { return }
                 switch result {
@@ -1448,9 +1524,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                     AppSession.shared.clearExam()   // after unlock: its last beat (locked=0) still needs the session
                 case .wrong:
                     NSSound.beep()
-                    self?.notice("Wrong invigilator code. Press Ctrl-Opt-Cmd-E to try again.")
+                    self?.notice("Wrong invigilator code. Click \"Invigilator exit\" to try again.")
                 case .tooMany:
-                    self?.notice("Too many wrong codes. Wait 5 minutes.")   // server: WRONG_EXIT_LOCK_S
+                    let left = Int((self?.exitBlockedUntil.timeIntervalSinceNow ?? 300).rounded(.up))
+                    self?.notice("Too many wrong codes. Try again in \(ExitCodeInput.waitText(seconds: left)).")
                 case .unreachable:
                     self?.promptOfflineExit(reason: "The exam server cannot be reached.")
                 case .noSession:
