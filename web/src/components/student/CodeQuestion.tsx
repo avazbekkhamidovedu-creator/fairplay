@@ -78,7 +78,10 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
   // of the others is kept on this computer).
   const langOptions = question.languages ?? [];
   const multi = langOptions.length > 0;
-  const [langKey, setLangKey] = useState(() => currentLanguage(langOptions, value)?.key ?? "");
+  const pickerOptions = [...langOptions].sort(
+    (a, b) => Number(b.key === question.default_language) - Number(a.key === question.default_language),
+  );
+  const [langKey, setLangKey] = useState(() => currentLanguage(langOptions, value, question.default_language)?.key ?? "");
   useServerRunnerLanguages();
   const langOption = multi ? (langOptions.find((l) => l.key === langKey) ?? langOptions[0]!) : null;
   const runLang: CodeLanguage | null = langOption
@@ -275,7 +278,7 @@ export function CodeQuestion({ question, value, onChange, prompt, attemptId = ""
                 disabled={!!busy}
                 onChange={(e) => switchLanguage(e.target.value)}
               >
-                {langOptions.map((l) => (
+                {pickerOptions.map((l) => (
                   <option key={l.key} value={l.key}>
                     {l.name}
                   </option>

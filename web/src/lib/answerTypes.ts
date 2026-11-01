@@ -138,13 +138,17 @@ export function forgetAnswerNotes(aid: string): void {
 }
 
 /** The language a multi-language answer is in (the answer's, else the first). */
-export function currentLanguage(langs: CodeLanguageOption[], v: AnswerValue | undefined): CodeLanguageOption | null {
+export function currentLanguage(
+  langs: CodeLanguageOption[],
+  v: AnswerValue | undefined,
+  preferred?: string,
+): CodeLanguageOption | null {
   if (langs.length === 0) return null;
   if (isCodeAnswer(v)) {
     const l = langs.find((x) => x.key === v.language);
     if (l) return l;
   }
-  return langs[0]!;
+  return langs.find((x) => x.key === preferred) ?? langs[0]!;
 }
 
 /** The code shown for a language: the answer (same language), else the draft, else the template. */

@@ -891,8 +891,10 @@ Plain questions keep their exact shapes. A question with the extended fields add
 - `file_upload` (new type): `allowed_extensions`, `max_file_size`, `max_files` (DKU OJ: 1),
   `instructions_md`. Answer: list of answer-file ids (at most `max_files`).
 - `code`: `languages: [{key, name, runner}]` (runner `python|javascript|c|cpp|java|null`; null =
-  "runs after hand-in"), `templates: {key: code}`, `memory_limit_kb`; also `language` (first
-  runner), `starter_code` (first template), `tests` (samples `{input, expected}`), `time_limit_ms`.
+  "runs after hand-in"), `templates: {key: code}`, `memory_limit_kb`, optional `default_language` (key; `PY3` when
+  allowed, else the first allowed; listed first, so `language`/`starter_code` and the bare-string
+  answer follow it; a client without the field uses `languages[0]`); also `language` (default
+  language's runner), `starter_code` (its template), `tests` (samples `{input, expected}`), `time_limit_ms`.
   Answer: `{"language": "<key>", "source": "…"}` (a bare string = first language).
 Wrong shapes → 422 `"<label>: <reason>"`. Plain questions take only numbers, strings or null.
 Teacher views add `external_ref` (the external system's ids); students never see it. Question

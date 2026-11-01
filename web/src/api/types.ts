@@ -1336,6 +1336,8 @@ export interface RichQuestionFields {
   max_files?: number;
   // code with several languages
   languages?: CodeLanguageOption[];
+  /** the language preselected for a new answer (Python 3 when allowed, else the first) */
+  default_language?: string;
   /** starter code per language key */
   templates?: Record<string, string>;
   memory_limit_kb?: number;

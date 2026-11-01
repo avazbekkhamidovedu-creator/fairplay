@@ -843,7 +843,8 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
             a = start(c, alice, e["id"], e["start_code"]).json()
             qs = {q["title"]: q for q in a["questions"]}
             assert qs["Report"]["max_files"] == 1
-            assert [x["key"] for x in qs["Reverse a list"]["languages"]] == ["CPP14", "PY3"]
+            assert [x["key"] for x in qs["Reverse a list"]["languages"]] == ["PY3", "CPP14"]
+            assert qs["Reverse a list"]["default_language"] == "PY3"
             qid = {k: v["id"] for k, v in qs.items()}
             files = []
             for name in ("a.pdf", "b.pdf"):

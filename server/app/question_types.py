@@ -27,7 +27,7 @@ TYPE_FIELDS = {
     "mcq": ("multiple", "true_false", "shuffle"),
     "fill_blank": ("blanks", "blank_points", "case_sensitive"),
     "file_upload": ("allowed_extensions", "max_file_size", "max_files", "instructions_md"),
-    "code": ("languages", "templates", "memory_limit_kb"),
+    "code": ("languages", "templates", "memory_limit_kb", "default_language"),
     "short": (),
 }
 NEW_TYPES = ("fill_blank", "file_upload")

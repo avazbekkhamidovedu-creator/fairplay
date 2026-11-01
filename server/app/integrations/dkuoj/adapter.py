@@ -12,7 +12,7 @@ named here are copied, so nothing else DKU OJ might send is ever stored or serve
   file_upload allowed_extensions, max_file_size, instructions_md
                                                              answer: list of answer file ids
   code     languages [{key, name, runner}], templates {key: code}, tests (samples, visible),
-           time_limit_ms, memory_limit_kb; language / starter_code = the first language
+           time_limit_ms, memory_limit_kb; language / starter_code = the default language (first in the list)
            (for pages that know only one language)           answer: {"language", "source"}
 """
 from __future__ import annotations
@@ -79,6 +79,11 @@ def _points(v: Any) -> int | float:
     if not math.isfinite(f) or f < 0:
         raise AdapterError("a question has no usable points")
     return num(f)
+
+
+def default_language_key(keys: list[str]) -> str:
+    """Python 3 when the problem allows it, else the first allowed language."""
+    return "PY3" if "PY3" in keys else keys[0]
 
 
 def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "general",
@@ -164,9 +169,11 @@ def question_from_oj(q: dict, taken: set[str] | None = None, topic: str = "gener
             mem = int(c.get("memory_limit_kb") or 0) or None
         except (TypeError, ValueError):
             mem = None
+        default_key = default_language_key([lang["key"] for lang in langs])
+        langs.sort(key=lambda lang: lang["key"] != default_key)
         first = langs[0]
         out.update({
-            "languages": langs, "templates": templates,
+            "languages": langs, "templates": templates, "default_language": default_key,
             "tests": [{"input": _text(s.get("input"), 20_000), "expected": _text(s.get("output"), 20_000),
                        "visible": True, "points": 0} for s in samples],
             "time_limit_ms": int(round(tl * 1000)) if math.isfinite(tl) and tl > 0 else 2000,
@@ -271,7 +278,8 @@ def answer_to_oj(q: dict, v: Any, uploads: dict[str, str] | None = None) -> dict
         out["file_upload"] = {"upload_ids": ids}
     elif t == "code":
         if isinstance(v, str):
-            v = {"language": ((q.get("languages") or [{}])[0]).get("key", ""), "source": v}
+            v = {"language": q.get("default_language") or ((q.get("languages") or [{}])[0]).get("key", ""),
+                 "source": v}
         if not isinstance(v, dict) or not str(v.get("source") or "").strip():
             return None
         out["code"] = {"language": v.get("language"), "source": v.get("source")}
