@@ -17,4 +17,4 @@ export function wipeStudentState(): void {
 }
 
 setScopedEndHandler(wipeStudentState);
-setStudentExpiredHandler(clearExamDataOnSignOut);
+setStudentExpiredHandler(() => clearExamDataOnSignOut(true));

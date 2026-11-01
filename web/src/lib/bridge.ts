@@ -91,7 +91,7 @@ export type NativeMessage =
   /** iPad app: iPadOS is asking the student to allow Assessment Mode; keep waiting. */
   | { type: "lockPending"; reason: string }
   | { type: "event"; event: IntegrityEvent }
-  | { type: "attestation"; nonce: string; device_id: string; signature: string; version: string; build: string }
+  | { type: "attestation"; nonce: string; device_id: string; signature: string; version: string; build: string; device_pub?: string; device_sig?: string }
   | { type: "attestationFailed"; nonce: string; reason: string }
   | { type: "preflight"; problems: string[]; checks?: DeviceCheck[]; platform?: string; app_version?: string; os_version?: string; apps_to_close?: string[] }
   /** 2026-10-22: answer to {action:"quitApps"}: what is still open after closing. */
@@ -133,6 +133,9 @@ export interface ClientProof {
   signature: string;
   version: string;
   build: string;
+  /** Device key (docs/device-key.md): present when the app holds a hardware-backed key. */
+  device_pub?: string;
+  device_sig?: string;
 }
 
 /** Slice 3: open an external-website exam inside the lockdown (CONTRACT.md "Native bridge (added)"). */
@@ -608,6 +611,9 @@ export function attest(nonce: string, timeoutMs = 5000): Promise<ClientProof | n
           signature: String(msg.signature),
           version: String(msg.version ?? ""),
           build: String(msg.build ?? ""),
+          ...(msg.device_pub && msg.device_sig
+            ? { device_pub: String(msg.device_pub), device_sig: String(msg.device_sig) }
+            : {}),
         });
       else if (msg.type === "attestationFailed" && msg.nonce === nonce) finish(null);
     });

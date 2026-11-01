@@ -88,6 +88,17 @@ describe("native bridge", () => {
     await expect(p).resolves.toEqual({ device_id: "dev-1", nonce: "n1", signature: "ab", version: "0.5", build: "release" });
   });
 
+  it("attest forwards the device key fields only when both are present", async () => {
+    const post = native();
+    const p = bridge.attest("n2");
+    expect(post).toHaveBeenCalledWith({ action: "attest", nonce: "n2" });
+    send({ type: "attestation", nonce: "n2", device_id: "dev-2", signature: "ab", version: "0.5", build: "release", device_pub: "PUB", device_sig: "SIG" });
+    await expect(p).resolves.toEqual({ device_id: "dev-2", nonce: "n2", signature: "ab", version: "0.5", build: "release", device_pub: "PUB", device_sig: "SIG" });
+    const q = bridge.attest("n3");
+    send({ type: "attestation", nonce: "n3", device_id: "dev-3", signature: "ab", version: "0.5", build: "release", device_pub: "PUB" });
+    await expect(q).resolves.toEqual({ device_id: "dev-3", nonce: "n3", signature: "ab", version: "0.5", build: "release" });
+  });
+
   it("setExamSession posts only with a session", () => {
     const post = native();
     bridge.setExamSession({ attempt_id: "a_1", token: "t", session: "" });

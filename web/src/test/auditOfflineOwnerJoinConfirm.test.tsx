@@ -41,6 +41,37 @@ describe("offline record belongs to one account", () => {
     expect(readCrossed("offline:E")).toEqual({});
   });
 
+  it("a record saved without an owner resumes and is stamped", async () => {
+    const exam = { exam_id: "E", title: "T", course: "C", duration_min: 30, questions: [] };
+    const pkg = await encryptPackage(exam, "123456", "E", subtle, 1000);
+    localStorage.setItem("fairplay:pkg:E", JSON.stringify(pkg));
+    const view = { started_at: "s", deadline_at: "d" } as never;
+    localStorage.setItem("fairplay:offline:E", JSON.stringify({ exam_id: "E", started_at: "s", view }));
+    setToken("student", tokenFor(1));
+    const got = await startOffline("E", "123456", subtle, 1000);
+    expect(got).toEqual(view);
+    expect(readOfflineRecord("E")?.owner).toBe("1");
+  });
+
+  it("a student 401 keeps unsent offline answers; a full sign-out removes them", () => {
+    saveOfflineRecord({ exam_id: "E", started_at: "x", view: {} as never });
+    localStorage.setItem("fairplay:pkg:E", "{}");
+    localStorage.setItem("proctora:attempt:offline:E", JSON.stringify({ client_seq: 3, synced: 1 }));
+    writeCrossed("offline:E", { q1: [1] });
+    localStorage.setItem("fairplay:session:S", "{}");
+    sessionStorage.setItem(PENDING_JOIN_KEY, "K7QM3XPA");
+    clearExamDataOnSignOut(true);
+    expect(readOfflineRecord("E")).not.toBeNull();
+    expect(localStorage.getItem("fairplay:pkg:E")).not.toBeNull();
+    expect(localStorage.getItem("proctora:attempt:offline:E")).not.toBeNull();
+    expect(readCrossed("offline:E")).toEqual({ q1: [1] });
+    expect(localStorage.getItem("fairplay:session:S")).toBeNull();
+    expect(sessionStorage.getItem(PENDING_JOIN_KEY)).toBeNull();
+    clearExamDataOnSignOut();
+    expect(readOfflineRecord("E")).toBeNull();
+    expect(localStorage.getItem("proctora:attempt:offline:E")).toBeNull();
+  });
+
   it("sign-out removes offline cross-outs and the pending join code", () => {
     saveOfflineRecord({ exam_id: "E", started_at: "x", view: {} as never });
     writeCrossed("offline:E", { q1: [1] });

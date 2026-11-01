@@ -340,8 +340,9 @@ function answerCopyIsSynced(k: string): boolean {
  *  (the student's own work, under their account: answerQueue.ts), except old copies of
  *  offline attempts without an owner, which the next student could otherwise pick up
  *  (audit 2026-10-13). */
-export function clearExamDataOnSignOut(): void {
+export function clearExamDataOnSignOut(keepOffline = false): void {
   for (const k of storageKeys()) {
+    if (keepOffline && (k.includes(":offline:") || k.startsWith("fairplay:pkg:") || k.startsWith("fairplay:pkgkey:"))) continue;
     if (EXAM_DATA_PREFIXES.some((p) => k.startsWith(p))) remove(k);
     else if (k.startsWith(`${ATTEMPT_PREFIX}offline:`)) remove(k);
     else if (k.startsWith(ATTEMPT_PREFIX) && answerCopyIsSynced(k)) remove(k);
@@ -441,7 +442,10 @@ export async function startOffline(
   rememberStartCode(examId, startCode);
   const existing = readOfflineRecord(examId);
   const me = currentStudentId();
-  if (existing && me && existing.owner === me) return existing.view;
+  if (existing && (existing.owner == null || !me || existing.owner === me)) {
+    if (existing.owner == null && me) saveOfflineRecord({ ...existing, owner: me });
+    return existing.view;
+  }
   if (existing) {
     clearOfflineRecord(examId);
     clearExamPrefs(offlineAttemptId(examId));
