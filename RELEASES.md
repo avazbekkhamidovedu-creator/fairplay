@@ -1,3 +1,12 @@
+## What's new in 0.7.8
+
+- The invigilator can leave the exam with an exit prompt, and there is a new **Take a break** menu item.
+- Leaving the exam stops it on that device; the student needs the start code to resume.
+- Each device has its own key. Reissuing a code frees the device it was bound to.
+- A handed-in exam can no longer be reopened by the student.
+- Simpler footer, and the progress now reads "1 / N answered".
+- Matches the exam server at commit c630890 (server and web are identical to this release's source).
+
 ## Download FairPlay
 
 | Your computer | File |
