@@ -212,3 +212,31 @@ def test_hand_in_carries_fairplays_close_time(oj, fake):
     closes = body["exam_closes_at"]
     assert closes.endswith("Z")
     assert abs((ojsync._time(closes) - (fake.end + timedelta(minutes=15))).total_seconds()) < 2
+
+
+def test_take_pending_checks_the_saver_like_the_editors(oj, caplog):
+    import json
+    from types import SimpleNamespace
+    from app.integrations.dkuoj.models import OjState
+    e = SimpleNamespace(external_key="K1", external_frozen_version=None)
+
+    async def take(s, saved, editors):
+        value = {"calculator": "graphing"}
+        if saved is not False:
+            value["saved_by"] = saved
+        s.add(OjState(name="pending:K1", value=json.dumps(value)))
+        await s.commit()
+        meta = {}
+        await ojsync.take_pending(s, e, meta, editors)
+        await s.commit()
+        left = await s.get(OjState, "pending:K1")
+        if left is not None:
+            await s.delete(left)
+            await s.commit()
+        return meta.get("fairplay_settings", {}).get("calculator"), left is not None
+
+    assert db(oj, lambda s: take(s, " Alice ", {"alice"})) == ("graphing", False)
+    assert db(oj, lambda s: take(s, "mallory", {"alice"})) == (None, False)
+    assert "rejected" in caplog.text and "mallory" in caplog.text
+    assert db(oj, lambda s: take(s, False, {"alice"})) == ("graphing", False)
+    assert db(oj, lambda s: take(s, False, set())) == (None, True)

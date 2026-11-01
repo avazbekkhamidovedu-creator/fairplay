@@ -205,6 +205,7 @@ class Attempt(Base):
     # the session and is flagged. client = "app" | "browser" (browser only when
     # FAIRPLAY_REQUIRE_APP=0).
     device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    device_pub: Mapped[str | None] = mapped_column(String(200), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     entries: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     client: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -377,3 +378,6 @@ class Lease(Base):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     holder: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+from . import homework_remember as _homework_remember  # noqa: E402,F401  (revoke_user needs its table)

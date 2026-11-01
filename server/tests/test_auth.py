@@ -1,3 +1,5 @@
+import pytest
+
 from .conftest import login
 
 
@@ -60,3 +62,26 @@ def test_login_failure_counters_are_reserved_before_the_hash(client, monkeypatch
     for _ in range(11):
         client.post("/api/auth/login", json={"username": "alice", "password": "nope"})
     assert client.post("/api/auth/login", json={"username": "alice", "password": "nope"}).status_code == 429
+
+
+def test_login_failure_reservation_is_refunded_unless_credentials_failed(client, monkeypatch):
+    from app import routes_auth
+    from app.store import get_store
+    real = routes_auth.verify_password_async
+
+    async def count():
+        return int(await get_store().get("login:fail:alice:testclient") or 0)
+
+    async def boom(*a, **k):
+        raise RuntimeError("hash worker died")
+    monkeypatch.setattr(routes_auth, "verify_password_async", boom)
+    for _ in range(12):
+        with pytest.raises(RuntimeError):
+            client.post("/api/auth/login", json={"username": "alice", "password": "alice123"})
+    assert client.portal.call(count) == 0
+
+    monkeypatch.setattr(routes_auth, "verify_password_async", real)
+    for i in range(1, 4):
+        assert client.post("/api/auth/login", json={"username": "alice", "password": "nope"}).status_code == 401
+        assert client.portal.call(count) == i
+    assert client.post("/api/auth/login", json={"username": "nobody", "password": "x"}).status_code == 401

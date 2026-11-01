@@ -242,7 +242,7 @@ async def create_class_login(session: AsyncSession, settings, class_id: int, cla
 async def find_class_login(session: AsyncSession, username: str):
     """The class login row a sign-in names (only while the bridge is on), or None."""
     from .source import SOURCE
-    if not SOURCE.enabled or not username:
+    if not class_login_enabled() or not SOURCE.enabled or not username:
         return None
     return (await session.execute(select(ClassLogin).where(ClassLogin.username == username.lower()))
             ).scalar_one_or_none()
@@ -296,7 +296,17 @@ class AccountIn(BaseModel):
     password2: str = Field(max_length=256)
 
 
+def class_login_enabled() -> bool:
+    return os.environ.get("FAIRPLAY_CLASS_LOGIN", "").strip() == "1"
+
+
+def require_class_login() -> None:
+    if not class_login_enabled():
+        raise HTTPException(404, "Not Found")
+
+
 def _enabled():
+    require_class_login()
     from .source import SOURCE
     if not SOURCE.enabled:
         raise HTTPException(404, "Not Found")

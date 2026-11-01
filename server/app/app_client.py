@@ -64,6 +64,7 @@ CLIENT_EVENT_TYPES = frozenset({
     "app_in_background",
     # review 2026-10-14: a reply the app expected to be signed was not
     "server_reply_unsigned", "watchdog_stopped", "events_capped",
+    "device_key_unavailable",
     # iPad app (ios/FairPlay, 2026-10-20)
     "app_backgrounded", "screenshot_taken", "screen_captured", "multitasking",
     "jailbreak_detected", "debugger_attached", "assessment_interrupted", "assessment_resumed",
@@ -77,7 +78,7 @@ CLIENT_EVENT_TYPES = frozenset({
 SERVER_EVENT_TYPES = frozenset({
     "second_device", "foreign_session", "re_entry", "app_gap", "no_app_signal",
     "unlocked_in_exam", "emergency_exit", "emergency_exit_rejected", "device_released",
-    "device_bound", "late_submission", "offline_key_requested_twice",
+    "device_bound", "device_key_upgraded", "late_submission", "offline_key_requested_twice",
     "offline_exit_code_issued", "event_limit_reached", "off_console", "secure_input_other_app",
     "network_changed",
     # S1-S6 (2026-10-20)
@@ -104,6 +105,22 @@ def verify(settings: Settings, message: str, signature: str) -> bool:
 
 def start_message(nonce: str, device_id: str) -> str:
     return f"start|{nonce}|{device_id}"
+
+
+def check_client_proof(settings: Settings, client, message: str):
+    """App-key HMAC plus, when sent, the device key signature over the same message.
+    Returns a device_key.DeviceProof, or None when either proof fails."""
+    from . import device_key
+    if not verify(settings, message, client.signature):
+        return None
+    return device_key.verify(client.device_id, client.device_pub, client.device_sig, message)
+
+
+def require_key(settings: Settings, proof) -> None:
+    """FAIRPLAY_REQUIRE_DEVICE_KEY: an app without a device key gets the update (426) answer."""
+    if settings.require_device_key and (proof is None or proof.pub is None):
+        from .app_version import UpgradeRequired
+        raise UpgradeRequired("")
 
 
 OFFLINE_CHALLENGE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"

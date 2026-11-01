@@ -317,6 +317,7 @@ def test_http_client_logs_only_warnings():
 def test_plain_http_dkuoj_url_refused(monkeypatch, url, dev, insecure, ok):
     monkeypatch.setenv("DKUOJ_URL", url)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setenv("DKUOJ_ALLOW_INSECURE", insecure)
     cfg = DkuojConfig.from_env()
     if ok:
@@ -331,6 +332,7 @@ def test_create_app_fails_on_plain_http(monkeypatch, tmp_path, static_dir):
     from .test_dkuoj_bridge import oj_settings
     monkeypatch.setenv("DKUOJ_URL", "http://oj.dku.edu")
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.delenv("DKUOJ_ALLOW_INSECURE", raising=False)
     try:
         with pytest.raises(RuntimeError, match="plain http"):
@@ -346,9 +348,11 @@ NEW = "fairplay-new-shared-token-abcdef0123456789"
 
 def test_token_rotation(monkeypatch):
     monkeypatch.setenv("DKUOJ_TOKEN", f" {NEW} , {TOKEN} ")
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     cfg = DkuojConfig.from_env()
     assert cfg.token == NEW and cfg.tokens == [NEW, TOKEN] and cfg.verify_tokens == [NEW, TOKEN]
     monkeypatch.setenv("DKUOJ_TOKEN", "a" * 40 + "," + "b" * 40 + "," + "c" * 40)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     with pytest.raises(RuntimeError, match="at most 2"):
         DkuojConfig.from_env().check()
 
@@ -372,6 +376,7 @@ def test_rotation_end_to_end(monkeypatch, tmp_path, static_dir, fake):
     from .test_dkuoj_bridge import oj_settings
     import tests.test_dkuoj_bridge as T
     monkeypatch.setenv("DKUOJ_TOKEN", f"{NEW},{TOKEN}")
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     seen = []
 
     def oj_checks(req, token=TOKEN):        # DKU OJ already has the NEW token

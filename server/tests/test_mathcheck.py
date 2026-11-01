@@ -169,3 +169,15 @@ def test_parse_has_no_builtins():
 def test_unevaluated_constant_exponent_is_bounded(bad):
     with pytest.raises(m.MathError):
         m._parse_sync(bad)
+
+
+def test_huge_constant_exponent_is_refused_without_evalf(monkeypatch):
+    import sympy
+    a, b = sympy.symbols("a b")
+    ex = sum((sympy.sin(i) for i in range(1, 40)), sympy.Integer(0))
+    assert ex.count_ops() > m.MAX_EXPONENT_OPS
+
+    def no_evalf(self, *x, **k):
+        raise AssertionError("evalf called")
+    monkeypatch.setattr(sympy.Add, "evalf", no_evalf)
+    assert m._terms(sympy.Pow(a + b, ex, evaluate=False)) > m.MAX_TERMS

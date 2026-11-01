@@ -712,6 +712,9 @@ class ClientProofIn(BaseModel):
     signature: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]+$")
     version: str = Field(default="", max_length=32)
     build: str = Field(default="", max_length=16)
+    # docs/device-key.md: base64url DER P-256 public key and ECDSA-SHA256 signature (DER or raw r||s)
+    device_pub: str | None = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9_-]+={0,2}$")
+    device_sig: str | None = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9_-]+={0,2}$")
 
 
 class StartIn(BaseModel):

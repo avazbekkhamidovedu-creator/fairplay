@@ -177,7 +177,7 @@ async def release_attempt_device(session: AsyncSession, a: Attempt, swap: bool =
     if moved:
         a.swap_old_session, a.swap_approved_at = a.session_id, now
         a.swap_requested_at = None
-    a.device_id = None
+    a.device_id = a.device_pub = None
     a.session_id = new_session_id()   # nobody holds this one: the old device is cut off
     if clear_pending:
         a.pending_resume = False
@@ -220,7 +220,7 @@ async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: in
     a.auto_submitted, a.late, a.sealed_proof = False, False, None
     a.score, a.needs_grading = None, 0
     a.deadline_at = deadline
-    a.device_id, a.session_id = None, new_session_id()
+    a.device_id, a.device_pub, a.session_id = None, None, new_session_id()
     a.pending_resume = False
     a.swap_device_id = a.swap_requested_at = a.swap_old_session = a.swap_approved_at = None
     a.updated_at = now

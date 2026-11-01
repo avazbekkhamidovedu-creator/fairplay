@@ -439,7 +439,7 @@ async def approve_swap(exam_id: str, aid: str, p: Principal = Depends(require_te
     target = a.swap_device_id
     a.swap_old_session, a.swap_approved_at = a.session_id, now
     a.swap_requested_at = None
-    a.device_id = None
+    a.device_id = a.device_pub = None
     a.session_id = new_session_id()   # nobody holds this one: the old device is cut off
     a.updated_at = now
     await session.commit()

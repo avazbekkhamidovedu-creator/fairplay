@@ -84,25 +84,32 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
         raise HTTPException(429, TOO_MANY)
     # Release the pooled connection before the CPU-heavy hash check.
     await session.close()
-    stored = (row.password_hash if row is not None else
-              class_login.password_hash if class_login is not None else await _dummy(s.pbkdf2_iterations))
-    async with _slots(request):
-        ok = await verify_password_async(body.password, stored,
-                                         getattr(s, "login_hash_slots", MAX_PARALLEL_HASHES))
-    if class_login is not None:
-        if ok and request_from_app(request):
-            from .integrations.dkuoj.setup import class_login_answer
-            return class_login_answer(s, class_login)
-        if await store.incr(fails_cl, FAIL_WINDOW) > CLASS_LOGIN_IP_FAILS:
-            raise HTTPException(429, TOO_MANY)
-        raise HTTPException(401, "Invalid username or password")
-    if row is None or not ok or (row.role == "student" and not request_from_app(request)):
-        raise HTTPException(401, "Invalid username or password")
-    await store.incrby(fails_ui, -1, FAIL_WINDOW)
-    await store.incrby(fails_u, -1, FAIL_WINDOW)
-    ttl = s.student_token_ttl_s if row.role == "student" else s.token_ttl_s
-    return {"token": make_token(s.secret, row.id, row.role, ttl, version=row.token_version or 0),
-            "role": row.role, "name": row.name}
+    refund = class_login is None
+    try:
+        stored = (row.password_hash if row is not None else
+                  class_login.password_hash if class_login is not None else await _dummy(s.pbkdf2_iterations))
+        async with _slots(request):
+            ok = await verify_password_async(body.password, stored,
+                                             getattr(s, "login_hash_slots", MAX_PARALLEL_HASHES))
+        if class_login is not None:
+            if ok and request_from_app(request):
+                from .integrations.dkuoj.setup import class_login_answer
+                return class_login_answer(s, class_login)
+            if await store.incr(fails_cl, FAIL_WINDOW) > CLASS_LOGIN_IP_FAILS:
+                raise HTTPException(429, TOO_MANY)
+            raise HTTPException(401, "Invalid username or password")
+        if row is None or not ok or (row.role == "student" and not request_from_app(request)):
+            refund = False
+            raise HTTPException(401, "Invalid username or password")
+        ttl = s.student_token_ttl_s if row.role == "student" else s.token_ttl_s
+        return {"token": make_token(s.secret, row.id, row.role, ttl, version=row.token_version or 0),
+                "role": row.role, "name": row.name}
+    finally:
+        # The pre-hash reservation stands only for a real credential failure; a cancelled,
+        # timed-out or crashed request gives it back.
+        if refund:
+            await store.incrby(fails_ui, -1, FAIL_WINDOW)
+            await store.incrby(fails_u, -1, FAIL_WINDOW)
 
 
 @router.post("/auth/logout")

@@ -609,3 +609,34 @@ def test_roster_sync_keeps_its_lock_and_releases_it(client, teacher, canvas, mon
     assert client.post(f"/api/lms/courses/{link['id']}/sync", headers=teacher).status_code == 200
     assert client.portal.call(get_store().get, f"lmslink:{link['connection_id']}:101") is None \
         if "connection_id" in link else True
+
+
+def test_timeout_rolls_the_session_back_before_recording_it(client, teacher, canvas, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app import routes_lms
+    cid, link = _link(client, teacher, canvas)
+    real = routes_lms.make_provider
+
+    def slow_provider(*a, **k):
+        p = real(*a, **k)
+
+        async def slow(*x, **y):
+            await asyncio.sleep(5)
+        p.list_courses = slow
+        p.list_students = slow
+        return p
+    rollbacks = []
+    real_rb = AsyncSession.rollback
+
+    async def spy(self):
+        rollbacks.append(1)
+        return await real_rb(self)
+    monkeypatch.setattr(routes_lms, "make_provider", slow_provider)
+    monkeypatch.setattr(routes_lms, "LMS_DEADLINE_S", 0.05)
+    monkeypatch.setattr(AsyncSession, "rollback", spy)
+    for r in (client.get(f"/api/lms/connections/{cid}/courses", headers=teacher),
+              client.post(f"/api/lms/connections/{cid}/courses/101/link", headers=teacher),
+              client.post(f"/api/lms/courses/{link['id']}/sync", headers=teacher)):
+        assert r.status_code == 502, r.text
+        assert routes_lms.TOO_SLOW in r.text
+    assert len(rollbacks) == 3

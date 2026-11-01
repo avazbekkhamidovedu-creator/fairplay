@@ -6,6 +6,10 @@ without schema changes §11 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exa
 assets, uploads, submissions, results). Everything in v1 stays, except where this file changes it
 (§1 signing replaces the Bearer token; §6 retires the live-room link).
 
+Class login is disabled by default (2026-10-31): students sign in with a per-student access code or
+through DKU OJ. The class login, status, reset and `/api/setup/*` routes answer 404 unless the server
+sets `FAIRPLAY_CLASS_LOGIN=1`.
+
 Product rules (from Mister):
 - Professors never sign in to FairPlay for DKU OJ classes. Everything is in DKU OJ: a top-menu
   item **FAIRPLAY** (teachers/admins only) and a **FairPlay** tab on FairPlay assignments.

@@ -43,6 +43,7 @@ def settings_for(tmp_path, static_dir, **kw):
 def oj_env(monkeypatch):
     monkeypatch.setenv("DKUOJ_URL", "https://oj.test")
     monkeypatch.setenv("DKUOJ_TOKEN", fk.TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setenv("DKUOJ_PUBLIC_URL", fk.PUBLIC)
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
 

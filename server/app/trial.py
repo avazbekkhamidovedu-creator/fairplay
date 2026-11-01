@@ -165,17 +165,21 @@ async def trial_start(body: TrialStartIn, request: Request, p: Principal = Depen
     """Start the sample exam: no class, no start code, but the same app proof as a real
     start (FAIRPLAY_REQUIRE_APP, dev builds, version gate). Starting again replaces the
     previous attempt once it is finished; one still running on this computer continues."""
-    from .routes_student import verify_start_proof
+    from .routes_student import verify_start_proof_keyed
     store = get_store()
     settings = ac.settings_of(request)
     min_version = check_app_version(request, settings)
     exam = await _trial_exam(session)
-    device_id = await verify_start_proof(store, settings, p.user_id, TRIAL_EXAM_ID, body.client)
+    proof = await verify_start_proof_keyed(store, settings, p.user_id, TRIAL_EXAM_ID, body.client)
+    device_id = proof.device_id if proof else None
+    device_pub = proof.pub if proof else None
+    if proof is not None and device_pub and not proof.derived:
+        raise HTTPException(403, ac.APP_PROOF_DETAIL)
     now = utcnow()
     for _ in range(3):
         old = await find_attempt(session, TRIAL_EXAM_ID, p.user_id)
         if old is not None and old.status == "in_progress" and old.deadline_at > now \
-                and old.device_id == device_id:
+                and old.device_id == device_id and old.device_pub == device_pub:
             # Still running on this computer (or this browser): continue the same attempt,
             # so an app that is still locked for it is not asked to lock another one. A
             # double click keeps the session; a later start is a new app run (new session).
@@ -191,7 +195,7 @@ async def trial_start(body: TrialStartIn, request: Request, p: Principal = Depen
             await discard_trial_attempt(session, store, old)
         a = Attempt(id=new_id("a"), exam_id=TRIAL_EXAM_ID, student_id=p.user_id, status="in_progress",
                     started_at=now, deadline_at=now + timedelta(minutes=exam["duration_min"]),
-                    answers={}, client_seq=-1, updated_at=now, device_id=device_id,
+                    answers={}, client_seq=-1, updated_at=now, device_id=device_id, device_pub=device_pub,
                     session_id=new_session_id(), entries=1, client="app" if device_id else "browser")
         session.add(a)
         try:

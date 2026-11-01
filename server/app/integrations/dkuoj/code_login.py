@@ -156,20 +156,24 @@ async def challenge(request: Request):
     return _no_store({"nonce": nonce, "expires_in": ac.CHALLENGE_TTL_S})
 
 
-async def _device_of(request: Request, client: ClientProofIn | None) -> str | None:
-    """The app's device id when its signature over a fresh nonce checks out; None only on a
-    server that does not require the app (demo)."""
+async def _device_of(request: Request, client: ClientProofIn | None):
+    """The app's device proof (device_key.DeviceProof) when its signature over a fresh nonce
+    checks out; None only on a server that does not require the app (demo)."""
     settings = ac.settings_of(request)
     if client is None:
         if settings.require_app:
             raise HTTPException(403, ac.APP_REQUIRED_DETAIL)
+        ac.require_key(settings, None)
         return None
     owner = await get_store().getdel(f"codelogin:nonce:{client.nonce}")
-    if owner != "1" or not ac.verify(settings, ac.start_message(client.nonce, client.device_id), client.signature):
+    proof = ac.check_client_proof(settings, client, ac.start_message(client.nonce, client.device_id)) \
+        if owner == "1" else None
+    if proof is None:
         raise HTTPException(403, ac.APP_PROOF_DETAIL)
     if client.build == "dev" and not settings.dev:
         raise HTTPException(403, ac.APP_PROOF_DETAIL)
-    return client.device_id
+    ac.require_key(settings, proof)
+    return proof
 
 
 def _class_of(e: Exam) -> int | None:
@@ -200,6 +204,13 @@ async def _resuming(session: AsyncSession, exam_id: str, netid: str) -> bool:
         select(Attempt.id).join(User, User.id == Attempt.student_id)
         .where(Attempt.exam_id == exam_id, User.netid == netid, Attempt.status == "in_progress").limit(1)
     )).first() is not None
+
+
+def _other_device(row: ExamAccessCode, device: str | None, pub: str | None) -> bool:
+    """The code is bound elsewhere: another id, or this id without the key it was bound with."""
+    if not device or not row.bound_device:
+        return False
+    return row.bound_device != device or bool(row.bound_device_pub and row.bound_device_pub != pub)
 
 
 async def _second_device(session: AsyncSession, e: Exam, row: ExamAccessCode, device: str) -> None:
@@ -244,7 +255,9 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
     s = ac.settings_of(request)
     store = get_store()
     ip = client_ip(request)
-    device = await _device_of(request, body.client)
+    proof = await _device_of(request, body.client)
+    device = proof.device_id if proof else None
+    pub = proof.pub if proof else None
     counters = _counters(ip, device)
     await _check_not_blocked(store, counters)
 
@@ -259,11 +272,14 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
     reason: str | None = "malformed"
     if re.fullmatch(r"[A-Z0-9]{%d}" % access_codes.CODE_LENGTH, code):
         row, e, reason = await _pick(session, s.secret, code, device)
-    if reason is None and device and row.bound_device and row.bound_device != device \
+    if pub and not proof.derived and not (
+            reason is None and row.bound_device == device and row.bound_device_pub in (None, pub)):
+        raise HTTPException(403, ac.APP_PROOF_DETAIL)     # an id not derived from the key: legacy upgrade only
+    if reason is None and _other_device(row, device, pub) \
             and not await _freed(session, row.exam_id, row.netid):
         await _second_device(session, e, row, device)
         reason = "second_device"
-    if reason == "too_early" and device and row.bound_device and row.bound_device != device \
+    if reason == "too_early" and _other_device(row, device, pub) \
             and not await _freed(session, row.exam_id, row.netid):
         await _second_device(session, e, row, device)
         reason = "second_device"
@@ -281,6 +297,7 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
         raise HTTPException(400, NOT_VALID)
 
     token = make_kind_token(s.secret, KIND, {"row": row.id, "dev": device or "", "bound": row.bound_device or "",
+                             "pub": pub or "", "bpub": row.bound_device_pub or "",
                              "ch": row.code_hmac},
                             CONFIRM_TTL_S)
     return _no_store({"first_name": row.first_name, "last_name": row.last_name, "netid": row.netid,
@@ -317,11 +334,16 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     if row is None or e is None or row.revoked_at is not None or not await access_codes.in_window(session, e, utcnow()):
         raise HTTPException(400, NOT_VALID)
     bound = str(tok.get("bound") or "") or None
+    pub = str(tok.get("pub") or "") or None
+    bound_pub = str(tok.get("bpub") or "") or None
     if row.code_hmac != tok.get("ch"):      # the code was reissued since it was entered
         raise HTTPException(400, NOT_VALID)
     if row.bound_device != bound:       # another device bound it since the code was entered
         raise HTTPException(400, NOT_VALID)
-    if device and bound and bound != device and not await _freed(session, e.id, row.netid):
+    if row.bound_device_pub != bound_pub:
+        raise HTTPException(400, NOT_VALID)
+    if device and bound and (bound != device or (bound_pub and bound_pub != pub)) \
+            and not await _freed(session, e.id, row.netid):
         raise HTTPException(400, NOT_VALID)
 
     u = await ensure_user(session, {"username": row.netid, "first_name": row.first_name,
@@ -334,13 +356,19 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
         update(ExamAccessCode).where(
             ExamAccessCode.id == row.id, ExamAccessCode.revoked_at.is_(None),
             ExamAccessCode.code_hmac == row.code_hmac,
-            ExamAccessCode.bound_device.is_(None) if bound is None else ExamAccessCode.bound_device == bound)
+            ExamAccessCode.bound_device.is_(None) if bound is None else ExamAccessCode.bound_device == bound,
+            ExamAccessCode.bound_device_pub.is_(None) if bound_pub is None
+            else ExamAccessCode.bound_device_pub == bound_pub)
         .values(bound_device=device if device else ExamAccessCode.bound_device,
+                bound_device_pub=pub if device else ExamAccessCode.bound_device_pub,
                 used_at=row.used_at or now))
     if not took.rowcount:
         await session.rollback()
         raise HTTPException(400, NOT_VALID)
     await session.commit()
+    if bound and bound_pub is None and pub:
+        await _audit(session, e, "device_key_upgraded", row.netid,
+                     f"exam {e.id}: code now bound to the key of device {device[:8]}")
     await _audit(session, e, "access_code_signin", row.netid,
                  f"exam {e.id}: signed in on device {(device or '-')[:8]}")
     await remember_user(u.id, u.role, int(u.token_version or 0))

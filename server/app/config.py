@@ -152,6 +152,9 @@ class Settings:
     # Audit #1-#3: exams can only be started from the FairPlay app (signed proof) and every
     # attempt is bound to one app session. Off only for local tests / browser demos.
     require_app: bool = field(default_factory=lambda: _flag("FAIRPLAY_REQUIRE_APP", True))
+    # FAIRPLAY_REQUIRE_DEVICE_KEY=1: starts and code sign-ins must carry a verified device key
+    # (docs/device-key.md); older apps get 426. Off while they are still in use.
+    require_device_key: bool = field(default_factory=lambda: _flag("FAIRPLAY_REQUIRE_DEVICE_KEY", False))
     # Student pages and student API answer a bare 404 to anything that is not a FairPlay app
     # (app/browser_gate.py): strict | headers | off.
     browser_gate: str = field(default_factory=lambda: (

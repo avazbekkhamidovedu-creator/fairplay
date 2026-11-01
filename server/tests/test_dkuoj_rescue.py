@@ -52,6 +52,7 @@ def fake(monkeypatch):
     f = RevisionOJ()
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
 

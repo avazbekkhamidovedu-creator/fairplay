@@ -314,12 +314,23 @@ async def take_pending(session: AsyncSession, e: Exam, meta: dict, editor_netids
         pending = _json.loads(row.value or "{}")
     except ValueError:
         pending = {}
-    await session.delete(row)
     if not isinstance(pending, dict):
+        await session.delete(row)
         return None
-    if pending.get("saved_by") not in (editor_netids or set()):
+    editors = {n.casefold() for n in (editor_netids or set())}
+    saver = pending.pop("saved_by", None)
+    if not editors:
+        log.warning("pending settings for exam %s kept: no editors known to check saver %r", e.external_key, saver)
         return None
-    pending.pop("saved_by", None)
+    if saver is None:
+        log.warning("pending settings for exam %s have no saver (saved before the check); applied", e.external_key)
+    else:
+        norm = _netid({"username": saver}) if isinstance(saver, str) else None
+        if norm is None or norm.casefold() not in editors:
+            log.warning("pending settings for exam %s rejected: saved by %r, not an editor", e.external_key, saver)
+            await session.delete(row)
+            return None
+    await session.delete(row)
     review = pending.pop("review", None), pending.pop("review_updated_at", None)
     if not e.external_frozen_version:
         have = dict(meta.get(FAIRPLAY_SETTINGS) or {})

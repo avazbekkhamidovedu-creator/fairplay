@@ -28,7 +28,7 @@ from ...store import get_store
 from ...timeutil import iso, utcnow
 from . import signing
 from .models import ClassLogin, ClassLoginEvent, OjEditor, OjRosterEntry
-from .setup import add_event, create_class_login, disable_logins, is_set_up, login_active, open_login_password
+from .setup import add_event, require_class_login, create_class_login, disable_logins, is_set_up, login_active, open_login_password
 
 log = logging.getLogger("proctora.dkuoj")
 
@@ -151,6 +151,7 @@ async def _require_class_staff(session: AsyncSession, class_id: int, call: Bridg
     editor of one of its exams, or someone who already acted on it. A class FairPlay has
     never seen is open to any acting user that is not a student account (the first login
     is how a class reaches FairPlay); that user is then recorded on it."""
+    require_class_login()
     acting = (call.acting_user or "").strip()
     if not acting:
         raise HTTPException(403, NOT_CLASS_STAFF)

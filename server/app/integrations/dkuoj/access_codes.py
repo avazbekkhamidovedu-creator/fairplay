@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,6 +106,7 @@ async def _ensure(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
             row.code_hmac, row.code_sealed = h, secretbox.seal(secret, code)
             row.first_name, row.last_name = first, last
             row.created_at, row.revoked_at, row.used_at, row.bound_device = utcnow(), None, None, None
+            row.bound_device_pub = None
         else:
             row.first_name, row.last_name = first, last
             code = secretbox.open_(secret, row.code_sealed)
@@ -127,6 +128,7 @@ async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) ->
     code, h = _new_code(secret, taken)
     row.code_hmac, row.code_sealed = h, secretbox.seal(secret, code)
     row.created_at, row.revoked_at, row.used_at, row.bound_device = utcnow(), None, None, None
+    row.bound_device_pub = None
     first, last = row.first_name, row.last_name
     await session.commit()
     return code, first, last
@@ -137,7 +139,7 @@ async def unbind(session: AsyncSession, exam_id: str, netid: str) -> bool:
     True when a bound code was freed."""
     res = await session.execute(update(ExamAccessCode).where(
         ExamAccessCode.exam_id == exam_id, ExamAccessCode.netid == netid, ExamAccessCode.revoked_at.is_(None),
-        ExamAccessCode.bound_device.is_not(None)).values(bound_device=None))
+        ExamAccessCode.bound_device.is_not(None)).values(bound_device=None, bound_device_pub=None))
     return bool(res.rowcount)
 
 
@@ -205,7 +207,8 @@ async def exams_with_codes(session: AsyncSession, exam_ids: list[str]) -> set[st
         ExamAccessCode.exam_id.in_(exam_ids), ExamAccessCode.revoked_at.is_(None)).distinct())).scalars())
 
 
-async def signed_in_here(session: AsyncSession, exam_id: str, user_id: int, device_id: str | None) -> bool:
+async def signed_in_here(session: AsyncSession, exam_id: str, user_id: int, device_id: str | None,
+                         device_pub: str | None = None) -> bool:
     """The student's code for this exam is bound to this device: the code sign-in already
     authorised the start (no start code needed)."""
     if not device_id:
@@ -213,5 +216,6 @@ async def signed_in_here(session: AsyncSession, exam_id: str, user_id: int, devi
     return (await session.execute(select(ExamAccessCode.id).where(
         ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None),
         ExamAccessCode.bound_device == device_id,
+        or_(ExamAccessCode.bound_device_pub.is_(None), ExamAccessCode.bound_device_pub == device_pub),
         ExamAccessCode.netid == select(User.netid).where(User.id == user_id).scalar_subquery()
     ).limit(1))).first() is not None

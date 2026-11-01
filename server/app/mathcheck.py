@@ -40,6 +40,7 @@ MAX_EXPONENT = 1000      # |constant exponent|
 MAX_LOG10 = 3000         # estimated decimal digits of any constant sub-expression
 MAX_NODES = 400          # nodes in the expression tree
 MAX_TERMS = 5000         # audit L-02: terms an expand() of the expression could produce
+MAX_EXPONENT_OPS = 50    # constant exponents bigger than this are not evaluated, just refused
 MAX_SYMBOLIC_POWER = 12  # audit L-02: (a+b)^n with symbols, n above this is refused
 DEFAULT_TIMEOUT = 2.0    # seconds per check
 
@@ -202,6 +203,8 @@ def _terms(e: sympy.Basic) -> int:
         base, ex = e.args
         t = _terms(base)
         if not ex.is_Integer and not ex.free_symbols:
+            if ex.count_ops() > MAX_EXPONENT_OPS:
+                return MAX_TERMS + 1
             val = ex.evalf(8)
             if val.is_Number and val.is_finite and abs(val - round(val)) < 1e-6:
                 ex = sympy.Integer(round(val))

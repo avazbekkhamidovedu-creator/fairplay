@@ -267,24 +267,32 @@ async def issue_challenge(user_id: int, exam_id: str) -> dict:
     return {"nonce": nonce, "expires_in": ac.CHALLENGE_TTL_S}
 
 
-async def verify_start_proof(store, settings, user_id: int, exam_id: str, client) -> str | None:
+async def verify_start_proof_keyed(store, settings, user_id: int, exam_id: str, client):
     """Audit #1: the app proves itself with a signed, single-use challenge. Returns the
-    app's device id, or None for a browser start (only with FAIRPLAY_REQUIRE_APP=0).
-    Shared by a real start and the sample exam's start (app.trial)."""
+    device_key.DeviceProof (device id + verified device key, if sent), or None for a browser
+    start (only with FAIRPLAY_REQUIRE_APP=0). Shared by a real start and the sample exam."""
     if client is not None:
         # Audit S-09: read-and-delete in one step, so one proof starts at most once.
         owner = await store.getdel(f"chal:{client.nonce}")
-        if owner != f"{user_id}:{exam_id}" or not ac.verify(
-                settings, ac.start_message(client.nonce, client.device_id), client.signature):
+        proof = ac.check_client_proof(settings, client, ac.start_message(client.nonce, client.device_id)) \
+            if owner == f"{user_id}:{exam_id}" else None
+        if proof is None:
             raise HTTPException(403, ac.APP_PROOF_DETAIL)
         # iPad review M6 (2026-10-20): dev builds (soft lock, fixed exit code, inspector)
         # only ever take exams on a FAIRPLAY_DEV=1 server.
         if client.build == "dev" and not settings.dev:
             raise HTTPException(403, ac.APP_PROOF_DETAIL)
-        return client.device_id
+        ac.require_key(settings, proof)
+        return proof
     if settings.require_app:
         raise HTTPException(403, ac.APP_REQUIRED_DETAIL)
+    ac.require_key(settings, None)
     return None
+
+
+async def verify_start_proof(store, settings, user_id: int, exam_id: str, client) -> str | None:
+    proof = await verify_start_proof_keyed(store, settings, user_id, exam_id, client)
+    return proof.device_id if proof else None
 
 
 @router.post("/exams/{exam_id}/start")
@@ -311,10 +319,19 @@ async def start(exam_id: str, body: StartIn, request: Request,
     # 2026-10-23: open to selected students only -> others are refused here, before the
     # start code is looked at (not a wrong code), unless they already started (resume).
     await require_open_for(session, exam_id, p.user_id)
-    device_id = await verify_start_proof(store, settings, p.user_id, exam_id, body.client)
+    proof = await verify_start_proof_keyed(store, settings, p.user_id, exam_id, body.client)
+    device_id = proof.device_id if proof else None
+    device_pub = proof.pub if proof else None
+    if proof is not None and proof.pub and not proof.derived:
+        # only a legacy attempt (bound to this exact id) may present a key its id is not derived
+        # from: it takes its first key, or keeps proving the one it took
+        old = await find_attempt(session, exam_id, p.user_id)
+        if old is None or old.status != "in_progress" or old.device_id != device_id \
+                or old.device_pub not in (None, device_pub):
+            raise HTTPException(403, ac.APP_PROOF_DETAIL)
     # access codes: the student signed in with their code on this device, which is the authorisation
     from .integrations.dkuoj.access_codes import signed_in_here
-    if not await signed_in_here(session, exam_id, p.user_id, device_id):
+    if not await signed_in_here(session, exam_id, p.user_id, device_id, device_pub):
         lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
         n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
                                 "Too many wrong codes, wait 60 seconds", WRONG_CODE_LOCK_S)
@@ -361,7 +378,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
                     started_at=started,
                     deadline_at=deadline,
                     answers={}, client_seq=-1, updated_at=now,
-                    device_id=device_id, session_id=new_session_id(), entries=1,
+                    device_id=device_id, device_pub=device_pub, session_id=new_session_id(), entries=1,
                     client="app" if device_id else "browser")
         session.add(a)
         try:
@@ -378,7 +395,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
         # (client "browser" -- only possible with FAIRPLAY_REQUIRE_APP=0 -- shows in the live room)
         await store.set(f"entry:{a.id}", "1", REENTRY_QUIET_S)
     else:
-        await _resume(session, store, a, device_id, exam)
+        await _resume(session, store, a, device_id, exam, device_pub)
     await cache_attempt(store, a)
     return JSONResponse({**attempt_view(a, exam, now), **await _view_extra(session, a, exam),   # perf 0.6.2
                          "session": a.session_id, "min_app_version": min_version,
@@ -401,7 +418,7 @@ async def _view_extra(session: AsyncSession, a: Attempt, exam: dict) -> dict:
 
 
 async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | None,
-                  exam: dict) -> None:
+                  exam: dict, device_pub: str | None = None) -> None:
     """Start on an existing attempt (audit #3, #6): another device is refused and flagged;
     the same device gets a fresh session (the old one stops working) and is flagged as a
     re-entry, unless it is a double click.
@@ -412,7 +429,7 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     gets here: the page keeps its session and only GETs the attempt. A double click, a
     browser start, and the first bind on a new computer (after release / swap) don't wait."""
     exam_id = exam["id"]
-    if a.device_id and device_id != a.device_id:
+    if a.device_id and (device_id != a.device_id or (a.device_pub and a.device_pub != device_pub)):
         if await ac.once_per(store, f"secdev:{a.id}", 60):   # one flag a minute, not per try
             await ac.add_event(session, store, a.id, exam_id, "second_device",
                                f"start refused from {'device ' + device_id[:8] if device_id else 'a browser'}")
@@ -425,11 +442,13 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
             a.session_id = new_session_id()
             await session.commit()
         return
-    if await store.get(f"entry:{a.id}") and a.device_id == device_id:
-        return  # double click within REENTRY_QUIET_S: same session
+    if await store.get(f"entry:{a.id}") and a.device_id == device_id and a.device_pub == device_pub:
+        return  # double click within REENTRY_QUIET_S: same device and key, same session
     first_bind = a.device_id is None
+    upgraded = not first_bind and device_pub is not None and a.device_pub is None
     now = utcnow()
     a.device_id = device_id
+    a.device_pub = device_pub
     a.session_id = new_session_id()
     a.entries = (a.entries or 0) + 1
     a.client = "app"
@@ -441,6 +460,9 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
         a.swap_requested_at = None        # S4: whichever computer binds, the request is done
     await session.commit()
     await store.set(f"entry:{a.id}", "1", REENTRY_QUIET_S)
+    if upgraded:
+        await ac.add_event(session, store, a.id, exam_id, "device_key_upgraded",
+                           f"device {device_id[:8]} now bound to its key")
     if first_bind:
         await ac.add_event(session, store, a.id, exam_id, "device_bound",
                            f"exam moved to device {device_id[:8]}")

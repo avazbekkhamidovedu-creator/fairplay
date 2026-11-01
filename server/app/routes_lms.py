@@ -374,6 +374,7 @@ async def connection_courses(cid: int, request: Request, p: Principal = Depends(
             async with _provider_for(c, _secret(request)) as prov:
                 courses = await prov.list_courses()
     except TimeoutError:
+        await session.rollback()
         raise await _fail(session, LmsError(TOO_SLOW), c)
     except LmsError as exc:
         raise await _fail(session, exc, c)
@@ -426,6 +427,7 @@ async def link_course(cid: int, lms_course_id: str, request: Request,
                     except LmsError as exc:  # raised before any roster change is made
                         raise await _fail(session, exc, c, link)
         except TimeoutError:
+            await session.rollback()
             raise await _fail(session, LmsError(TOO_SLOW), c)
     finally:
         await _unlock(lock)
@@ -448,6 +450,7 @@ async def resync_course(link_id: int, request: Request, p: Principal = Depends(r
                     except LmsError as exc:  # raised before any roster change is made
                         raise await _fail(session, exc, c, link)
         except TimeoutError:
+            await session.rollback()
             raise await _fail(session, LmsError(TOO_SLOW), c, link)
     finally:
         await _unlock(lock)
@@ -542,6 +545,7 @@ async def push_grades(exam_id: str, request: Request, p: Principal = Depends(req
                     except LmsError as exc:
                         raise await _fail(session, exc, c)
         except TimeoutError:
+            await session.rollback()
             raise await _fail(session, LmsError(TOO_SLOW), c)
     finally:
         await _unlock(lock)

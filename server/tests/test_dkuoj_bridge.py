@@ -182,6 +182,7 @@ def fake(monkeypatch):
     f = FakeOJ()
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
 
@@ -826,6 +827,7 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.handle))
 
     async def no_sleep(_s):
@@ -898,6 +900,7 @@ def test_dkuoj_refusals_are_dead_not_retried(tmp_path, static_dir, monkeypatch):
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.handle))
     try:
         with TestClient(create_app(oj_settings(tmp_path, static_dir))) as c:

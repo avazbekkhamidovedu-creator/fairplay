@@ -129,3 +129,4 @@ class ExamAccessCode(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     bound_device: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    bound_device_pub: Mapped[str | None] = mapped_column(String(200), nullable=True)
