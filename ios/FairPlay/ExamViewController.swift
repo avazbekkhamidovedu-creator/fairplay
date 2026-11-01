@@ -1467,14 +1467,14 @@ final class ExamViewController: UIViewController, LockSurface,
     /// home if it did not react (the questions must not stay on screen).
     private func exitLock() {
         let aid = AppSession.shared.exam?.attemptId
-        let before = committedURL?.absoluteString
+        let before = webView.url?.absoluteString
         if presentedViewController is ExitSheetViewController { dismiss(animated: false) }
         endLock()
         send(ExitSheetLogic.exitedMessage(attemptId: aid))
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self, !LockdownController.shared.isLocked, !LockdownController.shared.isPreLock else { return }
-            if ExitSheetLogic.needsHomeFallback(urlAtExit: before, urlNow: self.committedURL?.absoluteString,
-                                                nowIsServerPage: self.isServerURL(self.committedURL)) {
+            if ExitSheetLogic.needsHomeFallback(urlAtExit: before, urlNow: self.webView.url?.absoluteString,
+                                                nowIsServerPage: self.isServerURL(self.webView.url)) {
                 DebugLog.log("exit", "page did not react to exited: loading \(ExitSheetLogic.homePath)")
                 self.webView.load(Self.serverRequest(self.server.appendingPathComponent(ExitSheetLogic.homePath)))
             }
