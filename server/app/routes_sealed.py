@@ -70,8 +70,11 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
     a = await _own_attempt(session, aid, p)
     seal, answers = open_seal(ac.settings_of(request).secret, aid, body)
     now = utcnow()
-    if not a.started_at <= seal.sealed_at <= now + SEAL_CLOCK_SLACK:
+    if seal.sealed_at < a.started_at:
         raise HTTPException(422, "The sealed time is outside this exam")
+    ahead = seal.sealed_at - now
+    if ahead > timedelta(0):      # the student's clock runs fast: judge the seal as of arrival, tell the teacher
+        seal.sealed_at = now
     answers = await _known_answers(store, session, aid, answers)
     seen = await _seen(store, aid, now)
     if a.status != "submitted":
@@ -79,6 +82,8 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
         await session.refresh(a)
         if a.sealed_proof == body.proof:      # ours won (not a concurrent submit / close)
             await _note(session, store, a, seal, body.proof, _seal_detail(a, seal, seen))
+            if ahead > SEAL_CLOCK_SLACK:
+                await _note_ahead(session, store, a, body.proof, ahead)
             await cache_attempt(store, a)
             return _receipt(a)
     return await _after_submit(session, store, a, seal, answers, body.proof, seen)
@@ -138,6 +143,13 @@ async def _note(session: AsyncSession, store, a: Attempt, seal: ac.Seal, proof: 
     NON_FLAG_TYPES, so it always waits in the teacher's review list."""
     if await ac.once_per(store, f"sealev:{a.id}:{proof[:32]}", SEAL_EVENT_TTL):
         await ac.add_event(session, store, a.id, a.exam_id, "sealed_submit", detail)
+
+
+async def _note_ahead(session: AsyncSession, store, a: Attempt, proof: str, ahead: timedelta) -> None:
+    if await ac.once_per(store, f"sealahead:{a.id}:{proof[:32]}", SEAL_EVENT_TTL):
+        await ac.add_event(session, store, a.id, a.exam_id, "sealed_clock_ahead",
+                           f"the app's clock was {int(ahead.total_seconds())} s ahead of the server when it sealed; "
+                           "the seal time was set to the arrival time")
 
 
 async def _seen(store, aid: str, now) -> str:

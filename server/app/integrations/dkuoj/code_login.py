@@ -55,16 +55,16 @@ CONFIRM_EXPIRED = "This confirmation has expired. Enter your code again."
 CONFIRM_TTL_S = 300
 KIND = "codeconfirm"
 # Failed tries only (a too_early answer counts as one). A lab behind one campus NAT shares an
-# IP, so that limit is wide. The device id is chosen by the client, so the limits that hold
-# against a guesser are the per-network one and the global one: a class of 300 with a few
-# typos each stays far below them. The global valve is far above what one network can add
-# (IP_FAILS a minute), so a single client cannot shut every student out.
-IP_FAILS, IP_WINDOW_S = 30, 60
-GLOBAL_LIMITS = ((6000, 600, 60), (15000, 3600, 300))       # (failures, window s, bucket s)
+# IP, so that limit (Settings.codelogin_ip_fails, 300 a minute) is class-sized, and a valid code
+# is not exempt from it: that would tell a guesser when a guess is right. A random guess hits one
+# of N students' codes with probability about N / 31^6, so 300 guesses a minute stay harmless.
+# The device id is derived from the app's key, so the per-device limits still stop one computer.
+# The global valve needs ten networks at full rate to fill, so a single client cannot shut every
+# student out.
+IP_WINDOW_S = 60
+GLOBAL_LIMITS = ((30000, 600, 60), (75000, 3600, 300))       # (failures, window s, bucket s)
 DEVICE_MIN_FAILS, DEVICE_MIN_WINDOW_S = 5, 60
 DEVICE_HOUR_FAILS, DEVICE_HOUR_WINDOW_S = 20, 3600
-CHALLENGES_PER_MIN = 60
-CONFIRMS_PER_MIN = 30
 
 
 class CodeLoginIn(BaseModel):
@@ -92,8 +92,8 @@ def network_of(ip: str) -> str:
     return str(a)
 
 
-def _counters(ip: str, device: str | None) -> list[tuple[str, int, int]]:
-    out = [(f"codelogin:ip:{network_of(ip)}", IP_FAILS, IP_WINDOW_S)]
+def _counters(s, ip: str, device: str | None) -> list[tuple[str, int, int]]:
+    out = [(f"codelogin:ip:{network_of(ip)}", s.codelogin_limit(s.codelogin_ip_fails, ip), IP_WINDOW_S)]
     if device:
         out += [(f"codelogin:dev1:{device}", DEVICE_MIN_FAILS, DEVICE_MIN_WINDOW_S),
                 (f"codelogin:dev2:{device}", DEVICE_HOUR_FAILS, DEVICE_HOUR_WINDOW_S)]
@@ -142,6 +142,15 @@ async def _count_failure(store, counters) -> None:
         await store.incr(_global_keys(window, bucket, now)[-1], window + bucket)
 
 
+async def _rate(store, key: str, limit: int) -> None:
+    """Request-rate cap per network (successful calls count, wrong codes do not: see
+    _count_failure). 429 carries Retry-After like the failure limits."""
+    if await store.incr(key, 60) > limit:
+        wait = max(1, min(60, int(await store.ttl(key))))
+        raise HTTPException(429, {"message": TOO_MANY, "code": "too_many_requests", "retry_after": wait},
+                            headers={"Retry-After": str(wait)})
+
+
 def _no_store(body: dict) -> JSONResponse:
     return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
@@ -149,8 +158,9 @@ def _no_store(body: dict) -> JSONResponse:
 @router.get("/code-login/challenge")
 async def challenge(request: Request):
     store = get_store()
-    if await store.incr(f"codelogin:chal:{network_of(client_ip(request))}", 60) > CHALLENGES_PER_MIN:
-        raise HTTPException(429, "Too many tries, wait a minute")
+    ip = client_ip(request)
+    s = ac.settings_of(request)
+    await _rate(store, f"codelogin:chal:{network_of(ip)}", s.codelogin_limit(s.codelogin_challenges_per_min, ip))
     nonce = secrets.token_urlsafe(24)
     await store.set(f"codelogin:nonce:{nonce}", "1", ac.CHALLENGE_TTL_S)
     return _no_store({"nonce": nonce, "expires_in": ac.CHALLENGE_TTL_S})
@@ -258,7 +268,7 @@ async def code_login(body: CodeLoginIn, request: Request, session: AsyncSession 
     proof = await _device_of(request, body.client)
     device = proof.device_id if proof else None
     pub = proof.pub if proof else None
-    counters = _counters(ip, device)
+    counters = _counters(s, ip, device)
     await _check_not_blocked(store, counters)
 
     if s.admin_test_code and admin_test.matches(s.admin_test_code, body.code):
@@ -312,8 +322,8 @@ async def confirm(body: ConfirmIn, request: Request, session: AsyncSession = Dep
     from .sync import ensure_user
     s = ac.settings_of(request)
     store = get_store()
-    if await store.incr(f"codelogin:confirm:{network_of(client_ip(request))}", 60) > CONFIRMS_PER_MIN:
-        raise HTTPException(429, TOO_MANY)
+    ip = client_ip(request)
+    await _rate(store, f"codelogin:confirm:{network_of(ip)}", s.codelogin_limit(s.codelogin_confirms_per_min, ip))
     tok = parse_kind_token(s.secret, KIND, body.confirm_token.strip())
     admin = tok is not None and tok.get("scope") == ADMIN_SCOPE and bool(s.admin_test_code)
     if tok is None or (not admin and not isinstance(tok.get("row"), int)):

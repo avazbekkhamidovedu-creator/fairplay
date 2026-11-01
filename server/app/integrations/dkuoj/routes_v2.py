@@ -25,7 +25,7 @@ from ...db import get_session
 from ...models import Attempt, Exam, IntegrityEvent, SchoolClass, ClassMember, User
 from ...services import exam_closes_at
 from ...store import get_store
-from ...timeutil import iso, utcnow
+from ...timeutil import iso, iso_from_epoch, utcnow
 from . import signing
 from .models import ClassLogin, ClassLoginEvent, OjEditor, OjRosterEntry
 from .setup import add_event, require_class_login, create_class_login, disable_logins, is_set_up, login_active, open_login_password
@@ -40,6 +40,8 @@ MAX_OPEN_TO = 2000
 ONLINE_WINDOW_S = 15
 MAX_REPORT_EVENTS = 500
 MAX_WARNINGS = 5
+FP_MODE_WINDOW_S = 180
+SECOND_DEVICE_KINDS = ("access_code_second_device", "second_device")
 NOT_EDITOR = "You are not an editor of this exam in FairPlay yet. Wait two minutes and try again."
 NOT_SYNCED = "This exam has not arrived in FairPlay yet. Try again in two minutes."
 BAD_SIGNATURE = "bad signature"
@@ -414,6 +416,18 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
         select(IntegrityEvent.attempt_id, func.count()).where(
             IntegrityEvent.exam_id == e.id, IntegrityEvent.type == REOPENED)
         .group_by(IntegrityEvent.attempt_id))).all())
+    beats = await get_store().hgetall(f"ab:{e.id}")
+    second = {(aid, typ): n for aid, typ, n in (await session.execute(
+        select(IntegrityEvent.attempt_id, IntegrityEvent.type, func.count()).where(
+            IntegrityEvent.exam_id == e.id, IntegrityEvent.type.in_(SECOND_DEVICE_KINDS))
+        .group_by(IntegrityEvent.attempt_id, IntegrityEvent.type))).all()}
+    second_by_netid: dict[str, int] = {}
+    class_id = _event_class(e)
+    if class_id is not None:       # students who never started have no attempt to hold the event
+        second_by_netid = dict((await session.execute(
+            select(ClassLoginEvent.netid, func.count()).where(
+                ClassLoginEvent.class_id == class_id, ClassLoginEvent.kind == "access_code_second_device",
+                ClassLoginEvent.detail.like(f"exam {e.id}:%")).group_by(ClassLoginEvent.netid))).all())
     t = time.time()
     counts = {"roster": len(roster), "set_up": 0, "not_started": 0, "writing": 0, "offline": 0,
               "waiting": 0, "handed_in": 0}
@@ -437,7 +451,25 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
                     h = None
             status = "writing" if h and t - float(h.get("t") or 0) <= ONLINE_WINDOW_S else "offline"
         counts[status] += 1
+        b = None
+        if a is not None and a.id in beats:
+            try:
+                b = json.loads(beats[a.id])
+            except ValueError:
+                b = None
+        if a is None:
+            fp_mode = "not_started"
+        elif a.status == "submitted":
+            fp_mode = "submitted"
+        else:
+            fresh = b is not None and t - float(b.get("t") or 0) <= FP_MODE_WINDOW_S
+            fp_mode = "on" if fresh and b.get("locked") else "off"
         students.append({
+            "fp_mode": fp_mode, "device_state": code_states.get(u.netid or "", "unused"),
+            "second_device_attempts": (int(second.get((a.id, "second_device")) or 0) if a else 0) + max(
+                int(second.get((a.id, "access_code_second_device")) or 0) if a else 0,
+                int(second_by_netid.get(u.netid or "") or 0)),
+            "last_beat_at": iso_from_epoch(float(b["t"])) if b and b.get("t") else None,
             "netid": u.netid or u.username, "name": u.name, "set_up": up, "status": status,
             "answered": min(int((a.answered if a else 0) or 0), nq), "questions": nq,
             "swap_requested": bool(a is not None and a.status == "in_progress" and a.swap_requested_at),

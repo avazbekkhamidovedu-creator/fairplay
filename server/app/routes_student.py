@@ -803,11 +803,13 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     if not ac.verify(settings, msg, body.signature):
         raise HTTPException(403, ac.APP_PROOF_DETAIL)
     last = json.loads(raw) if raw else None
-    # Replayed or reordered beat. Per session (audit S-13): a new Mac / new session with
-    # a slower clock is not rejected because of the old session's timestamps.
-    if last and last.get("session", body.session) == body.session and body.ts <= last["ts"]:
-        raise HTTPException(409, "Old app signal")
     now = time.time()
+    # Replayed or reordered beat. Per session (audit S-13): a new Mac / new session with
+    # a slower clock is not rejected because of the old session's timestamps. A lower ts
+    # after a silence longer than APP_GAP_S is a clock that stepped back (NTP), not a replay.
+    if last and last.get("session", body.session) == body.session and body.ts <= last["ts"] \
+            and now - last["t"] <= ac.APP_GAP_S:
+        raise HTTPException(409, "Old app signal")
     exam_id = meta["exam_id"]
     # Audit M-02: a Mac whose login session is in the background (fast user switching,
     # login window) is not locked, whatever the app says.
@@ -927,6 +929,7 @@ async def exit_code(aid: str, body: ExitCodeIn, request: Request,
         a.session_id = new_session_id()
         a.updated_at = utcnow()
         await session.commit()
+        await cache_attempt(store, a)
     out: dict = {"ok": True}
     if body.nonce:
         # Audit 2026-10-13: signed like the hand-in status, so the app unlocks only on a

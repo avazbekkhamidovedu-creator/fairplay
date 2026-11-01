@@ -211,6 +211,7 @@ def test_failures_are_limited_per_device_with_retry_after(oj, ready):
 
 
 def test_failures_are_limited_per_ip(oj, ready):
+    oj.app.state.settings.codelogin_ip_fails = 30
     for _ in range(30):
         assert enter(oj, "AAAAAA").status_code == 400
     r = enter(oj, ready["alice"])
@@ -431,6 +432,7 @@ def test_network_of_groups_ipv6_by_64():
 
 def test_ipv6_64_shares_one_failure_limit(oj, ready, monkeypatch):
     from app.integrations.dkuoj import code_login
+    oj.app.state.settings.codelogin_ip_fails = 30
     n = iter(range(1, 1000))
     monkeypatch.setattr(code_login, "client_ip", lambda request: f"2001:db8:5:6:{next(n):x}::1")
     for _ in range(30):
@@ -495,4 +497,5 @@ def test_confirm_token_dies_when_the_code_is_reissued(oj, ready):
 def test_one_network_cannot_fill_the_global_failure_window():
     from app.integrations.dkuoj import code_login as cl
     limit, window, _ = cl.GLOBAL_LIMITS[0]
-    assert cl.IP_FAILS * (window // cl.IP_WINDOW_S) * 20 <= limit
+    from app.config import Settings
+    assert Settings().codelogin_ip_fails * (window // cl.IP_WINDOW_S) * 10 <= limit

@@ -235,11 +235,18 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
               "waiting": 1, "handed_in": 41},
    "students": [{"netid":"bl642","name":"Bob Li","set_up":true,"status":"writing|not_started|offline|waiting|handed_in",
                  "answered":2,"questions":3,"seconds_left":2460,"swap_requested":false,"code_state":"bound|unused|none",
-                 "reopened":false,"hand_in_count":0,"waiting_since":null,"warnings":["Left the app once (8 s)"]}],
+                 "reopened":false,"hand_in_count":0,"waiting_since":null,"warnings":["Left the app once (8 s)"],
+                 "fp_mode":"on","device_state":"bound","second_device_attempts":0,"last_beat_at":"..."}],
    "server_time": "..."}
   ```
   `synced:false` (404 is not used) when FairPlay hasn't got the assignment yet.
   Student fields (2026-10-30): `swap_requested` = a device swap pending approval;
+  Optional keys on each student row (2026-11-01, ignore if absent): `fp_mode` = `"not_started"` (no attempt) |
+  `"on"` (attempt in progress, the last signed app beat said the lock is engaged and is at most 180 s old) |
+  `"off"` (in progress but not locked, no recent signed beat, or opened without the app) | `"submitted"`;
+  `device_state` = `"unused"` | `"bound"` (the access code's device, `"unused"` also when there is no code);
+  `second_device_attempts` = number of `access_code_second_device` / `second_device` events for the student on
+  this exam; `last_beat_at` = ISO time of the last signed app beat or null (beats expire after a while).
   `code_state` = `"bound"` (used on this device), `"unused"` (freed by release or reissue),
   or `"none"` (no code); `reopened` = attempt was reopened once; `hand_in_count` = reopens + 1
   if submitted; `waiting_since` = ISO time when pending resume began (null if not waiting).
@@ -305,7 +312,7 @@ Five endpoints let a professor fix student emergencies without restarting them. 
 
 - **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"code"}` (200 if not handed in; 409 if submitted). Unbinds the access code and frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device using the same access code. Rate limit: 3 per student per exam, counted over 30 days.
 
-- **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "...", "reason": "..."}` → `{"ok": true, "code": "...", "first_name": "...", "last_name": "..."}` (200; 404 if the student is not on the roster). Issues a new access code for the student. The code is returned once in the response and never logged or stored in events. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
+- **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "...", "reason": "..."}` → `{"ok": true, "code": "...", "first_name": "...", "last_name": "..."}` (200; 404 if the student is not on the roster). Issues a new access code for the student; when the student has an attempt that is not handed in, the attempt is freed from its device in the same transaction exactly like release-device (answers and timer kept, new session, the old device is cut off), so the new code resumes it on the same or a new device without teacher approval. A handed-in attempt is left alone. The code is returned once in the response and never logged or stored in events. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
 
 - **`POST /exams/<key>/students/<netid>/reopen`** body `{"minutes": 5..60, "reason": "..."}` → `{"ok": true, "deadline_at": "..."}` (200; 409 if not handed in, exam not live, graded, or already reopened once). The first hand-in receipt is kept on file; answers are restored, device freed, and a new deadline is set. Rate limit: once per attempt, while live and not graded.
 

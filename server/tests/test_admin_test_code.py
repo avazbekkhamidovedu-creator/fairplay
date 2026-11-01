@@ -145,6 +145,7 @@ def test_teacher_endpoints_are_forbidden(adm):
 
 
 def test_wrong_codes_count_like_student_codes(adm):
+    adm.app.state.settings.codelogin_ip_fails = 30
     for _ in range(30):
         assert enter(adm, "AAAAAA").status_code == 400
     assert enter(adm, "AAAAAA").status_code == 429

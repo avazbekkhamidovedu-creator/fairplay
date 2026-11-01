@@ -139,11 +139,16 @@ async def reissue(key: str, request: Request, call: BridgeCall = Depends(signed_
     u, a = await _on_list(session, e, netid)
     await _limit(f"oj:reissue:{e.id}:{u.id}", REISSUES_PER_STUDENT, MONTH_S)
     await _limit(f"oj:reissue:exam:{e.id}", REISSUES_PER_EXAM_HOUR, HOUR_S)
-    made = await access_codes.reissue(session, request.app.state.settings.secret, e, netid)
+    free = a is not None and a.status != "submitted"
+    made = await access_codes.reissue(session, request.app.state.settings.secret, e, netid, commit=not free)
     if made is None:
         raise HTTPException(404, "This student is not on this exam's list")
     code, first, last = made
-    await _record(session, e, call, "access_code_reissued", u, a, "new access code made", reason)
+    text = "new access code made"
+    if free:
+        await control.release_attempt_device(session, a, swap=True, clear_pending=True)
+        text += "; running attempt freed from its device, answers and timer kept"
+    await _record(session, e, call, "access_code_reissued", u, a, text, reason)
     log.info("DKU OJ exam %s: access code reissued by %s", key, call.acting_user)
     return _out({"ok": True, "code": code, "first_name": first, "last_name": last})
 

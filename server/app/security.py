@@ -248,7 +248,10 @@ def _now() -> datetime:
 
 async def scope_over(uid: int, exam_id: str) -> bool:
     """A code sign-in stops working 5 minutes after its exam was handed in, and 30 minutes
-    after the exam's end for a student who never started. The end moment is cached."""
+    after the exam's end (plus the largest extra time, or the student's own deadline when
+    later) for the rest. A student who handed in on the server's close (a sealed hand-in
+    may still be on its way) keeps the longer window. The end moment is cached."""
+    from .closing import max_extra
     from .db import get_database
     from .models import Attempt, Exam
     from .services import exam_closes_at
@@ -259,15 +262,23 @@ async def scope_over(uid: int, exam_id: str) -> bool:
     raw = await store.get(key)
     if raw is None:
         async with get_database().sessionmaker() as s:
-            sub = (await s.execute(select(Attempt.submitted_at).where(
-                Attempt.exam_id == exam_id, Attempt.student_id == uid))).scalar()
+            row = (await s.execute(select(Attempt.submitted_at, Attempt.deadline_at, Attempt.auto_submitted).where(
+                Attempt.exam_id == exam_id, Attempt.student_id == uid))).first()
+            sub, deadline, auto = (row[0], row[1], bool(row[2])) if row else (None, None, False)
             e = await s.get(Exam, exam_id)
             closes = exam_closes_at(e) if e is not None else None
+            if closes is not None:
+                closes += await max_extra(s, e)
+        late_end = None
+        if closes is not None or deadline is not None:
+            late_end = max(x for x in (closes, deadline) if x is not None) + timedelta(seconds=SCOPED_AFTER_END_S)
         end = None
         if sub is not None:
             end = sub + timedelta(seconds=SCOPED_AFTER_HANDIN_S)
-        elif closes is not None:
-            end = closes + timedelta(seconds=SCOPED_AFTER_END_S)
+            if auto and late_end is not None:
+                end = max(end, late_end)
+        else:
+            end = late_end
         raw = end.isoformat() if end else "-"
         await store.set(key, raw, 600 if sub is not None else 30)
     return raw != "-" and _now() >= datetime.fromisoformat(raw)

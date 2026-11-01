@@ -98,9 +98,7 @@ def test_sealed_at_must_lie_in_the_attempt(app_client, exam):
     _, answers = mcq_answer(qs)
     before = utcnow() - timedelta(hours=1)
     assert post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=before)).status_code == 422
-    future = utcnow() + timedelta(minutes=5)
-    assert post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=future)).status_code == 422
-    soon = utcnow() + timedelta(seconds=60)                     # within the 2 min slack
+    soon = utcnow() + timedelta(seconds=60)                     # a little ahead: clamped to now
     assert post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=soon)).status_code == 200
 
 

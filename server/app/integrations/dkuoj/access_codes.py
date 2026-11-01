@@ -115,10 +115,11 @@ async def _ensure(session: AsyncSession, secret: str, exam: Exam) -> Sheet:
     return sheet
 
 
-async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) -> tuple[str, str, str] | None:
+async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str,
+                  commit: bool = True) -> tuple[str, str, str] | None:
     """Replace the student's code (the old one stops matching) and return (code, first name,
     last name); None when the NetID is not on the exam's list. The plain code leaves only
-    through the caller's response."""
+    through the caller's response. With commit=False the caller commits the change."""
     if netid not in {u.netid for u, _, _ in await _roster(session, exam) if u.netid}:
         return None
     await ensure_codes(session, secret, exam)
@@ -130,7 +131,8 @@ async def reissue(session: AsyncSession, secret: str, exam: Exam, netid: str) ->
     row.created_at, row.revoked_at, row.used_at, row.bound_device = utcnow(), None, None, None
     row.bound_device_pub = None
     first, last = row.first_name, row.last_name
-    await session.commit()
+    if commit:
+        await session.commit()
     return code, first, last
 
 
