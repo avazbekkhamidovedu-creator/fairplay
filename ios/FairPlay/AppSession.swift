@@ -42,9 +42,25 @@ final class AppSession {
         guard Signing.isSafeToken(nonce, min: 8, max: 128) else {
             return ["type": "attestationFailed", "nonce": nonce, "reason": "bad_nonce"]
         }
-        return ["type": "attestation", "nonce": nonce, "device_id": deviceId,
-                "signature": AppSession.sign(Signing.startMessage(nonce: nonce, deviceId: deviceId)),
+        let proof = DeviceIdentity.binding.proof { Signing.startMessage(nonce: nonce, deviceId: $0) }
+        reportKeyFailureOnce()
+        var reply: [String: Any] = ["type": "attestation", "nonce": nonce, "device_id": proof.deviceId,
+                "signature": AppSession.sign(Signing.startMessage(nonce: nonce, deviceId: proof.deviceId)),
                 "version": Config.version, "build": Config.isDevBuild ? "dev" : "release"]
+        if let pub = proof.publicKey, let sig = proof.signature {
+            reply["device_pub"] = pub
+            reply["device_sig"] = sig
+        }
+        return reply
+    }
+
+    private var keyFailureReported = false
+
+    private func reportKeyFailureOnce() {
+        guard !keyFailureReported, let why = DeviceIdentity.binding.failure else { return }
+        keyFailureReported = true
+        DebugLog.log("app", "device key unavailable, legacy device proof: \(why)")
+        EventLog.shared.record("device_key_unavailable", why)
     }
 
     // MARK: - Exam session + beats

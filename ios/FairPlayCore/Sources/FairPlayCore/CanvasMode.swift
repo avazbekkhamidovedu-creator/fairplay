@@ -164,6 +164,16 @@ public enum CanvasNavigation {
         inCourse(segs, scope) && segs.count >= 4 && segs[2] == scope.itemKind && segs[3] == scope.itemId
     }
 
+    public static let helperRoots: Set<String> = ["media_objects_iframe", "equation_images"]
+
+    /// Same-host read-only frames Canvas and New Quizzes embed in an exam page.
+    public static func isHelperFrame(_ url: URL, scope: CanvasScope) -> Bool {
+        guard let segs = segments(url), let first = segs.first?.lowercased() else { return false }
+        if helperRoots.contains(first) { return true }
+        if first == "api" { return segs.count >= 2 && segs[1].lowercased() == "lti" }
+        return inCourse(segs, scope) && segs.count >= 3 && segs[2].lowercased() == "external_tools"
+    }
+
     public static func isUnderItem(_ url: URL, scope: CanvasScope) -> Bool {
         guard let segs = segments(url) else { return false }
         return isUnderItem(segs, scope: scope)
@@ -374,7 +384,7 @@ public struct CanvasBrowser {
     public func allowsMainFrame(_ url: URL) -> Bool { allows(url) && !blocksMainFrame(url) }
 
     public func blocksExamHostFrame(_ url: URL) -> Bool {
-        url.host?.lowercased() == examHost && blocksMainFrame(url)
+        url.host?.lowercased() == examHost && !CanvasNavigation.isHelperFrame(url, scope: scope) && blocksMainFrame(url)
     }
 
     public func childAllows(_ url: URL, mainFrame: Bool = true) -> Bool {

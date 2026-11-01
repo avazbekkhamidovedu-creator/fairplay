@@ -586,6 +586,18 @@ import Foundation
                        armed: armed, finishUsable: finishUsable)
     }
 
+    @Test func sameHostHelperFramesAreAllowedInTheQuiz() {
+        var b = browser()
+        _ = b.committed(page("/courses/123/quizzes/456/take"))
+        let allowed = ["/courses/123/external_tools/retrieve?display=borderless&url=x", "/courses/123/external_tools/9",
+                       "/api/lti/courses/123/jwt", "/media_objects_iframe/m-abc", "/equation_images/x%5E2"]
+        let blocked = ["/conversations", "/courses/999/external_tools/retrieve", "/files/5", "/users/1", "/profile",
+                       "/courses/999/quizzes/1", "/api/v1/courses", "/courses/123/files/5", "/courses/123/external_tools/../x"]
+        for path in allowed { #expect(!b.blocksExamHostFrame(page(path)), "\(path)") }
+        for path in blocked { #expect(b.blocksExamHostFrame(page(path)), "\(path)") }
+        #expect(b.blocksMainFrame(page("/api/lti/courses/123/jwt")))
+    }
+
     private func page(_ path: String) -> URL { URL(string: "https://canvas.dku.edu" + path)! }
 
     @Test func phaseAndPolicyFollowCommittedPages() {

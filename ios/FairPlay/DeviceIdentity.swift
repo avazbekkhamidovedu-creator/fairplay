@@ -16,7 +16,17 @@ enum DeviceIdentity {
     private static let service = "ai.proctora.student.ipad.device"
     private static let account = "device-secret"
 
-    static let deviceId: String = Signing.deviceId(secret: loadOrCreateSecret(), key: Config.appKey)
+    /// Whether the Keychain already held a device secret when this launch first looked:
+    /// that is an install that may have a legacy id bound at the server.
+    private static let loaded: (secret: String, evidence: LegacyEvidence) = loadOrCreateSecret()
+
+    static let legacyDeviceId: String = Signing.deviceId(secret: loaded.secret, key: Config.appKey)
+
+    static let binding: DeviceBinding = DeviceBinding.resolve(
+        legacyId: legacyDeviceId, evidence: { loaded.evidence },
+        store: KeychainDeviceKeyStore(namespace: "ai.proctora.student.ipad"))
+
+    static var deviceId: String { binding.deviceId }
 
     private static var baseQuery: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -24,14 +34,14 @@ enum DeviceIdentity {
          kSecAttrAccount as String: account]
     }
 
-    private static func loadOrCreateSecret() -> String {
+    private static func loadOrCreateSecret() -> (secret: String, evidence: LegacyEvidence) {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
         if status == errSecSuccess, let data = out as? Data, let s = String(data: data, encoding: .utf8), s.count >= 32 {
-            return s
+            return (s, .present)
         }
         let secret = randomSecret()
         if status == errSecSuccess {
@@ -41,11 +51,11 @@ enum DeviceIdentity {
             if SecItemUpdate(baseQuery as CFDictionary, update) != errSecSuccess {
                 DebugLog.log("app", "Keychain refused to repair the device secret; device id for this launch only")
             }
-            return secret
+            return (secret, .present)
         }
         guard status == errSecItemNotFound else {
             DebugLog.log("app", "Keychain read failed (\(status)); device id for this launch only")
-            return secret
+            return (secret, .unknown)
         }
         var add = baseQuery
         add[kSecValueData as String] = Data(secret.utf8)
@@ -53,7 +63,7 @@ enum DeviceIdentity {
         if SecItemAdd(add as CFDictionary, nil) != errSecSuccess {
             DebugLog.log("app", "Keychain refused the device secret; device id for this launch only")
         }
-        return secret
+        return (secret, .absent)
     }
 
     private static func randomSecret() -> String {
