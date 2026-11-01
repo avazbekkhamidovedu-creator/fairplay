@@ -37,6 +37,8 @@ OTHER_DEVICE_DETAIL = ("This exam is already open on another computer. "
 SESSION_DETAIL = "This exam was opened somewhere else. Ask the invigilator for help."
 # S4: start on a second computer while the attempt is bound elsewhere (409 detail object).
 SWAP_NEEDED = {"code": "swap_needed", "message": OTHER_DEVICE_DETAIL}
+START_CODE_REQUIRED = {"code": "start_code_required",
+                       "message": "Ask the invigilator for the start code to continue the exam."}
 SWAP_TOO_LATE_DETAIL = "Finish on the computer you started on"
 SWAP_FINAL_SAVE_S = 120
 # Gaps in the app's own signal that the teacher should see (app killed, Mac asleep, cable).
@@ -274,6 +276,8 @@ async def check_session(request: Request, session: AsyncSession, store: Store, a
     """Writes/reads of an attempt must come from its current app session."""
     bound = meta.get("session_id")
     given = session_header(request)
+    if meta.get("exited"):
+        raise HTTPException(409, SESSION_DETAIL)
     if bound is None or given == bound:
         return
     if given is None and not settings_of(request).require_app:

@@ -12,6 +12,7 @@
 """
 import asyncio
 import os
+import json
 import sqlite3
 import threading
 import time
@@ -201,8 +202,10 @@ def test_submit_does_not_overwrite_a_newer_put(client, live_exam, alice, tmp_pat
                     json={"answers": {q0: 2}, "client_seq": 5})
     assert r.status_code == 200
     assert len(calls) == 2
-    got = client.get(f"/api/student/attempts/{aid}", headers=hs).json()
-    assert got["answers"] == {q0: 1}          # the newer PUT won, not the seq-5 body
+    con = sqlite3.connect(tmp_path / "test.db")
+    stored = json.loads(con.execute("SELECT answers FROM attempts WHERE id = ?", (aid,)).fetchone()[0])
+    con.close()
+    assert stored == {q0: 1}          # the newer PUT won, not the seq-5 body
 
 
 # ---------------------------------------------------------------- small budgets / checks

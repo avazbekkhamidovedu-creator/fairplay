@@ -271,17 +271,15 @@ async def _not_code_exam(session: AsyncSession, exam_id: str) -> None:
 
 
 async def _not_handed_in_hidden(session: AsyncSession, exam: dict, user_id: int) -> None:
-    """2026-10-24 (app.review): a student who handed in an exam whose review level hides the
-    questions ("nothing", "score", "breakdown") gets no package (the questions) while the exam
-    is still live. Exams without a review setting (FairPlay's own) are unchanged."""
+    """A student who handed in gets no package or package key (the questions) unless the
+    teacher opened the review of an external exam (app.review); FairPlay's own exams never."""
     from .integrations.registry import integration_for
     from .models import Attempt
     from .review import review_level, shows_answers
-    if integration_for(exam) is None:
-        return
     row = (await session.execute(
         select(Attempt.status, Exam.review_after_handin)
         .join(Exam, Exam.id == Attempt.exam_id)
         .where(Attempt.exam_id == exam["id"], Attempt.student_id == user_id))).first()
-    if row is not None and row[0] == "submitted" and not shows_answers(review_level(exam.get("source"), row[1])):
+    if row is not None and row[0] == "submitted" and (
+            integration_for(exam) is None or not shows_answers(review_level(exam.get("source"), row[1]))):
         raise HTTPException(409, "You handed this exam in.")

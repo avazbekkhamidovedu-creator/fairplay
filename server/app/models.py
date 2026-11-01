@@ -224,6 +224,9 @@ class Attempt(Base):
     swap_device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     swap_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     swap_old_session: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # set when the invigilator exit code was accepted; the attempt then only resumes with
+    # the exam's current start code (cleared by that resume, release-device and reissue)
+    exited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     swap_approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Integrations: the result the external system released for this attempt:
     # {released, total, total_points, updated_at, questions: [{question_id, points, feedback_md}]}

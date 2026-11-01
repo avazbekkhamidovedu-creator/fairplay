@@ -430,7 +430,7 @@ def attempt_meta(a: Attempt) -> dict:
     return {"exam_id": a.exam_id, "student_id": a.student_id, "status": a.status,
             "deadline_at": iso(a.deadline_at), "session_id": a.session_id,
             "device_id": a.device_id, "started_at": iso(a.started_at),
-            "approval": approval_of(a)}
+            "approval": approval_of(a), "exited": a.exited_at is not None}
 
 
 def approval_of(a: Attempt) -> str | None:

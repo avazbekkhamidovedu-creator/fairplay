@@ -257,6 +257,9 @@ async def challenge(exam_id: str, p: Principal = Depends(require_student),
         raise HTTPException(404, "Exam not found")
     await require_listed(session, exam_id, p.user_id)
     await require_member(session, exam, p.user_id)
+    done = await find_attempt(session, exam_id, p.user_id)
+    if done is not None and done.status == "submitted":
+        raise HTTPException(409, "Already submitted")
     return await issue_challenge(p.user_id, exam_id)
 
 
@@ -322,6 +325,10 @@ async def start(exam_id: str, body: StartIn, request: Request,
     # 2026-10-23: open to selected students only -> others are refused here, before the
     # start code is looked at (not a wrong code), unless they already started (resume).
     await require_open_for(session, exam_id, p.user_id)
+    # handed in: nothing below may run (no code check, no proof, no resume); only a teacher reopen undoes it
+    done = await find_attempt(session, exam_id, p.user_id)
+    if done is not None and done.status == "submitted":
+        raise HTTPException(409, "Already submitted")
     proof = await verify_start_proof_keyed(store, settings, p.user_id, exam_id, body.client)
     device_id = proof.device_id if proof else None
     device_pub = proof.pub if proof else None
@@ -332,9 +339,16 @@ async def start(exam_id: str, body: StartIn, request: Request,
         if old is not None and (old.status != "in_progress" or old.device_id != device_id
                                 or old.device_pub not in (None, device_pub)):
             raise HTTPException(403, ac.APP_PROOF_DETAIL)
+    now = utcnow()
+    a = await find_attempt(session, exam_id, p.user_id)
+    # after an invigilator exit the attempt only resumes with the exam's current start code,
+    # also for access-code students (who otherwise never type one)
+    exited = a is not None and a.exited_at is not None and a.status == "in_progress"
+    if exited and not body.start_code.strip():
+        raise HTTPException(403, ac.START_CODE_REQUIRED)
     # access codes: the student signed in with their code on this device, which is the authorisation
     from .integrations.dkuoj.access_codes import signed_in_here
-    if not await signed_in_here(session, exam_id, p.user_id, device_id, device_pub):
+    if exited or not await signed_in_here(session, exam_id, p.user_id, device_id, device_pub):
         lock_key, count_key = f"codelock:{p.user_id}", f"wrongcode:{p.user_id}"
         n = await take_code_try(store, lock_key, count_key, MAX_WRONG_CODES, WRONG_CODE_WINDOW_S,
                                 "Too many wrong codes, wait 60 seconds", WRONG_CODE_LOCK_S)
@@ -343,8 +357,6 @@ async def start(exam_id: str, body: StartIn, request: Request,
             raise HTTPException(403, "Wrong start code")
         await store.delete(count_key)
 
-    now = utcnow()
-    a = await find_attempt(session, exam_id, p.user_id)
     created = False
     if a is None:
         # Audit S-07: the cached exam may be up to 120 s old. Check the real status in the
@@ -432,6 +444,7 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     gets here: the page keeps its session and only GETs the attempt. A double click, a
     browser start, and the first bind on a new computer (after release / swap) don't wait."""
     exam_id = exam["id"]
+    was_exited = a.exited_at is not None
     if a.device_id and (device_id != a.device_id or (a.device_pub and a.device_pub != device_pub)):
         if await ac.once_per(store, f"secdev:{a.id}", 60):   # one flag a minute, not per try
             await ac.add_event(session, store, a.id, exam_id, "second_device",
@@ -441,11 +454,12 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     if device_id is None:
         # Browser demo mode (FAIRPLAY_REQUIRE_APP=0) on an unbound attempt: keep the session
         # so a second tab does not break the first one.
-        if a.session_id is None:
+        if a.session_id is None or was_exited:
             a.session_id = new_session_id()
+            a.exited_at = None
             await session.commit()
         return
-    if await store.get(f"entry:{a.id}") and a.device_id == device_id and a.device_pub == device_pub:
+    if not was_exited and await store.get(f"entry:{a.id}") and a.device_id == device_id and a.device_pub == device_pub:
         return  # double click within REENTRY_QUIET_S: same device and key, same session
     first_bind = a.device_id is None
     upgraded = not first_bind and device_pub is not None and a.device_pub is None
@@ -455,8 +469,10 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
     a.session_id = new_session_id()
     a.entries = (a.entries or 0) + 1
     a.client = "app"
+    a.exited_at = None
     a.updated_at = now
-    ask = not first_bind and exam.get("resume_needs_approval", True) and not a.pending_resume
+    ask = (not first_bind and not was_exited and exam.get("resume_needs_approval", True)
+           and not a.pending_resume)
     if ask:
         a.pending_resume, a.pending_since = True, now
     if first_bind:
@@ -478,7 +494,8 @@ async def _resume(session: AsyncSession, store, a: Attempt, device_id: str | Non
 
 
 def _meta_of(a: Attempt) -> dict:
-    return {"exam_id": a.exam_id, "session_id": a.session_id, "status": a.status}
+    return {"exam_id": a.exam_id, "session_id": a.session_id, "status": a.status,
+            "exited": a.exited_at is not None}
 
 
 async def _own_attempt(session: AsyncSession, aid: str, p: Principal) -> Attempt:
@@ -496,11 +513,11 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
     exam = await get_exam_cached(get_store(), session, a.exam_id)
     if exam is None:
         raise HTTPException(404, "Attempt not found")
-    if a.status == "submitted" and integration_for(exam) is not None:
-        # 2026-10-24 (app.review): after hand-in an external exam's questions and answers
-        # are shown only when the teacher opened the review (the done page needs neither).
+    if a.status == "submitted":
+        # handed in: questions and answers come back only for an external exam whose teacher
+        # opened the review (app.review); the done page needs neither
         review = (await session.execute(select(Exam.review_after_handin).where(Exam.id == a.exam_id))).scalar()
-        if not shows_answers(review_level(exam.get("source"), review)):
+        if integration_for(exam) is None or not shows_answers(review_level(exam.get("source"), review)):
             return JSONResponse({**attempt_view(a, exam, utcnow()), "questions": [], "answers": {}})
     return JSONResponse({**attempt_view(a, exam, utcnow()), **await _view_extra(session, a, exam)})   # perf 0.6.2
 
@@ -529,7 +546,7 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
         update(Attempt)
         .where(Attempt.id == aid, Attempt.student_id == p.user_id,
                Attempt.status == "in_progress", Attempt.client_seq < body.client_seq,
-               Attempt.deadline_at > now, sess_ok)
+               Attempt.deadline_at > now, Attempt.exited_at.is_(None), sess_ok)
         .values(answers=answers, client_seq=body.client_seq, updated_at=now,
                 answered=count_answered(answers)))
     await session.commit()
@@ -539,7 +556,7 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
     row = (await session.execute(
         select(Attempt.student_id, Attempt.status, Attempt.deadline_at, Attempt.client_seq,
                Attempt.exam_id, Attempt.session_id, Attempt.swap_old_session,
-               Attempt.swap_approved_at)
+               Attempt.swap_approved_at, Attempt.exited_at)
         .where(Attempt.id == aid))).first()
     if row is None or row.student_id != p.user_id:
         raise HTTPException(404, "Attempt not found")
@@ -548,7 +565,8 @@ async def save_answers(aid: str, body: AnswersIn, request: Request,
         if saved is not None:
             return {"saved": True, "client_seq": body.client_seq, "server_time": iso(now), "merged": saved}
     await ac.check_session(request, session, get_store(), aid,
-                           {"exam_id": row.exam_id, "session_id": row.session_id})
+                           {"exam_id": row.exam_id, "session_id": row.session_id,
+                            "exited": row.exited_at is not None})
     if row.status == "submitted":
         raise HTTPException(409, "Attempt already submitted")
     if now >= row.deadline_at:
@@ -799,7 +817,7 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     meta = await attempt_meta_from(store, session, aid, raw_meta)
     if meta is None or meta["student_id"] != p.user_id:
         raise HTTPException(404, "Attempt not found")
-    if meta.get("session_id") != body.session or (
+    if meta.get("exited") or meta.get("session_id") != body.session or (
             meta.get("device_id") and meta["device_id"] != body.device_id):
         raise HTTPException(409, ac.SESSION_DETAIL)
     msg = ac.beat_message(aid, body.session, body.device_id, body.ts, body.locked, body.checks)
@@ -913,6 +931,8 @@ async def exit_code(aid: str, body: ExitCodeIn, request: Request,
     store = get_store()
     a = await _own_attempt(session, aid, p)
     await ac.check_session(request, session, store, aid, _meta_of(a))
+    if a.status != "in_progress":
+        raise HTTPException(409, "Attempt already submitted")
     lock_key, count_key = f"exitlock:{aid}", f"exitwrong:{aid}"
     # Audit 2026-10-13: the try is reserved before the (awaited) DB read, so parallel
     # guesses can't all slip past the lock check.
@@ -930,7 +950,7 @@ async def exit_code(aid: str, body: ExitCodeIn, request: Request,
                        "invigilator code accepted")
     if a.status == "in_progress":
         a.session_id = new_session_id()
-        a.updated_at = utcnow()
+        a.exited_at = a.updated_at = utcnow()
         await session.commit()
         await cache_attempt(store, a)
     out: dict = {"ok": True}
@@ -959,7 +979,8 @@ async def offline_key(aid: str, body: OfflineKeyIn, request: Request,
     await ac.check_session(request, session, store, aid, _meta_of(a))
     if a.status != "in_progress":
         raise HTTPException(409, "Attempt already submitted")
-    if body.session != a.session_id or (a.device_id and a.device_id != body.device_id):
+    if a.exited_at is not None or body.session != a.session_id or (
+            a.device_id and a.device_id != body.device_id):
         raise HTTPException(409, ac.SESSION_DETAIL)
     msg = ac.offline_key_message(aid, body.session, body.device_id, body.ts)
     if not ac.verify(settings, msg, body.signature):
