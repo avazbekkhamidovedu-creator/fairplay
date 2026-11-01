@@ -18,7 +18,6 @@ final class LockBar: UIView {
     private let finish = UIButton(type: .system)
     private let backButton = UIButton(type: .system)
     private let quizButton = UIButton(type: .system)
-    private let exitButton = UIButton(type: .system)
     private let notice = UILabel()
     private var externalOn = false
     private var finishAllowed = true
@@ -56,13 +55,6 @@ final class LockBar: UIView {
         }
         backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
         quizButton.addTarget(self, action: #selector(quizTapped), for: .touchUpInside)
-        exitButton.setTitle("Invigilator exit", for: .normal)
-        exitButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
-        exitButton.accessibilityIdentifier = "invigilatorExit"
-        exitButton.accessibilityLabel = "Invigilator exit"
-        exitButton.accessibilityHint = "Opens a field for the 6-digit invigilator code. Students must not use this."
-        exitButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        exitButton.addTarget(self, action: #selector(exitTapped), for: .touchUpInside)
         notice.font = .systemFont(ofSize: 13, weight: .medium)
         notice.textColor = LockBar.amber
         notice.lineBreakMode = .byTruncatingTail
@@ -73,7 +65,7 @@ final class LockBar: UIView {
 
         let spacer = UIView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let stack = UIStackView(arrangedSubviews: [BrandMark.view(size: 28), badge, titleLabel, notice, spacer, countdown, backButton, quizButton, finish, exitButton, clock])
+        let stack = UIStackView(arrangedSubviews: [BrandMark.view(size: 28), badge, titleLabel, notice, spacer, countdown, backButton, quizButton, finish, clock])
         stack.axis = .horizontal
         stack.alignment = .center
         stack.spacing = 16
@@ -161,15 +153,6 @@ final class LockBar: UIView {
 
     @objc private func held(_ g: UILongPressGestureRecognizer) {
         if g.state == .began { onInvigilator?() }
-    }
-
-    @objc private func exitTapped() { onInvigilator?() }
-
-    /// Greyed out while a code is being checked or the server asked us to wait.
-    func setExit(title: String, enabled: Bool) {
-        exitButton.setTitle(title, for: .normal)
-        exitButton.isEnabled = enabled
-        exitButton.accessibilityLabel = title
     }
 
     @objc private func finishTapped() { onFinish?() }

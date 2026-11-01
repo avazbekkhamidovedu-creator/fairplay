@@ -30,3 +30,40 @@ import Foundation
         #expect(ExitCodeInput.waitText(seconds: 0) == "1 s")
     }
 }
+
+@Suite struct ExitSheetLogicTests {
+    @Test func digitsOnlyFiltersAndCaps() {
+        #expect(ExitSheetLogic.digitsOnly("12a3 4-5678") == "123456")
+        #expect(ExitSheetLogic.digitsOnly("１２３") == "")
+        #expect(ExitSheetLogic.digitsOnly("") == "")
+    }
+
+    @Test func submitNeedsSixDigitsAndIdleAndNoWait() {
+        #expect(ExitSheetLogic.canSubmit("123456", busy: false, waitSeconds: 0))
+        #expect(!ExitSheetLogic.canSubmit("12345", busy: false, waitSeconds: 0))
+        #expect(!ExitSheetLogic.canSubmit("123456", busy: true, waitSeconds: 0))
+        #expect(!ExitSheetLogic.canSubmit("123456", busy: false, waitSeconds: 30))
+    }
+
+    @Test func messages() {
+        #expect(ExitSheetLogic.message(for: .ok, waitSeconds: 0) == nil)
+        #expect(ExitSheetLogic.message(for: .wrong, waitSeconds: 0)?.offersOffline == false)
+        #expect(ExitSheetLogic.message(for: .tooMany, waitSeconds: 300)?.text.contains("5 min") == true)
+        #expect(ExitSheetLogic.message(for: .unreachable, waitSeconds: 0)?.offersOffline == true)
+        #expect(ExitSheetLogic.message(for: .serverError(500), waitSeconds: 0)?.text.contains("500") == true)
+    }
+
+    @Test func exitedMessageShape() {
+        let m = ExitSheetLogic.exitedMessage(attemptId: "abc123")
+        #expect(m["type"] as? String == "exited")
+        #expect(m["attempt_id"] as? String == "abc123")
+        #expect(ExitSheetLogic.exitedMessage(attemptId: nil)["attempt_id"] == nil)
+    }
+
+    @Test func homeFallback() {
+        #expect(ExitSheetLogic.needsHomeFallback(urlAtExit: "https://s/student/exam/1", urlNow: "https://s/student/exam/1", nowIsServerPage: true))
+        #expect(!ExitSheetLogic.needsHomeFallback(urlAtExit: "https://s/student/exam/1", urlNow: "https://s/student", nowIsServerPage: true))
+        #expect(ExitSheetLogic.needsHomeFallback(urlAtExit: "https://s/student/exam/1", urlNow: "https://other/", nowIsServerPage: false))
+        #expect(ExitSheetLogic.needsHomeFallback(urlAtExit: nil, urlNow: nil, nowIsServerPage: true))
+    }
+}
