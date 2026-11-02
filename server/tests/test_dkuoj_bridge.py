@@ -708,7 +708,7 @@ def test_removed_exam_cannot_start(oj, fake):
         from app.integrations.dkuoj.models import OjAsset, OjEditor, OjRosterEntry
         return [(await s.execute(select(func.count()).select_from(m))).scalar_one()
                 for m in (OjAsset, OjEditor, OjRosterEntry)]
-    assert db(oj, left) == [1, 0, 0]
+    assert db(oj, left) == [1, 0, 3]
 
 
 def test_sealed_submit_writes_outbox_with_sealed_evidence(oj, fake):

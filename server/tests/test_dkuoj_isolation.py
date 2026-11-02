@@ -1,5 +1,6 @@
 import copy
 import json
+import time
 from datetime import timedelta
 
 import httpx
@@ -11,6 +12,7 @@ from app.integrations.dkuoj.isolation import BINDING, audience_valid
 from app.integrations.dkuoj.models import OjState
 from app.integrations.dkuoj.source import SOURCE
 from app.models import Attempt, ClassMember, Exam, SchoolClass, User
+from app import app_client as ac
 from app.security import hash_password
 from app.timeutil import iso, utcnow
 
@@ -219,3 +221,51 @@ def test_targeted_reconcile_keeps_other_exams_and_the_global_cursor_unchanged(oj
     oj.portal.call(reconcile)
     assert oj.get(f'/api/exams/{eid}', headers=teacher).status_code == 200
     assert db(oj, cursor) == before
+
+
+@pytest.mark.parametrize('remove_exam_afterward', [False, True])
+def test_individually_revoked_active_student_cannot_resume_cached_session(oj, fake, remove_exam_afterward):
+    run(oj)
+    teacher, alice = login(oj, 'teacher'), login(oj, 'alice')
+    eid = oj_exam(oj, teacher)['id']
+    opened = oj.post(f'/api/exams/{eid}/open', headers=teacher).json()
+    device, key = 'ISOLATION-DEVICE-A', 'test-app-key'
+    def proof():
+        nonce = oj.get(f'/api/student/exams/{eid}/challenge', headers=alice).json()['nonce']
+        return {'device_id': device, 'nonce': nonce, 'version': '0.7.8',
+                'signature': ac.sign(key, ac.start_message(nonce, device))}
+    first = oj.post(f'/api/student/exams/{eid}/start',
+                    json={'start_code': opened['start_code'], 'client': proof()}, headers=alice)
+    assert first.status_code == 200, first.text
+    attempt = first.json()
+    aid, session = attempt['attempt_id'], attempt['session']
+    headers = {**alice, ac.SESSION_HEADER: session}
+    answer = {attempt['questions'][0]['id']: 1}
+    assert oj.put(f'/api/student/attempts/{aid}/answers',
+                  json={'answers': answer, 'client_seq': 1}, headers=headers).status_code == 200
+    stamp = int(time.time() * 1000)
+    def beat(ts):
+        checks = 'vm=0,displays=1,tap=1,input=1'
+        return {'session': session, 'device_id': device, 'ts': ts, 'locked': True, 'checks': checks,
+                'signature': ac.sign(key, ac.beat_message(aid, session, device, ts, True, checks))}
+    assert oj.post(f'/api/student/attempts/{aid}/app-beat', json=beat(stamp), headers=alice).status_code == 200
+    resume_proof = proof()
+    fake.roster = [p for p in fake.roster if p['username'] != 'alice']
+    run(oj)
+    if remove_exam_afterward:
+        fake.removed = True
+        run(oj)
+    denied = oj.post(f'/api/student/exams/{eid}/start',
+                    json={'start_code': opened['start_code'], 'client': resume_proof}, headers=alice)
+    assert denied.status_code in (403, 404, 409), denied.text
+    assert oj.get(f'/api/student/exams/{eid}/challenge', headers=alice).status_code in (403, 404)
+    assert eid not in [e['id'] for e in oj.get('/api/student/exams', headers=alice).json()]
+    assert oj.get(f'/api/student/attempts/{aid}', headers=headers).status_code in (403, 404, 409)
+    assert oj.put(f'/api/student/attempts/{aid}/answers', json={'answers': {}, 'client_seq': 2},
+                  headers=headers).status_code in (403, 404, 409)
+    assert oj.post(f'/api/student/attempts/{aid}/app-beat', json=beat(stamp + 1),
+                   headers=alice).status_code in (403, 404, 409)
+    async def saved(s):
+        row = await s.get(Attempt, aid)
+        return row.status, row.answers, row.session_id
+    assert db(oj, saved) == ('in_progress', answer, session)

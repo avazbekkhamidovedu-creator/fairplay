@@ -1,0 +1,1025 @@
+diff --git a/dmoj/settings.py b/dmoj/settings.py
+index 21e2703a5..57e5f77f0 100644
+--- a/dmoj/settings.py
++++ b/dmoj/settings.py
+@@ -729,6 +729,7 @@ FAIRPLAY_ALLOW_INSECURE = False
+ FAIRPLAY_OJ_PUBLIC_URL = ''
+ # FairPlay shared class logins are off on the FairPlay side; keep their DKU OJ controls and bridge calls off too.
+ FAIRPLAY_CLASS_LOGIN_ENABLED = False
++FAIRPLAY_INSTALLATION_ID = ''
+ 
+ try:
+     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:
+diff --git a/dmoj/urls.py b/dmoj/urls.py
+index 7fa6019a7..f0823065f 100644
+--- a/dmoj/urls.py
++++ b/dmoj/urls.py
+@@ -415,6 +415,7 @@ urlpatterns = [
+     ])),
+ 
+     path('api/fairplay/v1/', include([
++        path('installation', fairplay_api.installation, name='fairplay_api_installation'),
+         path('exams', fairplay_api.exams, name='fairplay_api_exams'),
+         path('exams/<str:key>/package', fairplay_api.exam_package, name='fairplay_api_package'),
+         path('exams/<str:key>/assets/<str:name>', fairplay_api.exam_asset, name='fairplay_api_asset'),
+diff --git a/judge/admin/contest.py b/judge/admin/contest.py
+index f2338234e..d6110be17 100644
+--- a/judge/admin/contest.py
++++ b/judge/admin/contest.py
+@@ -33,6 +33,12 @@ class AdminHeavySelect2Widget(AdminHeavySelect2Widget):
+ 
+ 
+ class ContestTagForm(ModelForm):
++    def clean_name(self):
++        name = self.cleaned_data['name']
++        if name.startswith('fp-aud-'):
++            raise forms.ValidationError('FairPlay audience tags are reserved for explicit audience confirmation.')
++        return name
++
+     contests = ModelMultipleChoiceField(
+         label=_('Included contests'),
+         queryset=Contest.objects.all(),
+diff --git a/judge/apps.py b/judge/apps.py
+index 3d44f6576..88262e851 100644
+--- a/judge/apps.py
++++ b/judge/apps.py
+@@ -13,7 +13,7 @@ class JudgeAppConfig(AppConfig):
+         #          DO NOT REMOVE THINKING THE IMPORT IS UNUSED.
+         # noinspection PyUnresolvedReferences
+         from . import checks, signals, jinja2  # noqa: F401, imported for side effects
+-        from .utils import fairplay_signals, fairplay_sync  # noqa: F401, imported for side effects
++        from .utils import fairplay_lifecycle, fairplay_signals, fairplay_sync  # noqa: F401, imported for side effects
+ 
+         from judge.models import Language, Profile
+         from django.contrib.auth.models import User
+diff --git a/judge/utils/fairplay_audience.py b/judge/utils/fairplay_audience.py
+new file mode 100644
+index 000000000..91dd945ca
+--- /dev/null
++++ b/judge/utils/fairplay_audience.py
+@@ -0,0 +1,46 @@
++from django.core.exceptions import ValidationError
++from django.db import transaction
++
++from judge.models import ContestTag
++
++PREFIX = 'fp-aud-'
++MODES = {'classes': PREFIX + 'classes', 'organizations': PREFIX + 'orgs', 'selected': PREFIX + 'selected'}
++CONFIRMED = PREFIX + 'confirmed'
++SELECTED_ONLY = PREFIX + 'selected-only'
++
++
++def audience_descriptor(contest):
++    tags = set(contest.tags.filter(name__startswith=PREFIX).values_list('name', flat=True))
++    modes = [mode for mode, tag in MODES.items() if tag in tags]
++    class_ids = sorted(contest.classes.values_list('id', flat=True))
++    organization_ids = sorted(contest.organizations.values_list('id', flat=True))
++    mode = modes[0] if len(modes) == 1 else ('classes' if class_ids else 'organizations' if contest.is_organization_private else 'selected')
++    valid = False
++    if mode == 'classes':
++        valid = bool(contest.is_organization_private and class_ids and organization_ids and
++                     not contest.classes.exclude(organization_id__in=organization_ids).exists())
++    elif mode == 'organizations':
++        valid = bool(contest.is_organization_private and organization_ids and not class_ids)
++    elif mode == 'selected':
++        valid = bool(contest.is_private and not contest.is_organization_private and
++                     contest.private_contestants.exists())
++    if contest.is_private and not contest.private_contestants.exists():
++        valid = False
++    selected_only = SELECTED_ONLY in tags
++    valid = valid and selected_only == bool(contest.is_private)
++    return {'mode': mode, 'confirmed': len(modes) == 1 and CONFIRMED in tags and valid,
++            'class_ids': class_ids, 'organization_ids': organization_ids, 'selected_only': selected_only}
++
++
++def confirm_audience(contest, mode):
++    if mode not in MODES:
++        raise ValidationError('Choose classes, organizations or selected students for the FairPlay audience.')
++    current = set(contest.tags.filter(name__startswith=PREFIX).values_list('id', flat=True))
++    names = [MODES[mode], CONFIRMED] + ([SELECTED_ONLY] if contest.is_private else [])
++    tags = [ContestTag.objects.get_or_create(name=name, defaults={'color': '#64748b', 'description': ''})[0]
++            for name in names]
++    with transaction.atomic():
++        contest.tags.remove(*current)
++        contest.tags.add(*tags)
++        if not audience_descriptor(contest)['confirmed']:
++            raise ValidationError('Confirm a non-empty matching FairPlay audience; classes cannot fall back to organizations.')
+diff --git a/judge/utils/fairplay_client.py b/judge/utils/fairplay_client.py
+index 9a63e9992..597d4422f 100644
+--- a/judge/utils/fairplay_client.py
++++ b/judge/utils/fairplay_client.py
+@@ -2,7 +2,7 @@
+ import json
+ import logging
+ from time import monotonic
+-from urllib.parse import quote, urlsplit
++from urllib.parse import parse_qsl, quote, urlencode, urlsplit
+ 
+ import requests
+ import urllib3
+@@ -12,6 +12,8 @@ from django.utils.translation import gettext as _
+ 
+ from judge.utils.fairplay import fairplay_enabled, fairplay_url_insecure
+ from judge.utils.fairplay_signing import signed_headers
++from judge.utils.fairplay_identity import installation_id
++from django.core.exceptions import ImproperlyConfigured
+ 
+ __all__ = ['API_PREFIX', 'CLASS_STATUS_CACHE_SECONDS', 'MAX_RESPONSE_BYTES', 'FairPlayClient', 'FairPlayError',
+            'FairPlayUnreachable', 'QUICK_READ_TIMEOUT', 'cached_class_status', 'without_password']
+@@ -75,7 +77,16 @@ class FairPlayClient:
+         if fairplay_url_insecure(base):
+             # Also a system check (judge.checks); this covers servers started without checks.
+             raise FairPlayUnreachable(_('FairPlay cannot be reached: FAIRPLAY_URL must use https://'))
+-        url = base + API_PREFIX + path
++        try:
++            identity = installation_id()
++        except ImproperlyConfigured as error:
++            raise FairPlayUnreachable(str(error)) from None
++        parts = urlsplit(base + API_PREFIX + path)
++        query = parse_qsl(parts.query, keep_blank_values=True)
++        if any(name == 'installation_id' and value != identity for name, value in query):
++            raise FairPlayUnreachable('FairPlay installation identity does not match.')
++        query = [(name, value) for name, value in query if name != 'installation_id']
++        url = parts._replace(query=urlencode(query + [('installation_id', identity)])).geturl()
+         data = b'' if body is None else json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+         parts = urlsplit(url)
+         sent_path = parts.path + ('?' + parts.query if parts.query else '')
+@@ -203,8 +214,11 @@ class FairPlayClient:
+         """Idempotent; once a student has started only ``review`` may change (409 otherwise)."""
+         return self.request('POST', '/exams/%s/settings' % _q(key), settings, read_timeout=read_timeout)
+ 
+-    def sync_ping(self, exam_key=None, class_id=None, read_timeout=None):
+-        body = {}
++    def sync_ping(self, exam_key=None, class_id=None, read_timeout=None, event='changed',
++                  exam_keys=None, class_ids=None, organization_ids=None):
++        body = {'event': event, 'exam_keys': sorted(set(exam_keys or ([exam_key] if exam_key else []))),
++                'class_ids': sorted(set(class_ids or ([int(class_id)] if class_id is not None else []))),
++                'organization_ids': sorted(set(organization_ids or []))}
+         if exam_key is not None:
+             body['exam_key'] = exam_key
+         if class_id is not None:
+diff --git a/judge/utils/fairplay_editor.py b/judge/utils/fairplay_editor.py
+index ed6900fc1..f9242de04 100644
+--- a/judge/utils/fairplay_editor.py
++++ b/judge/utils/fairplay_editor.py
+@@ -7,6 +7,7 @@ from django.utils.translation import gettext as _
+ 
+ from judge.utils.fairplay import FAIRPLAY_CALCULATOR_CHOICES, FAIRPLAY_REVIEW_CHOICES, fairplay_check_contest, \
+     fairplay_edit_locked, fairplay_enabled, is_fairplay_exam, set_fairplay_exam
++from judge.utils.fairplay_audience import audience_descriptor, confirm_audience
+ 
+ __all__ = [
+     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
+@@ -18,7 +19,7 @@ __all__ = [
+ logger = logging.getLogger('judge.fairplay')
+ 
+ # Editor fields gated by the same permission as the Safe Exam Browser option (contest_seb_requirement).
+-FAIRPLAY_EDITOR_FIELDS = ('fairplay_required', 'fairplay_settings')
++FAIRPLAY_EDITOR_FIELDS = ('fairplay_required', 'fairplay_settings', 'fairplay_audience_confirm', 'fairplay_audience_mode')
+ # What FairPlay uses until settings are saved.
+ DEFAULT_SETTINGS = {
+     'calculator': 'off', 'open_book': False, 'websites': [], 'strong_lock': False,
+@@ -147,6 +148,7 @@ class FairPlayEditorPlan:
+ 
+     def __init__(self, want=None, settings=None, was_on=False):
+         self.want, self.settings, self.was_on = want, settings, was_on
++        self.audience_mode = None
+ 
+ 
+ def parse_fairplay_payload(contest, payload, restricted):
+@@ -161,6 +163,13 @@ def parse_fairplay_payload(contest, payload, restricted):
+             plan.want = None
+     if payload.get('fairplay_settings') is not None and fairplay_enabled():
+         plan.settings = clean_settings(payload['fairplay_settings'], partial=True)
++    if payload.get('fairplay_audience_confirm') is True:
++        if 'fairplay_audience_confirm' in restricted or 'fairplay_required' in restricted:
++            raise ValidationError('You cannot confirm this FairPlay audience.')
++        mode = payload.get('fairplay_audience_mode')
++        if mode not in ('classes', 'organizations', 'selected'):
++            raise ValidationError('Choose the intended FairPlay audience before confirming it.')
++        plan.audience_mode = mode
+     return plan
+ 
+ 
+@@ -169,6 +178,8 @@ def apply_fairplay_editor(contest, plan):
+     on = plan.was_on if plan.want is None else plan.want
+     set_fairplay_exam(contest, on)
+     fairplay_check_contest(contest)
++    if on and plan.audience_mode is not None:
++        confirm_audience(contest, plan.audience_mode)
+ 
+ 
+ def fairplay_edit_lock(contest):
+@@ -219,6 +230,7 @@ def open_exam_values(contest, acting_user=None):
+ def fairplay_editor_context(request, contest, restricted):
+     on = is_fairplay_exam(contest) if contest is not None else False
+     context = {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on, 'fairplay_open_exam': None}
++    context['fairplay_audience'] = audience_descriptor(contest) if contest is not None else None
+     if fairplay_enabled() and 'fairplay_settings' not in restricted:
+         context['fairplay_open_exam'] = (open_exam_values(contest, request.user.username) if on
+                                          else {'websites': [], 'box_link': ''})
+diff --git a/judge/utils/fairplay_identity.py b/judge/utils/fairplay_identity.py
+new file mode 100644
+index 000000000..b7377341b
+--- /dev/null
++++ b/judge/utils/fairplay_identity.py
+@@ -0,0 +1,15 @@
++from uuid import UUID
++
++from django.conf import settings
++from django.core.exceptions import ImproperlyConfigured
++
++
++def installation_id():
++    value = getattr(settings, 'FAIRPLAY_INSTALLATION_ID', '')
++    try:
++        normalized = str(UUID(str(value)))
++    except (ValueError, TypeError, AttributeError):
++        raise ImproperlyConfigured('Set FAIRPLAY_INSTALLATION_ID to the stable UUID agreed with FairPlay.') from None
++    if normalized != value:
++        raise ImproperlyConfigured('FAIRPLAY_INSTALLATION_ID must be a canonical UUID.')
++    return normalized
+diff --git a/judge/utils/fairplay_lifecycle.py b/judge/utils/fairplay_lifecycle.py
+new file mode 100644
+index 000000000..806fae904
+--- /dev/null
++++ b/judge/utils/fairplay_lifecycle.py
+@@ -0,0 +1,119 @@
++import logging
++
++from django.db import transaction
++from django.db.models import Q
++from django.db.models.signals import m2m_changed, post_delete, pre_delete
++from django.dispatch import receiver
++
++from judge.models import Class, Contest, Organization, Profile
++from judge.utils.fairplay import fairplay_enabled, fairplay_exams
++from judge.utils.fairplay_audience import audience_descriptor
++from judge.utils.fairplay_client import FairPlayClient, FairPlayError
++from judge.utils.fairplay_sync import _run_later
++
++logger = logging.getLogger('judge.fairplay')
++
++
++def notify(event, keys=(), class_ids=(), organization_ids=()):
++    if not fairplay_enabled():
++        return
++    payload = {'event': event, 'exam_keys': sorted(set(keys)), 'class_ids': sorted(set(class_ids)),
++               'organization_ids': sorted(set(organization_ids))}
++
++    def send():
++        try:
++            FairPlayClient().sync_ping(read_timeout=1, **payload)
++        except FairPlayError as error:
++            logger.warning('FairPlay lifecycle notification failed; authoritative reconciliation required: event=%s exams=%s status=%s',
++                           event, payload['exam_keys'], error.status)
++
++    transaction.on_commit(lambda: _run_later(0, send))
++
++
++def _scope(contests):
++    rows = list(contests.distinct())
++    return ([row.key for row in rows],
++            sorted({pk for row in rows for pk in row.classes.values_list('pk', flat=True)}),
++            sorted({pk for row in rows for pk in row.organizations.values_list('pk', flat=True)}))
++
++
++@receiver(pre_delete, sender=Contest, dispatch_uid='fp_lifecycle_contest_predelete')
++@receiver(pre_delete, sender=Class, dispatch_uid='fp_lifecycle_class_predelete')
++@receiver(pre_delete, sender=Organization, dispatch_uid='fp_lifecycle_org_predelete')
++def before_delete(sender, instance, **kwargs):
++    if sender is Contest:
++        contests = fairplay_exams().filter(pk=instance.pk)
++    elif sender is Class:
++        contests = fairplay_exams().filter(classes=instance)
++    else:
++        contests = fairplay_exams().filter(Q(organizations=instance) | Q(classes__organization=instance))
++    instance._fp_lifecycle_scope = _scope(contests)
++
++
++@receiver(post_delete, sender=Contest, dispatch_uid='fp_lifecycle_contest_postdelete')
++@receiver(post_delete, sender=Class, dispatch_uid='fp_lifecycle_class_postdelete')
++@receiver(post_delete, sender=Organization, dispatch_uid='fp_lifecycle_org_postdelete')
++def after_delete(sender, instance, **kwargs):
++    keys, classes, organizations = getattr(instance, '_fp_lifecycle_scope', ([], [], []))
++    if sender is Class:
++        classes = sorted(set(classes) | {instance.pk})
++    elif sender is Organization:
++        organizations = sorted(set(organizations) | {instance.pk})
++    notify('removed' if sender is Contest else 'audience_revoked', keys, classes, organizations)
++
++
++def contest_relation(sender, instance, action, reverse, pk_set, **kwargs):
++    if action not in ('pre_add', 'pre_remove', 'pre_clear', 'post_add', 'post_remove', 'post_clear'):
++        return
++    cache = getattr(instance, '_fp_lifecycle_relations', {})
++    if action.startswith('pre_'):
++        if not reverse:
++            ids = [instance.pk]
++        elif action == 'pre_clear':
++            contest_field = next(f for f in sender._meta.fields if getattr(f, 'related_model', None) is Contest)
++            other_field = next(f for f in sender._meta.fields if getattr(f, 'related_model', None) not in (None, Contest))
++            ids = sender.objects.filter(**{other_field.attname: instance.pk}).values_list(contest_field.attname, flat=True)
++        else:
++            ids = pk_set or ()
++        cache[sender._meta.label] = _scope(fairplay_exams().filter(pk__in=ids))
++        instance._fp_lifecycle_relations = cache
++    else:
++        keys, classes, organizations = cache.pop(sender._meta.label, ([], [], []))
++        current = fairplay_exams().filter(key__in=keys)
++        revoked = any(not audience_descriptor(row)['confirmed'] for row in current)
++        notify('audience_revoked' if revoked else 'changed', keys, classes, organizations)
++
++
++for field in ('classes', 'organizations', 'private_contestants', 'banned_users', 'authors', 'curators', 'testers', 'tags'):
++    m2m_changed.connect(contest_relation, sender=getattr(Contest, field).through,
++                        dispatch_uid='fp_lifecycle_contest_' + field)
++
++
++def membership_relation(sender, instance, action, reverse, pk_set, **kwargs):
++    if not action.startswith(('pre_', 'post_')):
++        return
++    if action.startswith('pre_'):
++        fields = [f for f in sender._meta.fields if getattr(f, 'related_model', None)]
++        scope_field = next(f for f in fields if f.related_model in (Class, Organization))
++        profile_field = next(f for f in fields if f.related_model is Profile)
++        if isinstance(instance, scope_field.related_model):
++            ids = [instance.pk]
++        elif action == 'pre_clear':
++            ids = list(sender.objects.filter(**{profile_field.attname: instance.pk}).values_list(scope_field.attname, flat=True))
++        else:
++            ids = list(pk_set or ())
++        query = Q(classes__pk__in=ids) if scope_field.related_model is Class else Q(organizations__pk__in=ids) | Q(classes__organization_id__in=ids)
++        instance._fp_membership_scope = (_scope(fairplay_exams().filter(query)), scope_field.related_model, ids)
++    else:
++        (keys, classes, organizations), model, ids = getattr(instance, '_fp_membership_scope', (([], [], []), None, []))
++        if model is Class:
++            classes = sorted(set(classes) | set(ids))
++        elif model is Organization:
++            organizations = sorted(set(organizations) | set(ids))
++        notify('changed', keys, classes, organizations)
++
++
++for model, field in ((Class, 'members'), (Class, 'admins'), (Organization, 'admins'),
++                     (Organization, 'instructors'), (Profile, 'organizations')):
++    m2m_changed.connect(membership_relation, sender=getattr(model, field).through,
++                        dispatch_uid='fp_lifecycle_membership_%s_%s' % (model.__name__, field))
+diff --git a/judge/utils/fairplay_package.py b/judge/utils/fairplay_package.py
+index 7d91b95c2..916813828 100644
+--- a/judge/utils/fairplay_package.py
++++ b/judge/utils/fairplay_package.py
+@@ -331,7 +331,9 @@ def build_package(contest):
+     collector = _AssetCollector()
+     contest_problems = list(contest.contest_problems.select_related('problem').order_by('order', 'id'))
+     questions = [_question(contest, cp, index, collector) for index, cp in enumerate(contest_problems)]
++    from judge.utils.fairplay_audience import audience_descriptor
+     body = {
++        'audience': audience_descriptor(contest),
+         'total_points': sum(cp.points for cp in contest_problems),
+         'description_md': collector.rewrite(contest.description or ''),
+         'questions': questions,
+@@ -384,6 +386,7 @@ def build_exam_entry(contest, package=None):
+         Q(authored_contests=contest) | Q(curated_contests=contest)).select_related('user').distinct()
+     return {
+         'key': contest.key,
++        'audience': package.get('audience', {}),
+         'name': contest.name,
+         'course': _course(contest),
+         'classes': [{'id': c.id, 'name': c.name} for c in contest.classes.order_by('id')],
+diff --git a/judge/utils/tests/test_fairplay_help.py b/judge/utils/tests/test_fairplay_help.py
+index 5e5c39cdb..28eddb729 100644
+--- a/judge/utils/tests/test_fairplay_help.py
++++ b/judge/utils/tests/test_fairplay_help.py
+@@ -1,5 +1,7 @@
+ """The FairPlay student help page of a contest: who may open it, the confirm step and the bridge calls."""
+ import json
++from html import unescape
++from urllib.parse import parse_qs, urlsplit
+ from unittest import mock
+ 
+ from django.contrib.messages import get_messages
+@@ -7,7 +9,7 @@ from django.test import Client, TestCase
+ from django.urls import reverse
+ 
+ from judge.utils.fairplay_client import FairPlayClient, FairPlayError, FairPlayUnreachable
+-from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, set_fairplay
++from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, INSTALLATION_ID, set_fairplay
+ from judge.views.tests.test_fairplay_pages import PagesMixin, exam, fake_response
+ 
+ STUDENTS = [
+@@ -65,9 +67,9 @@ class StudentHelpTestCase(PagesMixin, TestCase):
+         self.assertEqual(html.count('aria-label="Actions"'), 2)
+         self.assertEqual(html.count('name="reason"'), 1)
+         self.assertEqual(html.count('class="fp-choice"'), 6)
+-        for text in ("Student&#39;s computer failed", 'Student lost or cannot read the code',
++        for text in ("Student's computer failed", 'Student lost or cannot read the code',
+                      'Approved accommodation', 'Submitted by mistake', 'Lock stuck during the exam', 'Other...'):
+-            self.assertIn(text, html)
++            self.assertIn(text, unescape(html))
+         self.assertNotIn('For students still taking the exam', html)
+         self.fp.exam.return_value = exam(students=STUDENTS[:1])
+         html = self.login(self.teacher).get(self.URL).content.decode()
+@@ -196,7 +198,9 @@ class StudentHelpClientTestCase(TestCase):
+         with mock.patch('judge.utils.fairplay_client.requests.request',
+                         return_value=fake_response(200, {'ok': True})) as call:
+             getattr(FairPlayClient(acting_user='fp_teacher'), method)(*args)
+-        return call.call_args[0][1].split('/v1')[1], json.loads(call.call_args[1]['data'])
++        url = urlsplit(call.call_args[0][1])
++        self.assertEqual(parse_qs(url.query), {'installation_id': [INSTALLATION_ID]})
++        return url.path.split('/v1')[1], json.loads(call.call_args[1]['data'])
+ 
+     def test_paths_and_bodies(self):
+         self.assertEqual(self.call('release_device', 'ex', 'n1', 'why'),
+diff --git a/judge/views/api/api_v2.py b/judge/views/api/api_v2.py
+index b6af84a09..983431df3 100644
+--- a/judge/views/api/api_v2.py
++++ b/judge/views/api/api_v2.py
+@@ -217,7 +217,7 @@ class APIContestList(APIListView):
+             .prefetch_related(
+                 Prefetch(
+                     'tags',
+-                    queryset=ContestTag.objects.only('name'),
++                    queryset=ContestTag.objects.exclude(name__startswith='fp-aud-').only('name'),
+                     to_attr='tag_list',
+                 ),
+             )
+diff --git a/judge/views/api/fairplay.py b/judge/views/api/fairplay.py
+index f9d929fe0..494ab7904 100644
+--- a/judge/views/api/fairplay.py
++++ b/judge/views/api/fairplay.py
+@@ -2,6 +2,7 @@
+ import json
+ import logging
+ from functools import wraps
++from django.core.exceptions import ImproperlyConfigured
+ 
+ from django.db.models import Q
+ from django.http import Http404, HttpResponse, JsonResponse
+@@ -14,7 +15,8 @@ from judge.utils.fairplay import FAIRPLAY_LEAD, fairplay_exams, fairplay_token
+ from judge.utils.fairplay_delivery import DeliveryError, TRANSIENT_ERRORS, deliver_submission, parse_time, \
+     results_page, store_upload, transient_error
+ from judge.utils.fairplay_package import PACKAGE_MAX_BYTES, build_package, exam_list_page, iso
+-from judge.utils.fairplay_signing import SignatureError, parse_signature_headers, verify_signature
++from judge.utils.fairplay_signing import SignatureError, parse_signature_headers, signed_headers, verify_signature
++from judge.utils.fairplay_identity import installation_id
+ from judge.utils.fairplay_teaching import class_roster, classes_with_fairplay_login
+ 
+ __all__ = ['class_roster_view', 'exam_asset', 'exam_package', 'exam_results', 'exam_submissions', 'exam_uploads',
+@@ -89,12 +91,31 @@ def fairplay_api(view=None, max_bytes=DEFAULT_MAX_BYTES):
+             return _delivery_error(e)
+         request.fairplay_body = body
+         try:
+-            return view(request, *args, **kwargs)
++            identity = installation_id()
++            if request.GET.getlist('installation_id') != [identity]:
++                response = _error(409, 'Installation identity does not match.')
++            elif request.content_type == 'application/json' and body and isinstance(json.loads(body), dict) and \
++                    json.loads(body).get('installation_id', identity) != identity:
++                response = _error(409, 'Installation identity does not match.')
++            else:
++                response = view(request, *args, **kwargs)
++        except ImproperlyConfigured:
++            response = _error(503, 'Installation identity is not configured.')
++        except (ValueError, UnicodeDecodeError):
++            response = _error(400, 'Invalid JSON body.')
++        except Http404:
++            response = _error(404, 'Not Found')
+         except DeliveryError as e:
+-            return _delivery_error(e)
++            response = _delivery_error(e)
+         except TRANSIENT_ERRORS:
+             logger.exception('FairPlay API %s %s failed', request.method, request.path)
+-            return _delivery_error(transient_error('DKU OJ is temporarily unavailable; try again.'))
++            response = _delivery_error(transient_error('DKU OJ is temporarily unavailable; try again.'))
++        if not response.streaming:
++            for name, value in signed_headers('RESPONSE %s %d' % (request.method, response.status_code),
++                                             request.get_full_path(), response.content,
++                                             acting_user=parsed[1]).items():
++                response[name] = value
++        return response
+     return csrf_exempt(wrapped)
+ 
+ 
+@@ -139,6 +160,13 @@ def _too_early(contest, now):
+     return response
+ 
+ 
++@fairplay_api
++@require_GET
++def installation(request):
++    return _json({'protocol': 1, 'installation_id': installation_id(),
++                  'request_nonce': request.META['HTTP_X_FP_NONCE']})
++
++
+ @fairplay_api
+ @require_GET
+ def exams(request):
+diff --git a/judge/views/contests.py b/judge/views/contests.py
+index 184997d4a..b820dd7f0 100644
+--- a/judge/views/contests.py
++++ b/judge/views/contests.py
+@@ -331,7 +331,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
+             .distinct()
+             .order_by('organization__name', 'name')
+         )
+-        context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).distinct()
++        context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).exclude(name__startswith='fp-aud-').distinct()
+         can_see_authors = self._can_see_assignment_authors()
+         context['can_see_problem_authors'] = can_see_authors
+         selected_authors = []
+@@ -938,6 +938,11 @@ class ContestCreate(LoginRequiredMixin, View):
+                 ids = [int(v) for v in values if str(v)]
+             except (TypeError, ValueError):
+                 raise ValidationError(_('Invalid value for "%(field)s".') % {'field': field})
++            if field == 'tags':
++                reserved = ContestTag.objects.filter(Q(name=FAIRPLAY_TAG) | Q(name__startswith='fp-aud-'))
++                if reserved.filter(pk__in=ids).exists():
++                    raise ValidationError(_('FairPlay system tags cannot be changed in the tag selector.'))
++                ids += list(reserved.filter(contests=contest).values_list('id', flat=True))
+             getattr(contest, field).set(ids)
+ 
+         # Same org→class rule as ContestForm.clean: classes are a subset of
+@@ -1495,7 +1500,7 @@ class ContestCreate(LoginRequiredMixin, View):
+                     prefill[field] = [(o.id, o.name) for o in related.all()]
+                 elif field == 'tags':
+                     # The FairPlay tag is set by the lock option, not the tag picker.
+-                    prefill[field] = [(t.id, t.name) for t in related.exclude(name=FAIRPLAY_TAG)]
++                    prefill[field] = [(t.id, t.name) for t in related.exclude(name=FAIRPLAY_TAG).exclude(name__startswith='fp-aud-')]
+                 else:
+                     prefill[field] = [(p.id, profile_choice_label(p)) for p in related.select_related('user')]
+             prefill['authors'] = [
+@@ -1555,7 +1560,7 @@ class ContestCreate(LoginRequiredMixin, View):
+             'now': timezone.now(),
+             'organizations': Organization.objects.all(),
+             'classes': Class.objects.all(),
+-            'tags': ContestTag.objects.exclude(name=FAIRPLAY_TAG),
++            'tags': ContestTag.objects.exclude(name=FAIRPLAY_TAG).exclude(name__startswith='fp-aud-'),
+             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
+             # Only problems this editor may attach — see _visible_problems_for.
+             # select_related/prefetch_related feed the library columns (types /
+@@ -1637,7 +1642,7 @@ class ContestTagCreateView(LoginRequiredMixin, View):
+             return JsonResponse({'error': _('Please enter a tag name.')}, status=400)
+         if not re.match(r'^[a-z-]+$', name):
+             return JsonResponse({'error': _('Lowercase letters and hyphens only.')}, status=400)
+-        if name == FAIRPLAY_TAG:
++        if name == FAIRPLAY_TAG or name.startswith('fp-aud-'):
+             return JsonResponse({'error': _('This tag name is reserved for the FairPlay lock option.')}, status=400)
+         if len(name) > 20:
+             return JsonResponse({'error': _('Tag name must be at most 20 characters.')}, status=400)
+@@ -2023,7 +2028,7 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
+         contest = self.object
+ 
+         # A clone is not a FairPlay exam until FairPlay is turned on in its editor.
+-        tags = list(contest.tags.exclude(name=FAIRPLAY_TAG))
++        tags = list(contest.tags.exclude(name=FAIRPLAY_TAG).exclude(name__startswith='fp-aud-'))
+         organizations = contest.organizations.all()
+         private_contestants = contest.private_contestants.all()
+         view_contest_scoreboard = contest.view_contest_scoreboard.all()
+@@ -3077,6 +3082,9 @@ class ContestTagDetailAjax(DetailView):
+     context_object_name = 'tag'
+     template_name = 'contest/tag-ajax.html'
+ 
++    def get_queryset(self):
++        return super().get_queryset().exclude(name__startswith='fp-aud-')
++
+ 
+ class ContestTagDetail(TitleMixin, ContestTagDetailAjax):
+     template_name = 'contest/tag.html'
+diff --git a/judge/views/fairplay_launch.py b/judge/views/fairplay_launch.py
+index bff56c4c8..90bc19c78 100644
+--- a/judge/views/fairplay_launch.py
++++ b/judge/views/fairplay_launch.py
+@@ -12,6 +12,7 @@ from django.views import View
+ from judge.models import Contest
+ from judge.utils.fairplay import fairplay_enabled, fairplay_hidden_for, is_fairplay_exam
+ from judge.utils.fairplay_package import exam_roster
++from judge.utils.fairplay_audience import audience_descriptor
+ 
+ 
+ def _contest(request, key):
+@@ -21,7 +22,8 @@ def _contest(request, key):
+     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', contest.key):
+         raise Http404()
+     if not contest.is_editable_by(request.user) and (
+-            not contest.is_visible or not exam_roster(contest).filter(pk=request.profile.pk).exists()):
++            not contest.is_visible or not audience_descriptor(contest)['confirmed'] or
++            not exam_roster(contest).filter(pk=request.profile.pk).exists()):
+         raise Http404()
+     return contest
+ 
+diff --git a/judge/views/tests/fairplay_base.py b/judge/views/tests/fairplay_base.py
+index 15edecf2a..cac9ca037 100644
+--- a/judge/views/tests/fairplay_base.py
++++ b/judge/views/tests/fairplay_base.py
+@@ -18,7 +18,9 @@ from judge.storage.resilient import ResilientStorage
+ from judge.utils.fairplay import set_fairplay_exam
+ 
+ TOKEN = 'fp-test-token-0123456789abcdef0123456789'
+-FAIRPLAY_ON = override_settings(FAIRPLAY_TOKEN=TOKEN, FAIRPLAY_URL='https://exam.example.edu')
++INSTALLATION_ID = 'eaab2f6e-7072-4c86-968c-a9c624cc676d'
++FAIRPLAY_ON = override_settings(FAIRPLAY_TOKEN=TOKEN, FAIRPLAY_URL='https://exam.example.edu',
++                                FAIRPLAY_INSTALLATION_ID=INSTALLATION_ID)
+ FAIRPLAY_OFF = override_settings(FAIRPLAY_TOKEN='', FAIRPLAY_URL='')
+ 
+ # Strings that exist only in answer keys / hidden data; none may ever reach FairPlay.
+@@ -112,6 +114,10 @@ class FairPlayDataMixin:
+         for order, problem in enumerate((cls.mcq, cls.blank, cls.short, cls.file, cls.code), 1):
+             create_contest_problem(contest=cls.exam, problem=problem, points=problem.points, order=order,
+                                    partial=True)
++        from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
++        apply_fairplay_editor(cls.exam, parse_fairplay_payload(cls.exam, {
++            'fairplay_required': True, 'fairplay_audience_confirm': True,
++            'fairplay_audience_mode': 'classes'}, set()))
+ 
+     @classmethod
+     def setUpClass(cls):
+@@ -143,9 +149,21 @@ class FairPlayDataMixin:
+         return Contest.objects.get(pk=self.exam.pk)
+ 
+ 
++def installation_path(path):
++    from urllib.parse import parse_qsl, urlencode, urlsplit
++    from judge.utils.fairplay_identity import installation_id
++    parsed = urlsplit(path)
++    query = parse_qsl(parsed.query, keep_blank_values=True)
++    if not any(name == 'installation_id' for name, _value in query):
++        query.append(('installation_id', installation_id()))
++    return parsed._replace(query=urlencode(query)).geturl()
++
++
+ def fp_signed(method, path, body=b'', token=TOKEN, timestamp=None, nonce=None, acting_user=None):
+     """Test-client META for a request signed by FairPlay."""
++    from urllib.parse import urlsplit
+     from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, signed_headers
++    path = installation_path(path)
+     headers = signed_headers(method, path, body, acting_user=acting_user, timestamp=timestamp, nonce=nonce,
+                              token=token, direction=DIRECTION_FP_TO_OJ)
+-    return {'HTTP_' + key.upper().replace('-', '_'): value for key, value in headers.items()}
++    return dict({'HTTP_' + key.upper().replace('-', '_'): value for key, value in headers.items()}, QUERY_STRING=urlsplit(path).query)
+diff --git a/judge/views/tests/test_fairplay_launch.py b/judge/views/tests/test_fairplay_launch.py
+index 3766fb67b..4a66974fe 100644
+--- a/judge/views/tests/test_fairplay_launch.py
++++ b/judge/views/tests/test_fairplay_launch.py
+@@ -84,6 +84,10 @@ class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
+ 
+     def test_org_only_exam_uses_org_membership_when_no_classes_are_assigned(self):
+         self.exam.classes.clear()
++        from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
++        apply_fairplay_editor(self.exam, parse_fairplay_payload(self.exam, {
++            'fairplay_required': True, 'fairplay_audience_confirm': True,
++            'fairplay_audience_mode': 'organizations'}, set()))
+         self.client.force_login(self.outsider)
+         self.assertEqual(self.client.get(self.url()).status_code, 200)
+         self.outsider.profile.organizations.clear()
+diff --git a/judge/views/tests/test_fairplay_lifecycle.py b/judge/views/tests/test_fairplay_lifecycle.py
+new file mode 100644
+index 000000000..87073b6f7
+--- /dev/null
++++ b/judge/views/tests/test_fairplay_lifecycle.py
+@@ -0,0 +1,144 @@
++import hashlib
++import hmac
++import json
++from unittest import mock
++from urllib.parse import urlencode
++
++from django.test import TestCase, override_settings
++from django.urls import reverse
++
++from judge.models import Class, Contest, Organization
++from judge.utils.fairplay_audience import MODES, CONFIRMED, audience_descriptor
++from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
++from judge.utils.fairplay_package import build_exam_entry, build_package
++from judge.utils.fairplay_signing import body_sha256, canonical_string, direction_key, DIRECTION_OJ_TO_FP
++from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, INSTALLATION_ID, TOKEN, fp_signed
++
++
++@FAIRPLAY_ON
++class FairPlayLifecycleTestCase(FairPlayDataMixin, TestCase):
++    def setUp(self):
++        super().setUp()
++        self.client.force_login(self.teacher)
++
++    def confirm(self, mode):
++        plan = parse_fairplay_payload(self.exam, {'fairplay_required': True,
++            'fairplay_audience_confirm': True, 'fairplay_audience_mode': mode}, set())
++        apply_fairplay_editor(self.exam, plan)
++
++    def test_explicit_confirmation_and_empty_class_never_falls_back(self):
++        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
++        self.exam.classes.clear()
++        descriptor = audience_descriptor(self.exam)
++        self.assertEqual(descriptor['mode'], 'classes')
++        self.assertFalse(descriptor['confirmed'])
++        self.assertEqual(descriptor['organization_ids'], [self.org.pk])
++        self.assertEqual(build_exam_entry(self.exam)['audience'], descriptor)
++        self.assertEqual(build_package(self.exam)[0]['audience'], descriptor)
++        self.client.force_login(self.outsider)
++        self.assertEqual(self.client.get(reverse('contest_fairplay_launch', args=[self.exam.key])).status_code, 404)
++
++    def test_legacy_scope_needs_explicit_authorized_confirmation(self):
++        self.exam.tags.remove(*self.exam.tags.filter(name__startswith='fp-aud-'))
++        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
++        apply_fairplay_editor(self.exam, parse_fairplay_payload(self.exam, {'fairplay_required': True}, set()))
++        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
++        self.confirm('classes')
++        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
++
++    def test_org_scope_is_allowed_only_after_explicit_confirmation(self):
++        self.exam.classes.clear()
++        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
++        self.confirm('organizations')
++        self.assertEqual(audience_descriptor(self.exam)['mode'], 'organizations')
++        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
++        self.exam.organizations.clear()
++        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
++
++    def test_reused_class_name_does_not_replace_the_selected_class_id(self):
++        original_name = self.klass.name
++        Class.objects.filter(pk=self.klass.pk).update(name=original_name + ' renamed')
++        other = Class.objects.create(name=original_name, slug='fp-other', organization=self.org)
++        self.assertEqual(audience_descriptor(self.exam)['class_ids'], [self.klass.pk])
++        self.assertNotIn(other.pk, audience_descriptor(self.exam)['class_ids'])
++
++    def test_private_class_scope_cannot_expand_without_explicit_reconfirmation(self):
++        self._private_scope_requires_reconfirmation('classes')
++
++    def test_private_org_scope_cannot_expand_without_explicit_reconfirmation(self):
++        self.exam.classes.clear()
++        self._private_scope_requires_reconfirmation('organizations')
++
++    def _private_scope_requires_reconfirmation(self, mode):
++        self.exam.is_private = True
++        self.exam.save(update_fields=['is_private'])
++        self.exam.private_contestants.add(self.student.profile)
++        self.confirm(mode)
++        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
++        self.assertTrue(audience_descriptor(self.exam)['selected_only'])
++        self.exam.is_private = False
++        self.exam.save(update_fields=['is_private'])
++        apply_fairplay_editor(self.exam, parse_fairplay_payload(self.exam, {'fairplay_required': True}, set()))
++        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
++        self.assertTrue(audience_descriptor(self.exam)['selected_only'])
++        self.confirm(mode)
++        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
++        self.assertFalse(audience_descriptor(self.exam)['selected_only'])
++
++    def test_class_deletion_before_any_sync_preserves_key_and_revokes_scope(self):
++        key, class_id = self.exam.key, self.klass.pk
++        with mock.patch('judge.utils.fairplay_lifecycle._run_later', side_effect=lambda _delay, fn: fn()), \
++                mock.patch('judge.utils.fairplay_lifecycle.FairPlayClient.sync_ping') as send, \
++                self.captureOnCommitCallbacks(execute=True):
++            self.klass.delete()
++        calls = [call.kwargs for call in send.call_args_list if call.kwargs.get('event') == 'audience_revoked']
++        self.assertTrue(any(key in call['exam_keys'] and class_id in call['class_ids'] for call in calls))
++        self.assertEqual(audience_descriptor(self.exam)['mode'], 'classes')
++        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
++
++    def test_org_deletion_and_editor_clear_notify_explicit_keys(self):
++        key, org_id = self.exam.key, self.org.pk
++        with mock.patch('judge.utils.fairplay_lifecycle._run_later', side_effect=lambda _delay, fn: fn()), \
++                mock.patch('judge.utils.fairplay_lifecycle.FairPlayClient.sync_ping') as send, \
++                self.captureOnCommitCallbacks(execute=True):
++            self.exam.authors.clear()
++            self.org.delete()
++        calls = [call.kwargs for call in send.call_args_list]
++        self.assertTrue(any(key in call['exam_keys'] for call in calls))
++        self.assertTrue(any(org_id in call['organization_ids'] for call in calls))
++
++    def test_installation_metadata_and_signed_missing_exam_bind_raw_body_status_and_request_nonce(self):
++        for name, args, expected in [('fairplay_api_installation', [], 200),
++                                     ('fairplay_api_package', ['missing-exam'], 404)]:
++            with self.subTest(name=name):
++                path = reverse(name, args=args)
++                extra = fp_signed('GET', path)
++                response = self.client.get(path, **extra)
++                self.assertEqual(response.status_code, expected)
++                full = path + '?' + extra['QUERY_STRING']
++                canonical = canonical_string('RESPONSE GET %d' % expected, full,
++                    response['X-FP-Timestamp'], response['X-FP-Nonce'], extra['HTTP_X_FP_NONCE'],
++                    body_sha256(response.content))
++                signature = hmac.new(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical.encode(), hashlib.sha256).hexdigest()
++                self.assertEqual(response['X-FP-Signature'], signature)
++                self.assertNotEqual(signature, hmac.new(direction_key(DIRECTION_OJ_TO_FP, TOKEN),
++                    canonical.replace(extra['HTTP_X_FP_NONCE'], '0' * 32).encode(), hashlib.sha256).hexdigest())
++                if expected == 200:
++                    self.assertEqual(response.json(), {'protocol': 1, 'installation_id': INSTALLATION_ID,
++                                                      'request_nonce': extra['HTTP_X_FP_NONCE']})
++
++    def test_wrong_installation_or_missing_configuration_fails_closed(self):
++        path = reverse('fairplay_api_installation')
++        wrong = path + '?' + urlencode({'installation_id': '11111111-1111-4111-8111-111111111111'})
++        self.assertEqual(self.client.get(wrong, **fp_signed('GET', wrong)).status_code, 409)
++        extra = fp_signed('GET', path)
++        with override_settings(FAIRPLAY_INSTALLATION_ID=''):
++            self.assertEqual(self.client.get(path, **extra).status_code, 503)
++
++    def test_shared_client_includes_identity_in_signature_query_for_post(self):
++        from judge.utils.fairplay_client import FairPlayClient
++        from judge.views.tests.test_fairplay_pages import fake_response
++        with mock.patch('judge.utils.fairplay_client.requests.request', return_value=fake_response(200, {'ok': True})) as send:
++            FairPlayClient().sync_ping(exam_key=self.exam.key, event='audience_revoked')
++        self.assertIn('installation_id=' + INSTALLATION_ID, send.call_args.args[1])
++        self.assertEqual(json.loads(send.call_args.kwargs['data'])['event'], 'audience_revoked')
+diff --git a/judge/views/tests/test_fairplay_pages.py b/judge/views/tests/test_fairplay_pages.py
+index e0e38026c..7a90635d7 100644
+--- a/judge/views/tests/test_fairplay_pages.py
++++ b/judge/views/tests/test_fairplay_pages.py
+@@ -19,7 +19,7 @@ from judge.utils.fairplay_modes import fairplay_mode_table
+ from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP, body_sha256, canonical_string, \
+     direction_key, sign, signed_headers
+ from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, \
+-    fp_signed, grant, set_fairplay
++    fp_signed, grant, installation_path, set_fairplay
+ 
+ # Fixed signing vectors, shared with the FairPlay server's tests.
+ VECTORS_PATH = os.path.join(os.path.dirname(__file__), 'fairplay_vectors.json')
+@@ -79,13 +79,14 @@ class IncomingSignatureTestCase(FairPlayDataMixin, TestCase):
+         return next(c for p, c in self.vectors.items() if p.startswith(path_prefix) and c['direction'] == 'fp->oj')
+ 
+     def send(self, case, path=None, body=None, clock=None, **header_overrides):
+-        headers = {'X-FP-Timestamp': str(case['timestamp']), 'X-FP-Nonce': case['nonce'],
+-                   'X-FP-Signature': case['signature']}
++        headers = signed_headers(case['method'], installation_path(case['path']), case['body'].encode(),
++                                 timestamp=case['timestamp'], nonce=case['nonce'], token=TOKEN,
++                                 direction=DIRECTION_FP_TO_OJ, acting_user=case.get('acting_user'))
+         headers.update(header_overrides)
+         with mock.patch('judge.utils.fairplay_signing.time.time', return_value=clock or case['timestamp']):
+             if case['method'] == 'GET':
+-                return self.client.get(path or case['path'], **meta(headers))
+-            return self.client.post(path or case['path'], (body if body is not None else case['body']).encode(),
++                return self.client.get(installation_path(path or case['path']), **meta(headers))
++            return self.client.post(installation_path(path or case['path']), (body if body is not None else case['body']).encode(),
+                                     content_type='application/json', **meta(headers))
+ 
+     def test_vector_get_accepted_then_replay_rejected(self):
+@@ -258,13 +259,13 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
+             data = FairPlayClient(acting_user='fp_teacher').open_exam('fpexam', 'all')
+         self.assertEqual(data, {'status': 'live'})
+         args, kwargs = call.call_args
+-        self.assertEqual(args, ('POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/open'))
++        self.assertEqual(args, ('POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/open')))
+         self.assertEqual(kwargs['timeout'], (5, 15))
+         body = kwargs['data']
+         self.assertEqual(json.loads(body), {'open_to': 'all'})
+         headers = kwargs['headers']
+         self.assertEqual(headers['X-FP-Acting-User'], 'fp_teacher')
+-        canonical = canonical_string('POST', '/api/integrations/dkuoj/v1/exams/fpexam/open',
++        canonical = canonical_string('POST', installation_path('/api/integrations/dkuoj/v1/exams/fpexam/open'),
+                                      headers['X-FP-Timestamp'], headers['X-FP-Nonce'], 'fp_teacher',
+                                      hashlib.sha256(body).hexdigest())
+         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical))
+@@ -276,7 +277,7 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
+             data = FairPlayClient().access_codes_pdf('fpexam', 'fp_teacher')
+         self.assertEqual(data, b'%PDF-1.4 codes')
+         args, kwargs = call.call_args
+-        path = '/api/integrations/dkuoj/v1/exams/fpexam/access-codes.pdf'
++        path = installation_path('/api/integrations/dkuoj/v1/exams/fpexam/access-codes.pdf')
+         self.assertEqual(args, ('GET', 'https://exam.example.edu' + path))
+         headers = kwargs['headers']
+         self.assertEqual(headers['X-FP-Acting-User'], 'fp_teacher')
+@@ -355,7 +356,7 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
+             self.assertEqual(call.call_count, 1)
+             client.reset_student('fp_student', self.klass.id)
+             self.assertEqual(call.call_args[0][1],
+-                             'https://exam.example.edu/api/integrations/dkuoj/v1/students/fp_student/reset')
++                             installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/students/fp_student/reset'))
+             self.assertEqual(json.loads(call.call_args[1]['data']), {'class_id': self.klass.id})
+             client.class_status(self.klass.id)
+             self.assertEqual(call.call_count, 3)
+@@ -404,7 +405,7 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
+                         return_value=fake_response(200, {'ok': True})) as call:
+             client.create_class_login(self.klass)
+             self.assertEqual(call.call_args[0], (
+-                'POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/classes/%d/login' % self.klass.id))
++                'POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/classes/%d/login' % self.klass.id)))
+             self.assertEqual(json.loads(call.call_args[1]['data']),
+                              {'class_name': 'FP Section A', 'course_name': 'fporg'})
+             client.stop_class_login(self.klass)
+@@ -417,7 +418,7 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
+                     ('approve', ('fpexam', 'fp_student'), '/exams/fpexam/approve'),
+                     ('student_report', ('fpexam', 'fp_student'), '/exams/fpexam/students/fp_student/report')):
+                 getattr(client, method)(*args)
+-                self.assertEqual(call.call_args[0][1], 'https://exam.example.edu/api/integrations/dkuoj/v1' + path)
++                self.assertEqual(call.call_args[0][1], installation_path('https://exam.example.edu/api/integrations/dkuoj/v1' + path))
+ 
+ 
+ EXAM = {
+diff --git a/judge/views/tests/test_fairplay_review.py b/judge/views/tests/test_fairplay_review.py
+index 98ed36f72..c2d6d5950 100644
+--- a/judge/views/tests/test_fairplay_review.py
++++ b/judge/views/tests/test_fairplay_review.py
+@@ -5,7 +5,7 @@ from unittest import mock
+ from django.test import TestCase
+ 
+ from judge.utils.fairplay_client import FairPlayClient
+-from judge.views.tests.fairplay_base import FAIRPLAY_ON
++from judge.views.tests.fairplay_base import FAIRPLAY_ON, installation_path
+ from judge.views.tests.test_fairplay_pages import PagesMixin, exam, fake_response
+ 
+ 
+@@ -16,7 +16,7 @@ class SettingsClientTestCase(PagesMixin, TestCase):
+                         return_value=fake_response(200, exam())) as call:
+             FairPlayClient(acting_user='fp_teacher').set_settings('fpexam', {'review': 'score', 'calculator': 'off'})
+         args, kwargs = call.call_args
+-        self.assertEqual(args, ('POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/settings'))
++        self.assertEqual(args, ('POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/settings')))
+         self.assertEqual(json.loads(kwargs['data']), {'review': 'score', 'calculator': 'off'})
+         self.assertEqual(kwargs['headers']['X-FP-Acting-User'], 'fp_teacher')
+         self.assertIn('X-FP-Signature', kwargs['headers'])
+diff --git a/judge/views/tests/test_fairplay_security.py b/judge/views/tests/test_fairplay_security.py
+index aa97efc49..55e5b2a84 100644
+--- a/judge/views/tests/test_fairplay_security.py
++++ b/judge/views/tests/test_fairplay_security.py
+@@ -17,7 +17,7 @@ from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP,
+     sign
+ from judge.utils.fairplay_teaching import CLASS_LOGIN_KEY
+ from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, fp_signed, \
+-    set_fairplay
++    installation_path, set_fairplay
+ from judge.views.tests.test_fairplay_pages import PagesMixin, fake_response
+ 
+ NEW_TOKEN = 'fp-new-token-rotation-0123456789abcdefghij'
+@@ -303,7 +303,7 @@ class TokenRotationTestCase(FairPlayDataMixin, TestCase):
+                             return_value=fake_response(200, {'ok': True})) as request:
+                 FairPlayClient(acting_user='fp_teacher').close_exam('fpexam')
+         headers = request.call_args[1]['headers']
+-        canonical = canonical_string('POST', '/api/integrations/dkuoj/v1/exams/fpexam/close',
++        canonical = canonical_string('POST', installation_path('/api/integrations/dkuoj/v1/exams/fpexam/close'),
+                                      headers['X-FP-Timestamp'], headers['X-FP-Nonce'], 'fp_teacher',
+                                      hashlib.sha256(b'').hexdigest())
+         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, NEW_TOKEN), canonical))
+diff --git a/judge/views/tests/test_fairplay_sync.py b/judge/views/tests/test_fairplay_sync.py
+index 6d6aef04b..23c02acb2 100644
+--- a/judge/views/tests/test_fairplay_sync.py
++++ b/judge/views/tests/test_fairplay_sync.py
+@@ -11,7 +11,7 @@ from judge.models.tests.util import create_contest_problem
+ from judge.utils import fairplay_sync
+ from judge.utils.fairplay_client import FairPlayClient, FairPlayError, FairPlayUnreachable
+ from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, \
+-    set_fairplay
++    installation_path, set_fairplay
+ from judge.views.tests.test_fairplay_pages import fake_response
+ 
+ 
+@@ -227,20 +227,22 @@ class SyncClientTestCase(TestCase):
+     def test_signed_post(self):
+         result, (args, kwargs) = self.call(exam_key='mid term', class_id=4)
+         self.assertEqual(result, {'ok': True, 'queued': True})
+-        self.assertEqual(args, ('POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/sync'))
+-        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'mid term', 'class_id': 4})
++        self.assertEqual(args, ('POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/sync')))
++        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'mid term', 'class_id': 4,
++            'event': 'changed', 'exam_keys': ['mid term'], 'class_ids': [4], 'organization_ids': []})
+         self.assertEqual(kwargs['headers']['Content-Type'], 'application/json')
+         self.assertNotIn('X-FP-Acting-User', kwargs['headers'])
+         from judge.utils.fairplay_signing import canonical_string, direction_key, sign, body_sha256, \
+             DIRECTION_OJ_TO_FP
+         headers = kwargs['headers']
+-        canonical = canonical_string('POST', '/api/integrations/dkuoj/v1/sync', int(headers['X-FP-Timestamp']),
++        canonical = canonical_string('POST', installation_path('/api/integrations/dkuoj/v1/sync'), int(headers['X-FP-Timestamp']),
+                                      headers['X-FP-Nonce'], '', body_sha256(kwargs['data']))
+         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical))
+ 
+     def test_class_id_omitted(self):
+         _, (_, kwargs) = self.call(exam_key='fpexam')
+-        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'fpexam'})
++        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'fpexam', 'event': 'changed',
++            'exam_keys': ['fpexam'], 'class_ids': [], 'organization_ids': []})
+ 
+     def test_short_read_timeout(self):
+         with mock.patch('judge.utils.fairplay_client.requests.request',
+diff --git a/templates/contest/create.html b/templates/contest/create.html
+index 736a73756..46af582f3 100644
+--- a/templates/contest/create.html
++++ b/templates/contest/create.html
+@@ -769,6 +769,10 @@
+                 }
+                 delete data.exam_lock;
+                 Object.keys(data).forEach(function (f) { if (f.indexOf('fairplay_') === 0 && f !== 'fairplay_required') delete data[f]; });
++                if (lockChoice && lockChoice.value === 'fairplay' && fd.has('fairplay_audience_confirm')) {
++                    data.fairplay_audience_confirm = true;
++                    data.fairplay_audience_mode = fd.get('fairplay_audience_mode');
++                }
+                 // Open exam: only changed values go to FairPlay; switching it off clears them.
+                 var openExam = document.getElementById('fp-open-exam');
+                 if (openExam && lockChoice && lockChoice.value === 'fairplay') {
+@@ -3200,6 +3204,18 @@
+                                     <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+                                         <input type="radio" name="exam_lock" value="fairplay" id="id_fairplay_required"{% if exam_lock == 'fairplay' %} checked{% endif %}> {{ _('FairPlay') }}
+                                     </label>
++                                <div class="field" style="margin: 12px 0">
++                                    <label for="id_fairplay_audience_mode">{{ _('FairPlay audience intent') }}</label>
++                                    <select name="fairplay_audience_mode" id="id_fairplay_audience_mode">
++                                        <option value="">{{ _('Choose the intended audience') }}</option>
++                                        <option value="classes"{% if fairplay_audience and fairplay_audience.mode == 'classes' %} selected{% endif %}>{{ _('Selected classes') }}</option>
++                                        <option value="organizations"{% if fairplay_audience and fairplay_audience.mode == 'organizations' %} selected{% endif %}>{{ _('Selected organizations (no classes)') }}</option>
++                                        <option value="selected"{% if fairplay_audience and fairplay_audience.mode == 'selected' %} selected{% endif %}>{{ _('Explicitly selected students only') }}</option>
++                                    </select>
++                                    <label><input type="checkbox" name="fairplay_audience_confirm"> {{ _('I confirm this audience matches the classes, organizations and student restrictions saved above.') }}</label>
++                                    <div class="helptext">{{ _('Existing unconfirmed audiences stay blocked until you explicitly confirm. Removing the last class never grants access to the whole organization.') }}</div>
++                                    {% if fairplay_audience %}<div class="helptext">{{ _('Saved scope: %(classes)d classes, %(orgs)d organizations.', classes=fairplay_audience.class_ids|length, orgs=fairplay_audience.organization_ids|length) }} {{ _('Confirmed') if fairplay_audience.confirmed else _('Needs confirmation') }}</div>{% endif %}
++                                </div>
+                                     {% endif %}
+                                     <div id="lock-error" style="display:none;color:#b91c1c;font-size:13px;margin-top:0.3rem;"></div>
+                                 </div>

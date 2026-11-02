@@ -84,7 +84,7 @@ async def _on_list(session: AsyncSession, e: Exam, netid: str) -> tuple[User, At
     if u is None:
         raise HTTPException(404, "No FairPlay account for this NetID")
     listed = (await session.execute(select(OjRosterEntry.id).where(
-        OjRosterEntry.exam_id == e.id, OjRosterEntry.user_id == u.id).limit(1))).first() is not None
+        OjRosterEntry.exam_id == e.id, OjRosterEntry.user_id == u.id, OjRosterEntry.revoked_at.is_(None)).limit(1))).first() is not None
     if not listed and a is None:
         raise HTTPException(404, "This student is not on this exam's list")
     return u, a

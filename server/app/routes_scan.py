@@ -131,7 +131,7 @@ def teacher_student_ids(teacher_id: int, exclude_paper: bool = False):
     from .integrations.dkuoj.models import OjEditor, OjRosterEntry
     bridge = (select(OjRosterEntry.user_id).join(Exam, Exam.id == OjRosterEntry.exam_id)
               .outerjoin(OjEditor, OjEditor.exam_id == Exam.id)
-              .where(OjEditor.user_id == teacher_id))
+              .where(OjEditor.user_id == teacher_id, OjRosterEntry.revoked_at.is_(None)))
     return in_class.union(in_course, took, picked, bridge)
 
 

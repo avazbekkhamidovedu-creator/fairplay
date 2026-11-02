@@ -1,0 +1,349 @@
+diff --git a/dmoj/urls.py b/dmoj/urls.py
+index d3414b989..7fa6019a7 100644
+--- a/dmoj/urls.py
++++ b/dmoj/urls.py
+@@ -19,6 +19,7 @@ from judge.views import (
+     two_factor, user, widgets,
+ )
+ from judge.views.api import fairplay as fairplay_api
++from judge.views.fairplay_launch import ContestFairPlayLaunch, ContestFairPlayLaunchFile
+ from judge.views.editor_attachment import editor_file_download, editor_file_uploader
+ from judge.views.problem_create_v2 import (
+     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
+@@ -294,6 +295,8 @@ urlpatterns = [
+         path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
+         path('/access-codes.pdf', fairplay.ContestAccessCodesPdf.as_view(), name='contest_access_codes_pdf'),
+         path('/fairplay-help', fairplay.ContestStudentHelp.as_view(), name='contest_fairplay_help'),
++        path('/fairplay-launch', ContestFairPlayLaunch.as_view(), name='contest_fairplay_launch'),
++        path('/fairplay-launch-file', ContestFairPlayLaunchFile.as_view(), name='contest_fairplay_launch_file'),
+         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
+         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
+         path('/grade', contests.ContestGrade.as_view(), name='contest_grade'),
+diff --git a/judge/utils/tests/test_fairplay_revision.py b/judge/utils/tests/test_fairplay_revision.py
+index 322e2267e..1b1f7ccd0 100644
+--- a/judge/utils/tests/test_fairplay_revision.py
++++ b/judge/utils/tests/test_fairplay_revision.py
+@@ -151,6 +151,8 @@ class FairPlayRevisionListTestCase(FairPlayAPIMixin, TestCase):
+                                        args=['fpexam', 'fp_student', self.mcq.code])).content.decode()
+         self.assertIn('FairPlay hand-in 1, superseded', html)
+         self.assertIn('FairPlay hand-in 2', html)
++        self.assertIn('FairPlay hand-in 2 · latest', html)
++        self.assertLess(html.index('FairPlay hand-in 2'), html.index('FairPlay hand-in 1, superseded'))
+         self.client.force_login(self.student)
+         self.assertNotIn('FairPlay hand-in', self.client.get(
+             reverse('contest_user_submissions', args=['fpexam', 'fp_student', self.mcq.code])).content.decode())
+diff --git a/judge/views/contests.py b/judge/views/contests.py
+index 04b56af12..184997d4a 100644
+--- a/judge/views/contests.py
++++ b/judge/views/contests.py
+@@ -67,6 +67,7 @@ from judge.utils.user_search import profile_choice_label
+ from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
+     generic_message
+ from judge.views.fairplay_editor import fairplay_editor_saved
++from judge.views.fairplay_launch import hidden_exam_launch
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -1894,6 +1895,10 @@ class ContestMixin(object):
+ class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
+     template_name = 'contest/contest.html'
+ 
++    def get(self, request, *args, **kwargs):
++        launch = hidden_exam_launch(request, kwargs.get('contest'))
++        return launch if launch is not None else super().get(request, *args, **kwargs)
++
+     def get_comment_page(self):
+         return 'c:%s' % self.object.key
+ 
+@@ -2154,6 +2159,9 @@ class ContestAccessCodeForm(forms.Form):
+ 
+ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
+     def get(self, request, *args, **kwargs):
++        launch = hidden_exam_launch(request, kwargs.get('contest'), redirect=True)
++        if launch is not None:
++            return launch
+         self.object = self.get_object()
+         try:
+             self._check_seb(request)
+@@ -2162,6 +2170,9 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
+         return self.ask_for_access_code()
+ 
+     def post(self, request, *args, **kwargs):
++        launch = hidden_exam_launch(request, kwargs.get('contest'), redirect=True)
++        if launch is not None:
++            return launch
+         self.object = self.get_object()
+         try:
+             return self.join_contest(request)
+diff --git a/judge/views/fairplay_launch.py b/judge/views/fairplay_launch.py
+new file mode 100644
+index 000000000..bff56c4c8
+--- /dev/null
++++ b/judge/views/fairplay_launch.py
+@@ -0,0 +1,68 @@
++import json
++import re
++from urllib.parse import urlencode
++
++from django.contrib.auth.mixins import LoginRequiredMixin
++from django.http import Http404, HttpResponse, HttpResponseRedirect
++from django.shortcuts import get_object_or_404, render
++from django.urls import reverse
++from django.utils.translation import gettext as _
++from django.views import View
++
++from judge.models import Contest
++from judge.utils.fairplay import fairplay_enabled, fairplay_hidden_for, is_fairplay_exam
++from judge.utils.fairplay_package import exam_roster
++
++
++def _contest(request, key):
++    contest = get_object_or_404(Contest, key=key)
++    if not request.user.is_authenticated or not fairplay_enabled() or not is_fairplay_exam(contest):
++        raise Http404()
++    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', contest.key):
++        raise Http404()
++    if not contest.is_editable_by(request.user) and (
++            not contest.is_visible or not exam_roster(contest).filter(pk=request.profile.pk).exists()):
++        raise Http404()
++    return contest
++
++
++def _private(response):
++    response['Cache-Control'] = 'private, no-store'
++    response['Referrer-Policy'] = 'no-referrer'
++    return response
++
++
++def _page(request, contest):
++    return _private(render(request, 'contest/fairplay_required.html', {
++        'contest': contest,
++        'title': _('Open exam in FairPlay'),
++        'launch_url': 'fairplay://launch?' + urlencode({'v': 1, 'exam': contest.key}),
++        'launch_file_url': reverse('contest_fairplay_launch_file', args=[contest.key]),
++    }))
++
++
++def hidden_exam_launch(request, key, redirect=False):
++    if not request.user.is_authenticated or not fairplay_enabled():
++        return None
++    contest = Contest.objects.filter(key=key).first()
++    if contest is None or not is_fairplay_exam(contest) or not fairplay_hidden_for(request.user, contest):
++        return None
++    contest = _contest(request, key)
++    if redirect:
++        return _private(HttpResponseRedirect(reverse('contest_fairplay_launch', args=[contest.key])))
++    return _page(request, contest)
++
++
++class ContestFairPlayLaunch(LoginRequiredMixin, View):
++    def get(self, request, contest):
++        return _page(request, _contest(request, contest))
++
++
++class ContestFairPlayLaunchFile(LoginRequiredMixin, View):
++    def get(self, request, contest):
++        contest = _contest(request, contest)
++        response = HttpResponse(json.dumps({'version': 1, 'exam_key': contest.key}),
++                                content_type='application/vnd.fairplay.launch+json')
++        response['Content-Disposition'] = 'attachment; filename="%s.fairplay"' % contest.key
++        response['X-Content-Type-Options'] = 'nosniff'
++        return _private(response)
+diff --git a/judge/views/tests/test_fairplay_hiding.py b/judge/views/tests/test_fairplay_hiding.py
+index 4f9b356ea..bddfc6caa 100644
+--- a/judge/views/tests/test_fairplay_hiding.py
++++ b/judge/views/tests/test_fairplay_hiding.py
+@@ -69,9 +69,14 @@ class FairPlayHidingRoutesTestCase(FairPlayDataMixin, TestCase):
+ 
+     def test_contest_page(self):
+         url = reverse('contest_view', args=['fpexam'])
+-        for user in self.students() + [AnonymousUser()]:
++        for user in [self.outsider, AnonymousUser()]:
+             with self.subTest(user=str(user)):
+                 self.assertTrue(hidden(self.as_user(user).get(url), 'CS 101 Midterm'))
++        for user in [self.student, self.classmate]:
++            with self.subTest(user=str(user)):
++                response = self.as_user(user).get(url)
++                self.assertContains(response, 'Start exam in FairPlay')
++                self.assertNotContains(response, MARK)
+         for user in self.staff_users():
+             with self.subTest(user=str(user)):
+                 response = self.as_user(user).get(url)
+@@ -81,7 +86,9 @@ class FairPlayHidingRoutesTestCase(FairPlayDataMixin, TestCase):
+     def test_join(self):
+         client = self.as_user(self.classmate)
+         response = client.post(reverse('contest_join', args=['fpexam']))
+-        self.assertTrue(hidden(response))
++        self.assertEqual(response.status_code, 302)
++        self.assertEqual(response['Location'], reverse('contest_fairplay_launch', args=['fpexam']))
++        self.assertNotContains(client.get(response['Location']), MARK)
+         self.assertFalse(ContestParticipation.objects.filter(contest=self.exam, user=self.classmate.profile).exists())
+         self.classmate.profile.refresh_from_db()
+         self.assertIsNone(self.classmate.profile.current_contest)
+diff --git a/judge/views/tests/test_fairplay_launch.py b/judge/views/tests/test_fairplay_launch.py
+new file mode 100644
+index 000000000..3766fb67b
+--- /dev/null
++++ b/judge/views/tests/test_fairplay_launch.py
+@@ -0,0 +1,102 @@
++import json
++
++from django.test import TestCase
++from django.urls import reverse
++
++from judge.models import Contest, ContestParticipation
++from judge.utils.fairplay import fairplay_hidden_for
++from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, SECRETS, create_contest
++
++
++@FAIRPLAY_ON
++class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
++    def setUp(self):
++        super().setUp()
++        self.client.force_login(self.student)
++
++    def url(self, file=False, key='fpexam'):
++        return reverse('contest_fairplay_launch_file' if file else 'contest_fairplay_launch', args=[key])
++
++    def test_three_actions_and_platform_downloads_without_exam_contents(self):
++        response = self.client.get(self.url())
++        self.assertEqual(response.status_code, 200)
++        for text in ('Start exam in FairPlay', 'Download FairPlay', 'Download launch file',
++                     'FairPlay-Mac.dmg', 'FairPlay-Windows-Setup.exe', '0.7.8',
++                     'fairplay://launch?v=1&amp;exam=fpexam'):
++            self.assertContains(response, text)
++        for secret in SECRETS:
++            self.assertNotContains(response, secret)
++        self.assertIn('no-store', response['Cache-Control'])
++
++    def test_launch_file_contains_only_version_and_exam_reference(self):
++        response = self.client.get(self.url(file=True))
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(json.loads(response.content), {'version': 1, 'exam_key': 'fpexam'})
++        self.assertEqual(response['Content-Disposition'], 'attachment; filename="fpexam.fairplay"')
++        self.assertIn('no-store', response['Cache-Control'])
++
++    def test_anonymous_cannot_download_or_open(self):
++        self.client.logout()
++        for file in (False, True):
++            self.assertEqual(self.client.get(self.url(file)).status_code, 302)
++
++    def test_private_exam_is_hidden_from_outsiders(self):
++        self.client.force_login(self.outsider)
++        for file in (False, True):
++            self.assertEqual(self.client.get(self.url(file)).status_code, 404)
++
++    def test_banned_student_cannot_open_or_download(self):
++        self.exam.banned_users.add(self.student.profile)
++        for file in (False, True):
++            self.assertEqual(self.client.get(self.url(file)).status_code, 404)
++
++    def test_bridge_off_or_other_contest_is_not_a_launch_page(self):
++        with FAIRPLAY_OFF:
++            self.assertEqual(self.client.get(self.url()).status_code, 404)
++        other = create_contest('normal-launch')
++        self.assertEqual(self.client.get(self.url(key=other.key)).status_code, 404)
++
++    def test_join_opens_launch_page_without_creating_participation(self):
++        url = reverse('contest_join', args=['fpexam'])
++        before = ContestParticipation.objects.filter(contest=self.exam, user=self.student.profile).count()
++        for method in (self.client.get, self.client.post):
++            response = method(url)
++            self.assertRedirects(response, self.url(), fetch_redirect_response=False)
++        self.assertEqual(ContestParticipation.objects.filter(
++            contest=self.exam, user=self.student.profile).count(), before)
++
++    def test_contest_entry_points_at_the_launch_screen(self):
++        response = self.client.get(reverse('contest_view', args=['fpexam']))
++        self.assertContains(response, 'Start exam in FairPlay')
++        self.assertContains(response, 'fairplay://launch?v=1&amp;exam=fpexam')
++        self.assertNotContains(response, 'Write it.')
++        self.assertTrue(fairplay_hidden_for(self.student, self.exam))
++        self.assertFalse(self.exam.is_accessible_by(self.student))
++
++    def test_private_exam_needs_class_membership_and_explicit_student_list(self):
++        Contest.objects.filter(pk=self.exam.pk).update(is_private=True)
++        self.assertEqual(self.client.get(self.url()).status_code, 404)
++        self.exam.private_contestants.add(self.student.profile)
++        self.assertEqual(self.client.get(self.url()).status_code, 200)
++        self.exam.private_contestants.add(self.outsider.profile)
++        self.client.force_login(self.outsider)
++        self.assertEqual(self.client.get(self.url()).status_code, 404)
++
++    def test_org_only_exam_uses_org_membership_when_no_classes_are_assigned(self):
++        self.exam.classes.clear()
++        self.client.force_login(self.outsider)
++        self.assertEqual(self.client.get(self.url()).status_code, 200)
++        self.outsider.profile.organizations.clear()
++        self.assertEqual(self.client.get(self.url()).status_code, 404)
++
++    def test_invisible_exam_has_no_student_launch_page(self):
++        Contest.objects.filter(pk=self.exam.pk).update(is_visible=False)
++        self.assertEqual(self.client.get(self.url()).status_code, 404)
++
++    def test_testers_keep_the_existing_full_contest_view(self):
++        self.client.force_login(self.tester)
++        response = self.client.get(reverse('contest_view', args=['fpexam']))
++        self.assertContains(response, 'class="contest-problems-wrap"')
++        self.assertContains(response, self.code.name)
++        self.assertContains(response, reverse('problem_detail', args=[self.code.code]))
++        self.assertNotContains(response, 'Open exam in FairPlay')
+diff --git a/templates/contest/fairplay_required.html b/templates/contest/fairplay_required.html
+new file mode 100644
+index 000000000..a9e6c07eb
+--- /dev/null
++++ b/templates/contest/fairplay_required.html
+@@ -0,0 +1,40 @@
++{% extends "base.html" %}
++
++{% block media %}
++<style>
++    .fp-launch { max-width: 680px; margin: 40px auto; padding: 0 20px; }
++    .fp-launch-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; margin: 24px 0; }
++    .fp-launch .fp-launch-button { display: inline-block; border: 1px solid #c9d1db; border-radius: 12px;
++        padding: 12px 18px; color: #243244; background: #f7f9fc; text-decoration: none; cursor: pointer; }
++    .fp-launch .fp-launch-primary { background: #2459a6; border-color: #2459a6; color: white; font-weight: 600; }
++    .fp-launch-downloads[open] { padding-bottom: 10px; }
++    .fp-launch-downloads a { display: block; margin: 12px 8px 0; }
++    .fp-launch-help { line-height: 1.6; }
++</style>
++{% endblock %}
++
++{% block body %}
++<main class="fp-launch">
++    <h2>{{ _('Open exam in FairPlay') }}</h2>
++    <p>{{ contest.name }}</p>
++    <p>{{ _('Use FairPlay to take this exam. Have the access code from your instructor ready.') }}</p>
++    <div class="fp-launch-actions">
++        <a class="fp-launch-button fp-launch-primary" href="{{ launch_url }}">{{ _('Start exam in FairPlay') }}</a>
++        <details class="fp-launch-downloads">
++            <summary class="fp-launch-button">{{ _('Download FairPlay') }}</summary>
++            <a href="https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Mac.dmg">{{ _('Mac download') }}</a>
++            <a href="https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Windows-Setup.exe">{{ _('Windows download') }}</a>
++        </details>
++        <a class="fp-launch-button" href="{{ launch_file_url }}">{{ _('Download launch file') }}</a>
++    </div>
++    <div class="fp-launch-help">
++        <ol>
++            <li>{{ _('Install the Mac or Windows app if needed, then choose Start exam in FairPlay.') }}</li>
++            <li>{{ _('Allow your browser to open FairPlay, then enter your instructor’s access code in the app.') }}</li>
++            <li>{{ _('If the browser cannot open it, download the launch file and open that with FairPlay.') }}</li>
++        </ol>
++        <p>{{ _('Using FairPlay 0.7.8 or an older app? Open FairPlay manually and enter your access code. Launch links and files require an updated app.') }}</p>
++        <p>{{ _('Opening the app does not start the exam or lock your computer. Follow the checks and start instructions inside FairPlay.') }}</p>
++    </div>
++</main>
++{% endblock %}
+diff --git a/templates/submission/row.html b/templates/submission/row.html
+index 122dae586..35be4e516 100644
+--- a/templates/submission/row.html
++++ b/templates/submission/row.html
+@@ -44,7 +44,7 @@
+             <br class="xs-br">
+             <span class="time">{{ relative_time(submission.date) }}</span>
+             {% if submission.contest_object_id and submission.review_note.startswith('FairPlay hand-in ') and submission.contest_object.is_editable_by(request.user) %}
+-                <span class="submission-contest">{{ submission.review_note }}</span>
++                <span class="submission-contest">{{ submission.review_note }}{% if ', superseded' not in submission.review_note %} · {{ _('latest') }}{% endif %}</span>
+             {% endif %}
+             {% if not request.in_contest and submission.contest_object_id %}
+                 <a href="{{ url('contest_view', submission.contest_object.key) }}"

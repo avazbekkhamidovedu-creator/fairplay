@@ -133,6 +133,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .where(Exam.status == "draft", Exam.scheduled_at.is_not(None), Exam.scheduled_at <= now + WINDOW_LEAD,
                ExamAccessCode.revoked_at.is_(None), ExamAccessCode.bound_device.is_not(None),
                ExamAccessCode.netid == select(User.netid).where(User.id == p.user_id).scalar_subquery()))).scalars())
+    from .integrations.dkuoj.source import SOURCE as oj_source
     rows = (await session.execute(
         select(Exam.id, Exam.title, Exam.duration_min, Exam.question_count, Exam.status,
                Attempt.id, Attempt.status, Attempt.submitted_at, Attempt.receipt,
@@ -156,6 +157,7 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
         .where(or_(Exam.delivery.is_(None), Exam.delivery != "paper"))
         .where(Exam.id == p.scope if p.scope else true())     # a code sign-in sees its own exam only
         .where(Exam.is_trial == false())     # the sample exam lives only in its own card
+        .where(or_(Exam.source != "dkuoj", oj_source.roster_condition(p.user_id)))
         .order_by(Exam.created_at.desc(), Exam.id))).all()
     coded = await exams_with_codes(session, [r[0] for r in rows])
     out = []
@@ -311,6 +313,8 @@ async def start(exam_id: str, body: StartIn, request: Request,
     # slice 6: paper is never started; the sample exam starts at /api/student/trial/start
     if exam is None or exam.get("delivery") == "paper" or exam.get("is_trial"):
         raise HTTPException(404, "Exam not found")
+    if exam.get("source") == "dkuoj":
+        await session.execute(select(Exam.id).where(Exam.id == exam_id).with_for_update())
     await require_listed(session, exam_id, p.user_id)
     if exam["status"] != "live":
         raise HTTPException(409, "Exam is not open")
@@ -502,6 +506,11 @@ async def _own_attempt(session: AsyncSession, aid: str, p: Principal) -> Attempt
     a = await session.get(Attempt, aid)
     if a is None or a.student_id != p.user_id:
         raise HTTPException(404, "Attempt not found")
+    source = (await session.execute(select(Exam.source).where(Exam.id == a.exam_id))).scalar()
+    if source == "dkuoj" and a.status == "in_progress":
+        from .integrations.dkuoj.source import SOURCE
+        if not await SOURCE.current_student(session, a.exam_id, p.user_id):
+            raise HTTPException(403, SOURCE.take_refused_message())
     return a
 
 

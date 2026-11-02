@@ -32,6 +32,7 @@ class OjRosterEntry(Base):
     extra_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     first_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class OjStudentGrant(Base):

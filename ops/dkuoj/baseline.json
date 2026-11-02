@@ -1,0 +1,10 @@
+{
+  "dmoj/urls.py": "ce2dbf7ff609350b856443f09d21b4bb70545d5bed6bef05d14fe6af37a6feb5",
+  "judge/views/contests.py": "a9583d30fcfcd946039254271966456f4f4ea2ab20b79c3d7236d23717649e0d",
+  "judge/views/fairplay_launch.py": null,
+  "judge/views/tests/test_fairplay_launch.py": null,
+  "judge/views/tests/test_fairplay_hiding.py": "dbf80b5a3601aa4187396fc175a7d3e0dd6fecaa727587b1c95f9e0e5789931d",
+  "templates/contest/fairplay_required.html": null,
+  "templates/submission/row.html": "ca509236f6db1db5d89757dce1bc8db2fc584b7d13d24608d3a9a71cd36ac914",
+  "judge/utils/tests/test_fairplay_revision.py": "a412d966bc54931e76b57fc942230c801719a054572a4c5974090faa56f12f26"
+}

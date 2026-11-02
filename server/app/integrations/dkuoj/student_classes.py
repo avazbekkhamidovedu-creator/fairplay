@@ -66,7 +66,7 @@ async def _local(session: AsyncSession, user: User) -> list[dict]:
     since = utcnow() - timedelta(days=EXAM_LINK_DAYS)
     metas = (await session.execute(select(Exam.external_meta).join(
         OjRosterEntry, OjRosterEntry.exam_id == Exam.id).where(
-        OjRosterEntry.user_id == user.id, Exam.source == "dkuoj",
+        OjRosterEntry.user_id == user.id, OjRosterEntry.revoked_at.is_(None), Exam.source == "dkuoj",
         or_(Exam.status != "closed", Exam.updated_at >= since)))).scalars().all()
     for meta in metas:
         meta = meta or {}
@@ -124,7 +124,7 @@ async def forget(user_id: int) -> None:
 async def exams_by_class(session: AsyncSession, user_id: int) -> dict[int, list[Exam]]:
     """DKU OJ class id -> the student's not-closed synced exams of that class."""
     exams = (await session.execute(select(Exam).join(OjRosterEntry, OjRosterEntry.exam_id == Exam.id).where(
-        OjRosterEntry.user_id == user_id, Exam.source == "dkuoj", Exam.status != "closed",
+        OjRosterEntry.user_id == user_id, OjRosterEntry.revoked_at.is_(None), Exam.source == "dkuoj", Exam.status != "closed",
         Exam.is_trial == false()))).scalars().all()
     out: dict[int, list[Exam]] = {}
     for e in exams:

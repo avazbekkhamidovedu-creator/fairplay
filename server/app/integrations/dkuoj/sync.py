@@ -382,7 +382,8 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     key = item.get("key")
     if not isinstance(key, str) or not key:
         return None
-    e = (await session.execute(select(Exam).where(Exam.external_key == key, Exam.source == "dkuoj"))).scalar_one_or_none()
+    e = (await session.execute(select(Exam).where(Exam.external_key == key, Exam.source == "dkuoj")
+                               .with_for_update())).scalar_one_or_none()
     if item.get("removed"):
         # A removed entry carries only key, name and times (and only in incremental
         # polls): mark the exam, keep everything else (editors still see it).
@@ -453,11 +454,13 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     if editors and e.teacher_id not in {u.id for u in editors}:
         e.teacher_id = editors[0].id     # the owner is always a current editor
     await _replace(session, OjEditor, e.id, {u.id: {} for u in editors})
-    await _replace(session, OjRosterEntry, e.id, {u.id: {"extra_time_seconds": x, **roster_names.get(u.id, {})}
-                                                       for u, x in students})
+    confirmed = audience_valid(item)
+    if confirmed:
+        await _replace(session, OjRosterEntry, e.id, {u.id: {"extra_time_seconds": x, **roster_names.get(u.id, {})}
+                                                           for u, x in students})
     await _classes(session, e, item, [u for u, _ in students])
     from .access_codes import revoke_missing
-    await revoke_missing(session, e.id, {u.netid for u, _ in students if u.netid})
+    await revoke_missing(session, e.id, {u.netid for u, _ in students if u.netid}, preserve_running=not confirmed)
     new_end = _time(meta.get("end_time"))
     if e.status == "live" and old_end is not None and new_end is not None and new_end > old_end:
         e.moved_attempts = await follow_end_time(session, e, new_end + timedelta(minutes=extra_close_minutes(e)))
@@ -467,8 +470,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
 async def revoke_authority(session, exam):
     from .access_codes import revoke_missing
     await _replace(session, OjEditor, exam.id, {})
-    await _replace(session, OjRosterEntry, exam.id, {})
-    await revoke_missing(session, exam.id, set())
+    await revoke_missing(session, exam.id, set(), preserve_running=True)
     if exam.class_id is not None:
         await session.execute(delete(ClassMember).where(ClassMember.class_id == exam.class_id))
 
@@ -496,15 +498,31 @@ async def follow_end_time(session: AsyncSession, e: Exam, new_end: datetime) -> 
 
 async def _replace(session: AsyncSession, model, exam_id: str, wanted: dict[int, dict]) -> None:
     have = {r.user_id: r for r in (await session.execute(select(model).where(model.exam_id == exam_id))).scalars()}
+    revoked = []
     for uid, row in have.items():
         if uid not in wanted:
-            await session.delete(row)
+            if model is OjRosterEntry:
+                if row.revoked_at is None:
+                    row.revoked_at = utcnow()
+                    revoked.append(uid)
+            else:
+                await session.delete(row)
     for uid, values in wanted.items():
+        if model is OjRosterEntry:
+            values = {**values, "revoked_at": None}
         if uid in have:
             for k, v in values.items():
                 setattr(have[uid], k, v)
         else:
             session.add(model(exam_id=exam_id, user_id=uid, **values))
+    if revoked:
+        from ...models import Attempt
+        ids = (await session.execute(select(Attempt.id).where(
+            Attempt.exam_id == exam_id, Attempt.student_id.in_(revoked), Attempt.status == "in_progress"))).scalars().all()
+        if ids:
+            await session.execute(update(Attempt).where(Attempt.id.in_(ids)).values(exited_at=utcnow()))
+            e = await session.get(Exam, exam_id)
+            e.revoked_attempts = ids
     await session.flush()
 
 
@@ -579,6 +597,12 @@ async def apply_item(sessionmaker, item: dict, cfg, now: datetime) -> bool:
         if moved:      # the end time moved later: heartbeats re-read the deadline
             from ...services import attempt_key
             await get_store().delete(*[attempt_key(a) for a in moved])
+        revoked = getattr(e, "revoked_attempts", None)
+        if revoked:
+            from ...services import attempt_key
+            await get_store().delete(*[key for aid in revoked for key in (attempt_key(aid), f"entry:{aid}", f"abt:{aid}")])
+            for aid in revoked:
+                await get_store().hdel(f"ab:{e.id}", aid)
         return True
 
 

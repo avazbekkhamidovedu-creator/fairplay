@@ -1,0 +1,74 @@
+name: publish-download
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Draft release tag to verify and publish
+        required: true
+        type: string
+      publish:
+        description: Publish after verification
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches: ["release/**"]
+    paths: ["ops/release/audit.json", "ops/release/publish.json"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fairplay-download-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Select release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          REQUESTED_PUBLISH: ${{ inputs.publish }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          TAG="$REQUESTED_TAG"
+          PUBLISH="$REQUESTED_PUBLISH"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+              git diff-tree --root --no-commit-id --name-only -r "$GITHUB_SHA" > changed-files
+            else
+              git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > changed-files
+            fi
+            if grep -qx 'ops/release/publish.json' changed-files; then
+              MARKER=ops/release/publish.json
+              PUBLISH=true
+            else
+              MARKER=ops/release/audit.json
+              PUBLISH=false
+            fi
+            TAG=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag"])' "$MARKER")
+          fi
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Invalid release tag"; exit 1; }
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "PUBLISH_RELEASE=$PUBLISH" >> "$GITHUB_ENV"
+      - name: Verify all platforms and publish
+        env:
+          GH_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::DOWNLOAD_TOKEN is not configured"; exit 1; }
+          REPO=avazbekkhamidovedu-creator/fairplay-download
+          gh api "repos/$REPO/releases/tags/$RELEASE_TAG" > release.json
+          mkdir update-feed
+          gh release download "$RELEASE_TAG" -R "$REPO" -p releases.win.json -D update-feed
+          python3 scripts/verify-download-release.py release.json update-feed/releases.win.json "$RELEASE_TAG"
+          if [ "$PUBLISH_RELEASE" = true ]; then
+            gh release edit "$RELEASE_TAG" -R "$REPO" --draft=false --latest
+          fi
+          gh release view "$RELEASE_TAG" -R "$REPO" --json tagName,isDraft,url

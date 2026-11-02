@@ -278,7 +278,7 @@ async def class_user_ids(session: AsyncSession, class_id: int, netids: set[str] 
     mine = await _class_exam_ids(session, class_id)
     if mine:
         ids |= set((await session.execute(select(OjRosterEntry.user_id).where(
-            OjRosterEntry.exam_id.in_(mine)))).scalars())
+            OjRosterEntry.exam_id.in_(mine), OjRosterEntry.revoked_at.is_(None)))).scalars())
     return ids
 
 
@@ -408,7 +408,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     now = utcnow()
     nq = int(e.question_count or 0)
     roster = (await session.execute(select(User).join(OjRosterEntry, OjRosterEntry.user_id == User.id)
-                                    .where(OjRosterEntry.exam_id == e.id).order_by(User.name, User.id))
+                                    .where(OjRosterEntry.exam_id == e.id, OjRosterEntry.revoked_at.is_(None)).order_by(User.name, User.id))
               ).scalars().all()
     attempts = {a.student_id: a for a in (await session.execute(
         select(Attempt).where(Attempt.exam_id == e.id))).scalars()}
@@ -622,7 +622,7 @@ async def _open_to_ids(session: AsyncSession, e: Exam, value) -> str | list[int]
     wanted = {x.strip() for x in value if x.strip()}
     rows = dict((await session.execute(select(User.netid, User.id).join(
         OjRosterEntry, OjRosterEntry.user_id == User.id).where(
-        OjRosterEntry.exam_id == e.id, User.netid.in_(wanted)))).all()) if wanted else {}
+        OjRosterEntry.exam_id == e.id, OjRosterEntry.revoked_at.is_(None), User.netid.in_(wanted)))).all()) if wanted else {}
     unknown = sorted(wanted - set(rows))
     if unknown:
         raise HTTPException(400, f"Not on this exam's list in FairPlay yet: {', '.join(unknown[:10])}")
@@ -924,7 +924,7 @@ async def exam_report(key: str, netid: str, call: BridgeCall = Depends(signed_ca
     if u is None:
         raise HTTPException(404, "No FairPlay account for this NetID")
     on_roster = (await session.execute(select(OjRosterEntry.id).where(
-        OjRosterEntry.exam_id == e.id, OjRosterEntry.user_id == u.id).limit(1))).first() is not None
+        OjRosterEntry.exam_id == e.id, OjRosterEntry.user_id == u.id, OjRosterEntry.revoked_at.is_(None)).limit(1))).first() is not None
     if a is None and not on_roster:
         raise HTTPException(404, "This student is not on this exam's list")
     events = []

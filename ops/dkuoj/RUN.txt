@@ -1,0 +1,18 @@
+Run from the owner's Mac after the local regression/build checks have passed:
+
+scp -i ~/.ssh/fairplay_dkuoj_ed25519 -r ~/fairplay-review/professor-launch-bundle ax19@10.200.31.64:~/
+ssh -t -i ~/.ssh/fairplay_dkuoj_ed25519 ax19@10.200.31.64 'cd ~/professor-launch-bundle && sudo bash apply-professor.sh --check && sudo bash apply-professor.sh --apply REPLACE_WITH_AGREED_UUID'
+
+The default --check (also --dry-run) reads/checks only. --apply asks you to confirm no student is taking an exam before building or restarting anything.
+The patch baseline is the current deployed image dkuoj-local:fairplayui-20261101-113155. If that image/source changed, the script stops instead of guessing.
+The script builds a new image, runs launch/history/SEB tests against a separate MariaDB container, and switches only web/celery after those tests pass. It retains all old images, source trees, stopped test containers, and backups; it deletes/prunes nothing.
+FAIRPLAY_URL remains https://dku.speakupai.uz. No bridge token, production public OJ domain, database schema, FairPlay server code or native app code is included or changed.
+The script prints a rollback command and automatically restores the old image if post-switch checks fail.
+The existing dead revision-2 hand-in also needs the separate FairPlay server fix and an authorized resend; this OJ patch alone cannot resend it.
+Website auto-launch requires the forthcoming Mac/Windows app build. Released v0.7.8 has manual-open/access-code instructions on the new page.
+
+Lifecycle patch 0029 applies after the verified launch/history patch 0028. Before --apply, record ONE agreed stable installation UUID for the existing data and stage the owner-side configuration without activating it; pass exactly that UUID as the second argument. Do not generate a new UUID on each run, change an existing source identity or point an existing namespace at another OJ server. The script requires typing the same UUID to confirm this mapping and refuses a conflicting existing UUID.
+The professor-side local setting FAIRPLAY_INSTALLATION_ID is provisioned once after tests pass; its backup is retained, and the UUID stays recorded even if an image rollback occurs. The existing shared token and beta domain are unchanged.
+Instructors must explicitly confirm the intended FairPlay audience in the assignment editor. Legacy unconfirmed scopes stay blocked; removing the last class does not widen access to its organization. Reserved audience tags are hidden configuration, not student/session storage.
+
+Coordinated order: (1) stage the new owner-side service/config without activating strict identity enforcement; (2) run this professor-side script manually with the agreed UUID while no student is taking an exam; (3) verify the signed professor metadata, explicitly bind the existing owner namespace to that same source UUID, then switch the owner service; (4) smoke-test sync, roster, hand-ins and reopen history. Do not activate strict owner binding before the professor metadata exists. The script prints the non-secret UUID/source endpoint for the owner-side step.

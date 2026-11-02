@@ -52,7 +52,7 @@ async def _roster(session: AsyncSession, exam: Exam) -> list[tuple[User, str, st
     for u, first, last in (await session.execute(
             select(User, OjRosterEntry.first_name, OjRosterEntry.last_name).join(
                 OjRosterEntry, OjRosterEntry.user_id == User.id)
-            .where(OjRosterEntry.exam_id == exam.id).order_by(User.id))).all():
+            .where(OjRosterEntry.exam_id == exam.id, OjRosterEntry.revoked_at.is_(None)).order_by(User.id))).all():
         if not first and not last:
             first, last = split_name(u.name)
         out.append((u, first or "", last or ""))
@@ -152,12 +152,13 @@ async def states(session: AsyncSession, exam_id: str) -> dict[str, str]:
             ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None)))).all()}
 
 
-async def revoke_missing(session: AsyncSession, exam_id: str, netids: set[str]) -> int:
+async def revoke_missing(session: AsyncSession, exam_id: str, netids: set[str], preserve_running: bool = False) -> int:
     """Revoke the codes of students who are no longer on the exam's list (no commit)."""
     q = update(ExamAccessCode).where(ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None))
-    running = select(User.netid).join(Attempt, Attempt.student_id == User.id).where(
-        Attempt.exam_id == exam_id, Attempt.status == "in_progress", User.netid.is_not(None))
-    q = q.where(ExamAccessCode.netid.not_in(running))
+    if preserve_running:
+        running = select(User.netid).join(Attempt, Attempt.student_id == User.id).where(
+            Attempt.exam_id == exam_id, Attempt.status == "in_progress", User.netid.is_not(None))
+        q = q.where(ExamAccessCode.netid.not_in(running))
     if netids:
         q = q.where(ExamAccessCode.netid.not_in(netids))
     return (await session.execute(q.values(revoked_at=utcnow()))).rowcount or 0

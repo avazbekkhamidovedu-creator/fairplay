@@ -86,12 +86,12 @@ class DkuojSource(ExternalSource):
 
     # ------------------------------------------------------------ student side
     def roster_user_ids(self, exam_id: str):
-        return select(OjRosterEntry.user_id).where(OjRosterEntry.exam_id == exam_id)
+        return select(OjRosterEntry.user_id).where(OjRosterEntry.exam_id == exam_id, OjRosterEntry.revoked_at.is_(None))
 
     async def max_extra_time(self, session: AsyncSession, exam_id: str) -> timedelta:
         extra = {uid: int(x or 0) for uid, x in (await session.execute(
             select(OjRosterEntry.user_id, OjRosterEntry.extra_time_seconds)
-            .where(OjRosterEntry.exam_id == exam_id))).all()}
+            .where(OjRosterEntry.exam_id == exam_id, OjRosterEntry.revoked_at.is_(None)))).all()}
         grants = {uid: int(x or 0) for uid, x in (await session.execute(
             select(OjStudentGrant.user_id, OjStudentGrant.extra_seconds)
             .where(OjStudentGrant.exam_id == exam_id))).all()}
@@ -99,11 +99,21 @@ class DkuojSource(ExternalSource):
         return timedelta(seconds=max(0, top))
 
     def roster_condition(self, user_id: int):
-        return or_(exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id),
-                   exists().where(Attempt.exam_id == Exam.id, Attempt.student_id == user_id,
-                                  Attempt.status == "in_progress").correlate(Exam))
+        from sqlalchemy import and_
+        return and_(exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id,
+                                   OjRosterEntry.revoked_at.is_(None)).correlate(Exam),
+                    or_(Exam.external_removed.is_(False), exists().where(
+                        Attempt.exam_id == Exam.id, Attempt.student_id == user_id,
+                        Attempt.status == "in_progress").correlate(Exam)))
+
+    async def current_student(self, session, exam_id, user_id):
+        return (await session.execute(select(OjRosterEntry.id).where(
+            OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id,
+            OjRosterEntry.revoked_at.is_(None)).limit(1))).first() is not None
 
     async def can_take(self, session: AsyncSession, exam_id: str, user_id: int) -> bool:
+        if not await self.current_student(session, exam_id, user_id):
+            return False
         if await self.resuming(session, exam_id, user_id):
             return True
         e = await session.get(Exam, exam_id)
@@ -111,11 +121,10 @@ class DkuojSource(ExternalSource):
         if e is None or e.external_removed or not audience_valid(e.external_meta):
             return False
         await require_binding(session, self.config)
-        return (await session.execute(select(OjRosterEntry.id).where(
-            OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id).limit(1))).first() is not None
+        return True
 
     async def resuming(self, session, exam_id, user_id):
-        return user_id is not None and (await session.execute(select(Attempt.id).where(
+        return user_id is not None and await self.current_student(session, exam_id, user_id) and (await session.execute(select(Attempt.id).where(
             Attempt.exam_id == exam_id, Attempt.student_id == user_id, Attempt.status == "in_progress")
             .limit(1))).first() is not None
 
@@ -149,7 +158,8 @@ class DkuojSource(ExternalSource):
         await session.execute(update(Exam).where(Exam.id == exam_id, Exam.external_frozen_version.is_(None))
                               .values(external_frozen_version=Exam.external_version))
         extra = (await session.execute(select(OjRosterEntry.extra_time_seconds).where(
-            OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id))).scalar()
+            OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id,
+            OjRosterEntry.revoked_at.is_(None)))).scalar()
         granted = (await session.execute(select(OjStudentGrant.extra_seconds).where(
             OjStudentGrant.exam_id == exam_id, OjStudentGrant.user_id == user_id))).scalar()
         return timedelta(seconds=max(0, int(extra or 0)) + max(0, int(granted or 0)))
