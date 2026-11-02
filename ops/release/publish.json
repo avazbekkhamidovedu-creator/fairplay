@@ -1,0 +1,8 @@
+{
+  "tag": "v0.7.9",
+  "source_sha": "3b1052f82830362dec2b8443e789cd415954984c",
+  "native_main_sha": "0aa492beef37c3373f8b4e04a8f0112723eb6f68",
+  "native_windows_sha": "ee11fa7407532ad93560f56b778e8753486d0915",
+  "asset_audit_run": 41494795990,
+  "gate": "verified-source-security-lifecycle-schema-and-platform-builds"
+}
