@@ -51,8 +51,9 @@ for node in ast.parse(path.read_text()).body:
         assert current in ('', identity), 'Existing installation UUID differs; refusing identity rotation.'
 print('Operator installation UUID validated; no identity generated or changed.')
 IDENTITY_CHECK
-read -r -p 'Confirm this UUID is approved for the EXISTING installation/data and belongs to this OJ source only. Type the same UUID: ' CONFIRMED_ID
-[ "$CONFIRMED_ID" = "$IDENTITY" ] || { echo 'Identity confirmation did not match; nothing changed.'; exit 1; }
+printf 'Existing source: dku-vcm-4158; installation UUID: %s\n' "$IDENTITY"
+read -r -p 'Approve this exact existing-installation mapping. Type APPLY: ' CONFIRMED_ID
+[ "$CONFIRMED_ID" = APPLY ] || { echo 'Identity mapping was not approved; nothing changed.'; exit 1; }
 docker exec dkuoj-web-1 python manage.py shell -c 'from django.utils import timezone; from judge.models import Contest; n=timezone.now(); print("Scheduled live contests:", Contest.objects.filter(start_time__lte=n,end_time__gte=n).count())'
 read -r -p 'Only when NO student is taking an exam, type APPLY to build/test/restart DKU OJ: ' ANSWER
 [ "$ANSWER" = APPLY ] || { echo 'Cancelled; nothing changed.'; exit 0; }
