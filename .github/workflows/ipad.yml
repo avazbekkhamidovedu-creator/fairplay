@@ -137,7 +137,7 @@ jobs:
   # build is a watched test build signed without it.
   testflight:
     needs: test
-    if: vars.IPAD_TESTFLIGHT == 'true' && github.event_name != 'pull_request'
+    if: vars.IPAD_TESTFLIGHT == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}

@@ -20,6 +20,14 @@ def sources() -> list[ExternalSource]:
     return list(_load().values())
 
 
+def teacher_exam_condition(user_id: int):
+    from sqlalchemy import and_, or_
+    from ..models import Exam
+    external = [and_(Exam.source == source.id, Exam.id.in_(ids)) for source in sources()
+                if (ids := source.teacher_exam_ids(user_id)) is not None]
+    return or_(and_(Exam.source == FAIRPLAY, Exam.teacher_id == user_id), *external)
+
+
 def get(source_id: str | None) -> ExternalSource | None:
     return _load().get(source_id or "")
 

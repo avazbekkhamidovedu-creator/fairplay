@@ -141,6 +141,16 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>FairPlay</string>
   <key>CFBundleExecutable</key><string>$APP</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>FairPlay exam</string>
+    <key>CFBundleURLSchemes</key><array><string>fairplay</string></array>
+  </dict></array>
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>FairPlay exam launch</string>
+    <key>CFBundleTypeExtensions</key><array><string>fairplay</string></array>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>Owner</string>
+  </dict></array>
   <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>

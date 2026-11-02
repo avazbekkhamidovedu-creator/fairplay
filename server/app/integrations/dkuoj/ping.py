@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+from typing import Annotated
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
@@ -32,6 +33,11 @@ class PingIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     exam_key: str | None = Field(default=None, min_length=1, max_length=200)
     class_id: StrictInt | None = Field(default=None, gt=0)
+    installation_id: str | None = None
+    event: str = Field(default="changed", pattern="^(changed|removed|audience_revoked)$")
+    exam_keys: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=2000)
+    class_ids: list[Annotated[StrictInt, Field(gt=0)]] = Field(default_factory=list, max_length=2000)
+    organization_ids: list[Annotated[StrictInt, Field(gt=0)]] = Field(default_factory=list, max_length=2000)
 
 
 def parse(data: dict) -> PingIn:
@@ -78,27 +84,29 @@ async def _fetch_one(sessionmaker, client: DkuojClient, cfg, key: str) -> None:
         page = int(nxt) if isinstance(nxt, (int, str)) and str(nxt).isdigit() else page + 1
 
 
-async def work(scope: str) -> None:
+async def work(scope: str, targets: set[str] | None = None) -> None:
     from ...db import get_database
     from .source import SOURCE
     from .sync import fetch_packages, open_due, sync_exams
     sm = get_database().sessionmaker
     cfg = SOURCE.config
     async with DkuojClient.from_config(cfg) as client:
+        from .isolation import verify_installation
+        await verify_installation(sm, client, cfg)
         if scope == guard.ALL:
-            await _step("exams", lambda: sync_exams(sm, client, cfg, utcnow()))
+            await sync_exams(sm, client, cfg, utcnow(), full=True, targets=targets)
             await _step("packages", lambda: fetch_packages(sm, client, utcnow()))
         else:
-            await _step("exams", lambda: _fetch_one(sm, client, cfg, scope))
+            await sync_exams(sm, client, cfg, utcnow(), guard=False, full=True, targets={scope})
             await _step("packages", lambda: fetch_packages(sm, client, utcnow(), only=scope, guard=False))
     await _step("open", lambda: open_due(sm, utcnow()))
 
 
-async def _run(scope: str, token: str) -> None:
+async def _run(scope: str, token: str, targets: set[str] | None = None) -> None:
     try:
         for _ in range(MAX_FOLLOW_UPS + 1):
             try:
-                await work(scope)
+                await work(scope, targets)
             except Exception:  # noqa: BLE001
                 log.exception("DKU OJ ping")
             if not await _again(scope):
@@ -112,14 +120,14 @@ async def _again(scope: str) -> bool:
     return await get_store().getdel(guard._again_key(scope)) is not None
 
 
-async def start(scope: str) -> bool:
+async def start(scope: str, targets: set[str] | None = None) -> bool:
     """Run a sync for `scope` (an exam key, or guard.ALL) in the background. False = started;
     True = the exam is busy and a follow-up run was marked."""
     token = secrets.token_hex(8)
     if not await guard.take(scope, token):
         await guard.mark_again(scope)
         return True
-    task = asyncio.get_running_loop().create_task(_run(scope, token))
+    task = asyncio.get_running_loop().create_task(_run(scope, token, targets))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return False

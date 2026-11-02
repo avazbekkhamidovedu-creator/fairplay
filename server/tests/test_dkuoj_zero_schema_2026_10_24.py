@@ -48,8 +48,10 @@ def fake(monkeypatch):
     f = ZeroOJ()
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
+    monkeypatch.setenv("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
-    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.signed_handle))
 
     async def no_sleep(_s):
         return None

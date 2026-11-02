@@ -13,6 +13,7 @@ from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
+from .integrations.registry import teacher_exam_condition
 from .grading import exam_questions, grade_attempt, num, percent
 from .models import Attempt, ClassMember, CourseMember, Exam, SchoolClass, User
 from .security import Principal, require_teacher
@@ -28,7 +29,7 @@ async def grading_overview(p: Principal = Depends(require_teacher),
         select(Exam.id, Exam.title, Exam.course, Exam.status, Exam.grades_released, Exam.class_id,
                func.count(Attempt.id), func.coalesce(func.sum(Attempt.needs_grading), 0))
         .join(Attempt, Attempt.exam_id == Exam.id)
-        .where(Exam.teacher_id == p.user_id, Attempt.status == "submitted", Exam.is_trial == false())
+        .where(teacher_exam_condition(p.user_id), Attempt.status == "submitted", Exam.is_trial == false())
         .group_by(Exam.id, Exam.title, Exam.course, Exam.status, Exam.grades_released,
                   Exam.class_id, Exam.created_at)
         .order_by(Exam.created_at.desc(), Exam.id))).all()
@@ -42,7 +43,7 @@ async def _gradebook(session: AsyncSession, p: Principal, course: str | None,
                      class_id: int | None = None) -> dict:
     course = (course or "").strip()
     all_exams = list((await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id, Exam.status != "draft",
+        select(Exam).where(teacher_exam_condition(p.user_id), Exam.status != "draft",
                            Exam.is_trial == false())
         .order_by(Exam.created_at, Exam.id))).scalars())
     courses = sorted({e.course for e in all_exams if e.course})

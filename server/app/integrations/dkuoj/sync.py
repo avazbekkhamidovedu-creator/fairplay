@@ -350,7 +350,7 @@ def _duration_min(item: dict) -> int:
     return 60
 
 
-META_KEYS = ("course", "classes", "start_time", "end_time", "time_limit_seconds", "results_hidden",
+META_KEYS = ("course", "classes", "audience", "start_time", "end_time", "time_limit_seconds", "results_hidden",
              "package_version", "updated_at", "settings")
 KEEP_META = ("results_cursor", "package_retry_at", "package_error", "package_failed_version",
              "description_md", "assets", "extra_close_minutes", "review_updated_at", "websites_blocked",
@@ -390,13 +390,15 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
             e.external_removed = True
             e.external_synced_at = now
             e.updated_at = now
+            await revoke_authority(session, e)
             await session.flush()
         return e
     editors = [u for u in [await ensure_user(session, p, "teacher") for p in item.get("editors") or []
                            if isinstance(p, dict)] if u is not None]
     students = []
+    from .isolation import audience_valid
     roster_names: dict[int, dict] = {}
-    for p in item.get("roster") or []:
+    for p in (item.get("roster") or []) if audience_valid(item) else []:
         if isinstance(p, dict):
             u = await ensure_user(session, p, "student")
             if u is not None:
@@ -462,6 +464,15 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
     return e
 
 
+async def revoke_authority(session, exam):
+    from .access_codes import revoke_missing
+    await _replace(session, OjEditor, exam.id, {})
+    await _replace(session, OjRosterEntry, exam.id, {})
+    await revoke_missing(session, exam.id, set())
+    if exam.class_id is not None:
+        await session.execute(delete(ClassMember).where(ClassMember.class_id == exam.class_id))
+
+
 async def follow_end_time(session: AsyncSession, e: Exam, new_end: datetime) -> list[str]:
     """2026-10-23: DKU OJ moved the end time later while the exam runs. Attempts whose
     deadline was capped at the old end time get the new cap (start + duration + extra,
@@ -498,32 +509,29 @@ async def _replace(session: AsyncSession, model, exam_id: str, wanted: dict[int,
 
 
 async def _classes(session: AsyncSession, e: Exam, item: dict, students: list[User]) -> None:
-    """One FairPlay class per DKU OJ class (by its id), owned by the exam's owner. The
-    roster carries no class per student, so members are added only when the exam has a
-    single class. Who may take the exam is decided by the roster (access.member_of_exam)."""
+    """Internal class labels only: an exam roster never establishes class-wide membership."""
     from ...routes_classes import new_join_code
     first = None
+    owner = await _owner(session)
+    old = await session.get(SchoolClass, e.class_id) if e.class_id is not None else None
+    if old is not None and (old.external_ref or "").startswith("dkuoj:"):
+        old.teacher_id = owner.id
+        await session.execute(delete(ClassMember).where(ClassMember.class_id == old.id))
     classes = [c for c in item.get("classes") or [] if isinstance(c, dict) and isinstance(c.get("id"), int)]
     for c in classes:
         k = (await session.execute(select(SchoolClass).where(SchoolClass.external_ref == f"dkuoj:{c['id']}"))).scalars().first()
         if k is None:
-            k = SchoolClass(teacher_id=e.teacher_id, name=str(c.get("name") or f"DKU OJ class {c['id']}")[:120],
+            k = SchoolClass(teacher_id=owner.id, name=str(c.get("name") or f"DKU OJ class {c['id']}")[:120],
                             join_code=new_join_code(), external_ref=f"dkuoj:{c['id']}", created_at=utcnow(),
                             term="DKU OJ")
             session.add(k)
             await session.flush()
         elif c.get("name") and k.name != str(c["name"])[:120]:
             k.name = str(c["name"])[:120]
+        k.teacher_id = owner.id
+        await session.execute(delete(ClassMember).where(ClassMember.class_id == k.id))
         first = first or k
-    if first is None:
-        return
-    e.class_id = first.id
-    if len(classes) == 1 and students:
-        have = set((await session.execute(select(ClassMember.user_id).where(
-            ClassMember.class_id == first.id))).scalars())
-        for u in students:
-            if u.id not in have:
-                session.add(ClassMember(class_id=first.id, user_id=u.id))
+    e.class_id = first.id if first else None
     await session.flush()
 
 
@@ -549,6 +557,7 @@ async def mark_removed(sessionmaker, active: set[str], since: datetime | None) -
                 continue
             e.external_removed = True
             e.updated_at = utcnow()
+            await revoke_authority(session, e)
             changed.append(e.id)
         await session.commit()
     for exam_id in changed:
@@ -573,23 +582,38 @@ async def apply_item(sessionmaker, item: dict, cfg, now: datetime) -> bool:
         return True
 
 
-async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime, guard: bool = True) -> int:
+async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime, guard: bool = True,
+                     full: bool = False, targets: set[str] | None = None) -> int:
     """Page through changed exams since the stored cursor. Returns how many were applied."""
+    from .isolation import verify_installation
+    await verify_installation(sessionmaker, client, cfg)
     async with sessionmaker() as session:
         cursor = await get_state(session, CURSOR)
+    if full:
+        cursor = None
     newest = cursor
     n = 0
     page = 1
     active: set[str] | None = None
     active_since = None
     complete = False
+    seen = set()
     for _ in range(MAX_PAGES):
         data = await client.list_exams(cursor, page)
         if page == 1 and isinstance(data.get("active_keys"), list):
+            if any(not isinstance(k, str) or not k for k in data["active_keys"]):
+                raise OjError("DKU OJ active exam keys are invalid", 422)
             active = {k for k in data["active_keys"] if isinstance(k, str)}
             active_since = _time(data.get("active_since"))
-        for item in data.get("exams") or []:
+        if not isinstance(data.get("exams"), list):
+            raise OjError("DKU OJ exam listing has no authoritative exam list", 422)
+        for item in data["exams"]:
             if not isinstance(item, dict):
+                raise OjError("DKU OJ exam listing contains an invalid entry", 422)
+            if not isinstance(item.get('key'), str) or not item['key']:
+                raise OjError("DKU OJ exam listing contains an invalid key", 422)
+            seen.add(item['key'])
+            if targets and item['key'] not in targets:
                 continue
             if guard and isinstance(item.get("key"), str) and item["key"]:
                 async with exam_guard(item["key"]):
@@ -604,9 +628,12 @@ async def sync_exams(sessionmaker, client: DkuojClient, cfg, now: datetime, guar
             complete = True
             break
         page = int(nxt) if isinstance(nxt, (int, str)) and str(nxt).isdigit() else page + 1
-    if complete and active is not None:
+    if complete and active is not None and not targets:
         await mark_removed(sessionmaker, active, active_since)
-    if newest != cursor:
+    if complete and full and targets:
+        for key in targets - seen:
+            await apply_item(sessionmaker, {"key": key, "removed": True}, cfg, now)
+    if newest != cursor and not targets:
         async with sessionmaker() as session:
             await set_state(session, CURSOR, newest)
     return n
@@ -681,11 +708,16 @@ async def _fetch_package(sessionmaker, client: DkuojClient, exam_id: str, key: s
             await session.commit()
         return False
     assert pkg is not None
+    from .isolation import audience_valid
+    if not audience_valid(pkg):
+        raise AdapterError("the package audience is not explicitly confirmed")
     version = str(pkg.get("package_version") or "")[:32]
     if not version:
         raise AdapterError("the package has no package_version")
     async with sessionmaker() as session:
         e = await session.get(Exam, exam_id)
+        if e is None or pkg['audience'] != (e.external_meta or {}).get('audience'):
+            raise AdapterError("the package audience differs from the verified exam listing")
         topic = ((e.course or "").strip().lower()[:60] if e else "") or "general"
     questions = questions_from_package(pkg, topic)
     assets = asset_names(pkg)
@@ -797,6 +829,11 @@ async def run_once(sessionmaker, cfg=None, now: datetime | None = None, deliver:
         cfg = SOURCE.config
     client = client or DkuojClient.from_config(cfg)
     try:
+        from .isolation import verify_installation
+        try:
+            await verify_installation(sessionmaker, client, cfg)
+        except OjError as error:
+            return {"installation": {"error": error.message}}
         for name, step in (("exams", lambda: sync_exams(sessionmaker, client, cfg, now)),
                            ("packages", lambda: fetch_packages(sessionmaker, client, now)),
                            ("open", lambda: open_due(sessionmaker, now)),
@@ -841,6 +878,9 @@ async def run_forever() -> None:
                         last_full = loop.time()
                         await run_once(db.sessionmaker, SOURCE.config)
                     else:
+                        from .isolation import verify_installation
+                        async with DkuojClient.from_config(SOURCE.config) as verifier:
+                            await verify_installation(db.sessionmaker, verifier, SOURCE.config)
                         await open_due(db.sessionmaker, utcnow())
                         async with DkuojClient.from_config(SOURCE.config) as client:
                             await deliver_due(db.sessionmaker, client, SOURCE.config)

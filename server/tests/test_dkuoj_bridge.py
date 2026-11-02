@@ -24,6 +24,12 @@ from .conftest import SAMPLE_EXAM, login
 OJ = "https://oj.test"
 TOKEN = "fairplay-shared-token-0123456789abcdef"
 KEY = "cs101a-midterm"
+INSTALLATION_ID = "626c995f-840b-4ddc-9774-df8b5cf10df8"
+
+
+def audience():
+    return {"mode": "classes", "confirmed": True, "class_ids": [31], "organization_ids": [],
+            "selected_only": False}
 
 
 def fp_signed(req: httpx.Request, token: str = TOKEN) -> bool:
@@ -53,6 +59,7 @@ PNG = png_bytes()
 
 def package(version="7f3a9c1e"):
     return {
+        "audience": audience(),
         "key": KEY, "package_version": version, "total_points": 100, "description_md": "Closed book.",
         "questions": [
             {"id": "p000123", "order": 1, "label": "Q1", "title": "Hash maps", "type": "choice", "points": 10,
@@ -106,6 +113,8 @@ class FakeOJ:
         self.results: list[dict] = []
         self.asset_bytes = {"cell.png": PNG}
         self.removed = False
+        self.installation_id = INSTALLATION_ID
+        self.audience = audience()
         self.review, self.review_updated_at = "answers_and_results", None   # 2026-10-24
         self.roster = [
             {"username": "alice", "first_name": "Alice", "last_name": "Chen", "email": "a@x.edu", "extra_time_seconds": 600},
@@ -118,6 +127,7 @@ class FakeOJ:
 
     def listing(self):
         return {"key": KEY, "name": "CS 101 Midterm", "course": {"id": 12, "name": "CS 101"},
+                "audience": self.audience,
                 "classes": [{"id": 31, "name": "CS 101 Section A"}],
                 "start_time": iso(self.start), "end_time": iso(self.end), "time_limit_seconds": 5400,
                 "results_hidden": True, "package_version": self.package["package_version"],
@@ -126,6 +136,22 @@ class FakeOJ:
                              "strong_lock": True, "resume_needs_approval": True, "review": self.review,
                              "review_updated_at": self.review_updated_at},
                 "editors": self.editors, "roster": self.roster, "updated_at": self.listing_updated}
+
+    def signed_handle(self, req):
+        from app.integrations.dkuoj import signing
+        if not fp_signed(req):
+            return httpx.Response(401, json={"detail": "bad token"})
+        if (parse_qs(urlsplit(str(req.url)).query).get("installation_id") or []) != [self.installation_id]:
+            response = httpx.Response(409, json={"detail": "wrong installation"})
+        elif req.url.path == "/api/fairplay/v1/installation":
+            response = httpx.Response(200, json={"protocol": 1, "installation_id": self.installation_id,
+                                                "request_nonce": req.headers[signing.H_NONCE]})
+        else:
+            response = self.handle(req)
+        response.headers.update(signing.sign_headers(TOKEN, signing.OJ_TO_FP,
+            f"RESPONSE {req.method} {response.status_code}", req.url.raw_path.decode(), response.content,
+            acting_user=req.headers[signing.H_NONCE]))
+        return response
 
     def handle(self, req: httpx.Request) -> httpx.Response:
         u = urlsplit(str(req.url))
@@ -182,9 +208,11 @@ def fake(monkeypatch):
     f = FakeOJ()
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
+    monkeypatch.setenv("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
-    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.signed_handle))
 
     async def no_sleep(_s):
         return None
@@ -666,22 +694,21 @@ def test_removed_exam_cannot_start(oj, fake):
     fake.removed = True
     fake.listing_updated = iso(utcnow() + timedelta(seconds=1))
     run(oj)
-    assert oj_exam(oj, teacher)["external"]["removed"] is True
+    assert oj.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
     from app.services import invalidate_exam
     from app.store import get_store
     oj.portal.call(invalidate_exam, get_store(), e["id"])
     r = start(oj, alice, e["id"], e["start_code"])
-    assert r.status_code == 409 and "switched off" in r.json()["detail"]
-    # once DKU OJ removed it, the teacher may delete it (roster, editors, assets go with it)
-    oj.post(f"/api/exams/{e['id']}/close", headers=teacher)
-    assert oj.delete(f"/api/exams/{e['id']}", headers=teacher).status_code == 204
+    assert r.status_code in (403, 409)
+    assert oj.post(f"/api/exams/{e['id']}/close", headers=teacher).status_code == 404
+    assert oj.delete(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
 
     async def left(s):
         from sqlalchemy import func, select
         from app.integrations.dkuoj.models import OjAsset, OjEditor, OjRosterEntry
         return [(await s.execute(select(func.count()).select_from(m))).scalar_one()
                 for m in (OjAsset, OjEditor, OjRosterEntry)]
-    assert db(oj, left) == [0, 0, 0]
+    assert db(oj, left) == [1, 0, 0]
 
 
 def test_sealed_submit_writes_outbox_with_sealed_evidence(oj, fake):
@@ -721,6 +748,7 @@ def real_listing(now, removed=False):
                 "start_time": iso(now - timedelta(hours=1)), "end_time": iso(now + timedelta(hours=2)),
                 "updated_at": iso(now + timedelta(seconds=5))}
     return {"key": "fpexam", "name": "CS 101 Midterm", "course": None,
+            "audience": {**audience(), "class_ids": [7]},
             "classes": [{"id": 7, "name": "FP Section A"}],
             "start_time": iso(now - timedelta(hours=1)), "end_time": iso(now + timedelta(hours=2)),
             "time_limit_seconds": 5400, "results_hidden": True, "package_version": "0f1e2d3c4b5a6978",
@@ -738,6 +766,7 @@ def real_listing(now, removed=False):
 
 
 REAL_PACKAGE = {
+    "audience": {**audience(), "class_ids": [7]},
     "key": "fpexam", "package_version": "0f1e2d3c4b5a6978", "total_points": 66, "description_md": "",
     "questions": [
         {"id": "p000002", "order": 1, "label": "1", "title": "Hash maps", "type": "choice", "points": 10,
@@ -762,11 +791,12 @@ REAL_PACKAGE = {
     "assets": []}
 
 
-class RealShapeOJ:
+class RealShapeOJ(FakeOJ):
     """Answers like DKU OJ's views (status codes and bodies), checks requests like them."""
 
     def __init__(self):
         self.now = utcnow()
+        self.installation_id = INSTALLATION_ID
         self.removed = False
         self.calls, self.bodies = [], []
         self.uploads = {}
@@ -827,8 +857,10 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
+    monkeypatch.setenv("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
-    ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.handle))
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.signed_handle))
 
     async def no_sleep(_s):
         return None
@@ -888,7 +920,7 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
             # removed: only in the incremental poll; editors keep the exam
             real.removed = True
             run(c)
-            assert oj_exam(c, teacher)["external"]["removed"] is True
+            assert c.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
 
     finally:
         ojclient.set_transport_factory(None)
@@ -901,8 +933,10 @@ def test_dkuoj_refusals_are_dead_not_retried(tmp_path, static_dir, monkeypatch):
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
+    monkeypatch.setenv("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
-    ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.handle))
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(real.signed_handle))
     try:
         with TestClient(create_app(oj_settings(tmp_path, static_dir))) as c:
             teacher = login(c, "teacher")

@@ -22,6 +22,29 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>CFBundleURLTypes</key>
+	<array><dict>
+		<key>CFBundleURLName</key><string>FairPlay exam</string>
+		<key>CFBundleURLSchemes</key><array><string>fairplay</string></array>
+	</dict></array>
+	<key>CFBundleDocumentTypes</key>
+	<array><dict>
+		<key>CFBundleTypeName</key><string>FairPlay exam launch</string>
+		<key>CFBundleTypeRole</key><string>Viewer</string>
+		<key>LSHandlerRank</key><string>Owner</string>
+		<key>LSItemContentTypes</key><array><string>ai.proctora.fairplay-launch</string></array>
+	</dict></array>
+	<key>UTExportedTypeDeclarations</key>
+	<array><dict>
+		<key>UTTypeIdentifier</key><string>ai.proctora.fairplay-launch</string>
+		<key>UTTypeDescription</key><string>FairPlay exam launch</string>
+		<key>UTTypeConformsTo</key><array><string>public.json</string></array>
+		<key>UTTypeTagSpecification</key><dict>
+			<key>public.filename-extension</key><array><string>fairplay</string></array>
+			<key>public.mime-type</key><string>application/x-fairplay-launch</string>
+		</dict>
+	</dict></array>
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>cydia</string>

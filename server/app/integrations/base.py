@@ -113,7 +113,7 @@ class ExternalSource:
     def take_refused_message(self) -> str:
         return f"You are not on this exam's list in {self.name}. Ask your teacher."
 
-    async def check_start(self, session: AsyncSession, exam_id: str) -> None:
+    async def check_start(self, session: AsyncSession, exam_id: str, user_id: int | None = None) -> None:
         """Raise HTTPException when the exam cannot start now."""
         from fastapi import HTTPException
         if not self.enabled:

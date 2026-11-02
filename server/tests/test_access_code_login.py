@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 
 from app import app_client as ac
 from app.integrations.dkuoj import access_codes
-from app.integrations.dkuoj.models import ClassLoginEvent, ExamAccessCode
+from app.integrations.dkuoj.models import ClassLoginEvent, ExamAccessCode, OjRosterEntry
 from app.main import create_app
 from app.models import Attempt, Exam, IntegrityEvent, User
 from app.integrations.dkuoj.setup import make_kind_token
@@ -183,9 +183,11 @@ def test_code_of_another_exam_is_refused(oj, ready):
     async def second(s):
         e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
         other = Exam(id="e_other", teacher_id=e.teacher_id, title="Other", duration_min=10, status="live",
-                     questions=[], question_count=0, total_points=0, source=e.source)
+                     questions=[], question_count=0, total_points=0, source=e.source, external_meta=e.external_meta)
         s.add(other)
         await s.flush()
+        uid = (await s.execute(select(User.id).where(User.netid == "alice"))).scalar_one()
+        s.add(OjRosterEntry(exam_id="e_other", user_id=uid))
         s.add(ExamAccessCode(exam_id="e_other", netid="alice", first_name="A", last_name="C",
                              code_hmac=access_codes.code_hmac(secret(oj), "ZZZZZZ"), code_sealed="x",
                              created_at=utcnow()))

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
@@ -30,7 +30,8 @@ async def list_deliveries(status: str = Query(pattern="^(dead|pending)$"), p: Pr
     rows = (await session.execute(
         select(ExternalDelivery).join(Exam, Exam.id == ExternalDelivery.exam_id)
         .where(ExternalDelivery.status.in_(states), Exam.is_trial.is_(False),
-               or_(Exam.teacher_id == p.user_id, Exam.id.in_(SOURCE.teacher_exam_ids(p.user_id))))
+               or_(and_(Exam.source == "fairplay", Exam.teacher_id == p.user_id),
+                   Exam.id.in_(SOURCE.teacher_exam_ids(p.user_id))))
         .order_by(ExternalDelivery.id).limit(LIST_MAX))).scalars().all()
     return {"deliveries": [_row(d) for d in rows]}
 

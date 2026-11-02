@@ -89,6 +89,7 @@ final class LockdownController {
     var lockInFlight: Bool { locking }
     /// ... and it is a pre-exam lock with no exam (an exam's lock asked meanwhile makes it the exam's).
     var preLockInFlight: Bool { locking && wantPreLock }
+    var launchAssessmentBusy: Bool { !assessment.isIdle }
 
     // MARK: - Lock / unlock
 

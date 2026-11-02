@@ -62,9 +62,11 @@ def fake(monkeypatch):
     f = RosterOJ()
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
+    monkeypatch.setenv("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
-    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.signed_handle))
 
     async def no_sleep(_s):
         return None
@@ -84,6 +86,7 @@ def call(c, method, path, body=None, acting="teacher", token=TOKEN, direction=si
          now=None, nonce=None, raw=None, headers=None):
     """A signed DKU OJ -> FairPlay request."""
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else b"")
+    path += ("&" if "?" in path else "?") + "installation_id=626c995f-840b-4ddc-9774-df8b5cf10df8"
     h = signing.sign_headers(token, direction, method, path, data, acting, now=now, nonce=nonce)
     h["Content-Type"] = "application/json"
     h.update(headers or {})
@@ -157,7 +160,7 @@ def test_signing_vectors():
 
 def test_client_signs_every_call_fp_to_oj(oj, fake):
     seen = []
-    real = fake.handle
+    real = fake.signed_handle
 
     def spy(req):
         seen.append(req)

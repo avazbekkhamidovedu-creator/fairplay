@@ -37,6 +37,9 @@ class RevisionOJ(RosterOJ):
     def handle(self, req):
         if urlsplit(str(req.url)).path == f"/api/fairplay/v1/exams/{KEY}/submissions":
             body = json.loads(req.content)
+            supersedes = body.get("supersedes")
+            if supersedes is not None and (not isinstance(supersedes, str) or len(supersedes) > 128):
+                return httpx.Response(422, json={"detail": "supersedes must be a string of at most 128 characters."})
             fails = self.submit_fail.get(body["username"]) or []
             if fails:
                 return httpx.Response(fails.pop(0), json={"detail": "busy"})
@@ -52,9 +55,11 @@ def fake(monkeypatch):
     f = RevisionOJ()
     monkeypatch.setenv("DKUOJ_URL", OJ)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
+    monkeypatch.setenv("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
-    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.handle))
+    ojclient.set_transport_factory(lambda base: httpx.MockTransport(f.signed_handle))
 
     async def no_sleep(_s):
         return None
@@ -400,7 +405,7 @@ def test_reopen_gives_a_second_hand_in_and_both_are_delivered(oj, room, fake):
     one, two = fake.bodies
     assert one["answers"] != two["answers"] and one["attempt_id"] == two["attempt_id"] == aid
     assert "revision" not in one and "supersedes" not in one
-    assert two["revision"] == 2 and two["supersedes"] == 1
+    assert two["revision"] == 2 and two["supersedes"] == aid
     assert "first answer" in str(one["answers"]) and "second answer" in str(two["answers"])
     assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 10, "reason": "again"}).status_code == 409
 
@@ -423,6 +428,43 @@ def test_a_hand_in_not_sent_yet_keeps_its_own_answers_and_waits_for_the_earlier_
     assert [x.get("revision", 1) for x in fake.bodies] == [1, 2]
     assert "first answer" in str(fake.bodies[0]["answers"]) and "second answer" not in str(fake.bodies[0]["answers"])
     assert "second answer" in str(fake.bodies[1]["answers"])
+
+
+def test_resend_repairs_a_cached_revision_without_rebuilding_its_answers(oj, room, fake):
+    eid, codes, _, teacher = room
+    _, a, _ = hand_in(oj, eid, codes, "carol", DEV_A, "first answer")
+    run(oj)
+    assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 5, "reason": "r"}).status_code == 200
+    body = sign_in(oj, codes["carol"], DEV_B)
+    b = started(oj, body, eid, DEV_B)
+    put(oj, body, b, {qid_of(b): "second answer"}, 10)
+    submit(oj, body, b, {qid_of(b): "second answer"}, 11)
+    fake.submit_fail["carol"] = [503]
+    run(oj)
+
+    async def legacy_payload(s):
+        d = (await s.execute(select(ExternalDelivery).where(
+            ExternalDelivery.attempt_id == a["attempt_id"], ExternalDelivery.revision == 2))).scalar_one()
+        d.payload = {**d.payload, "supersedes": 1}
+        d.status, d.last_status = "dead", 422
+        d.uploads = {"cached-file": "existing-upload"}
+        attempt = await s.get(Attempt, a["attempt_id"])
+        attempt.answers = {qid_of(b): "not the handed-in answer"}
+        await s.commit()
+        return d.id, json.loads(json.dumps(d.payload))
+
+    did, cached = db(oj, legacy_payload)
+    r = oj.post(f"/api/deliveries/{did}/resend", headers=teacher)
+    assert r.status_code == 200, r.text
+    run(oj)
+    assert [r[:2] for r in revisions(oj)] == [(1, "sent"), (2, "sent")]
+    expected = {**cached, "supersedes": a["attempt_id"]}
+    assert fake.bodies[-1] == expected
+
+    async def stored(s):
+        d = await s.get(ExternalDelivery, did)
+        return d.payload, d.uploads
+    assert db(oj, stored) == (expected, {"cached-file": "existing-upload"})
 
 
 def test_reopen_deadline_is_capped_at_the_close_time(oj, room):

@@ -21,7 +21,7 @@ def second_exam(c, netid="alice", code="ZZZZZZ"):
     async def go(s):
         e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
         s.add(Exam(id="e_other", teacher_id=e.teacher_id, title="Other", duration_min=10, status="live",
-                   questions=[], question_count=0, total_points=0, source=e.source))
+                   questions=[], question_count=0, total_points=0, source=e.source, external_meta=e.external_meta))
         await s.flush()
         uid = (await s.execute(select(User.id).where(User.netid == netid))).scalar_one()
         s.add(OjRosterEntry(exam_id="e_other", user_id=uid))

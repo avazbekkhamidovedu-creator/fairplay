@@ -9,7 +9,7 @@ from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from ...models import Exam
+from ...models import Attempt, Exam
 from ..base import ExternalSource
 from .config import DkuojConfig
 from .models import OjAsset, OjEditor, OjRosterEntry, OjState, OjStudentGrant
@@ -99,30 +99,53 @@ class DkuojSource(ExternalSource):
         return timedelta(seconds=max(0, top))
 
     def roster_condition(self, user_id: int):
-        return exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id)
+        return or_(exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id),
+                   exists().where(Attempt.exam_id == Exam.id, Attempt.student_id == user_id,
+                                  Attempt.status == "in_progress").correlate(Exam))
 
     async def can_take(self, session: AsyncSession, exam_id: str, user_id: int) -> bool:
+        if await self.resuming(session, exam_id, user_id):
+            return True
+        e = await session.get(Exam, exam_id)
+        from .isolation import audience_valid, require_binding
+        if e is None or e.external_removed or not audience_valid(e.external_meta):
+            return False
+        await require_binding(session, self.config)
         return (await session.execute(select(OjRosterEntry.id).where(
             OjRosterEntry.exam_id == exam_id, OjRosterEntry.user_id == user_id).limit(1))).first() is not None
 
-    async def check_start(self, session: AsyncSession, exam_id: str) -> None:
+    async def resuming(self, session, exam_id, user_id):
+        return user_id is not None and (await session.execute(select(Attempt.id).where(
+            Attempt.exam_id == exam_id, Attempt.student_id == user_id, Attempt.status == "in_progress")
+            .limit(1))).first() is not None
+
+    async def check_start(self, session: AsyncSession, exam_id: str, user_id: int | None = None) -> None:
         """Starts only with its questions here, and not after DKU OJ switched FairPlay off
         (unless already running: then it finishes as it started)."""
         row = (await session.execute(select(Exam.external_removed, Exam.external_frozen_version,
-                                            Exam.external_version, Exam.question_count)
+                                            Exam.external_version, Exam.question_count, Exam.external_meta)
                                      .where(Exam.id == exam_id))).first()
         if row is None:
             raise HTTPException(404, "Exam not found")
-        if row.external_removed and not row.external_frozen_version:
+        from .isolation import audience_valid, require_binding
+        resume = await self.resuming(session, exam_id, user_id)
+        if (row.external_removed or not audience_valid(row.external_meta)) and not resume:
             raise HTTPException(409, REMOVED)
-        if not row.external_frozen_version and not self.enabled:
+        if not resume:
+            await require_binding(session, self.config)
+        if not resume and not self.enabled:
             await super().check_start(session, exam_id)
         if not row.external_version or not row.question_count:
+            raise HTTPException(409, NOT_READY)
+        if not row.external_frozen_version and (row.external_meta or {}).get("package_version") != row.external_version:
             raise HTTPException(409, NOT_READY)
 
     async def on_start(self, session: AsyncSession, exam_id: str, user_id: int) -> timedelta:
         """The first start freezes the package version (sync never applies another one
         after that); the student's DKU OJ extra time plus what a professor granted (OjStudentGrant)."""
+        await self.check_start(session, exam_id, user_id)
+        if not await self.can_take(session, exam_id, user_id):
+            raise HTTPException(403, self.take_refused_message())
         await session.execute(update(Exam).where(Exam.id == exam_id, Exam.external_frozen_version.is_(None))
                               .values(external_frozen_version=Exam.external_version))
         extra = (await session.execute(select(OjRosterEntry.extra_time_seconds).where(
@@ -149,8 +172,7 @@ class DkuojSource(ExternalSource):
         state = {r.name: r.value for r in (await session.execute(select(OjState))).scalars()}
         counts = dict((await session.execute(select(D.status, func.count()).where(D.source == self.id)
                                              .group_by(D.status))).all())
-        mine = select(Exam.id).where(Exam.source == self.id,
-                                     or_(Exam.teacher_id == user_id, Exam.id.in_(self.teacher_exam_ids(user_id))))
+        mine = select(Exam.id).where(Exam.source == self.id, Exam.id.in_(self.teacher_exam_ids(user_id)))
         bad = (await session.execute(select(D).where(D.exam_id.in_(mine), D.status.in_(("dead", "failed")))
                                      .order_by(D.created_at.desc()).limit(100))).scalars().all()
         exams = (await session.execute(select(func.count(Exam.id)).where(Exam.source == self.id))).scalar_one()

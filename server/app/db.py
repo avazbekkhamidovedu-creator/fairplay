@@ -43,6 +43,7 @@ class Database:
 
     async def create_all(self) -> None:
         from . import models  # noqa: F401  (register tables)
+        from .scan import models as _scan_models  # noqa: F401  (shared student-scope queries)
         async with self.engine.begin() as conn:
             if not self.is_sqlite:
                 # Several workers start at once: serialize DDL.

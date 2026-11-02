@@ -68,6 +68,13 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
     bytes). File answers are uploaded first; each DKU OJ upload id is stored as soon as
     it is known, so a retry never uploads the same file twice."""
     if d.payload:
+        revision = int(d.revision or 1)
+        supersedes = d.payload.get("supersedes")
+        if (d.status in ("pending", "failed") and revision > 1
+                and d.payload.get("revision") == revision and d.payload.get("attempt_id") == a.id
+                and type(supersedes) is int and supersedes == revision - 1):
+            d.payload = {**d.payload, "supersedes": a.id}
+            await session.commit()
         return d.payload
     questions = e.questions or []
     snap = d.snapshot or {}
@@ -110,7 +117,7 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
     if int(d.revision or 1) > 1:
         # a reopened attempt handed in again: this one counts, the earlier one stays on file
         body["revision"] = int(d.revision)
-        body["supersedes"] = int(d.revision) - 1
+        body["supersedes"] = a.id
     d.payload = body
     await session.commit()
     return body

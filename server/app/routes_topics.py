@@ -9,6 +9,7 @@ from sqlalchemy import false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
+from .integrations.registry import teacher_exam_condition
 from .models import Exam
 from .security import Principal, require_teacher
 
@@ -31,5 +32,5 @@ def count_topics(question_lists) -> list[dict]:
 async def list_topics(p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     rows = (await session.execute(
-        select(Exam.questions).where(Exam.teacher_id == p.user_id, Exam.is_trial == false()))).scalars().all()
+        select(Exam.questions).where(teacher_exam_condition(p.user_id), Exam.is_trial == false()))).scalars().all()
     return count_topics(rows)

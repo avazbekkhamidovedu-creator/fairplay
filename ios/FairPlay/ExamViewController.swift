@@ -71,6 +71,7 @@ final class ExamViewController: UIViewController, LockSurface,
     private let server = Config.serverURL
     private lazy var external = ExternalExamController(server: Config.serverURL)
     private var launchURL = Config.startURL
+    var launchRecoveryActive = false
     /// "Connecting to <server>…" over the web view until the first page commits (the web
     /// view alone shows a blank white page while it waits).
     private var connecting: UIView?
@@ -369,6 +370,21 @@ final class ExamViewController: UIViewController, LockSurface,
             return true
         }
         return false
+    }
+
+    @discardableResult
+    func openExamLaunch(_ key: String) -> Bool {
+        let lock = LockdownController.shared
+        guard Config.serverIsAcceptable,
+              ExamLaunch.mayOpen(locked: lock.isLocked, prelocked: lock.isPreLock || lock.preLockInFlight,
+                  assessmentBusy: lock.launchAssessmentBusy || lock.lockInFlight,
+                  bound: AppSession.shared.exam != nil, external: external.isActive,
+                  preview: deviceTest.isRunning, recovering: launchRecoveryActive),
+              let url = ExamLaunch.loginURL(server: Config.serverURL, exam: key) else { return false }
+        loadViewIfNeeded()
+        launchURL = url
+        loadFromServer(url)
+        return true
     }
 
     func reload() {

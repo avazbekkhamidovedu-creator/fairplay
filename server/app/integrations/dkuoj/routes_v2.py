@@ -90,6 +90,19 @@ async def signed_call(request: Request) -> BridgeCall:
                                       request.headers, body, get_store())
     except signing.BadSignature:
         raise HTTPException(401, BAD_SIGNATURE) from None
+    from .isolation import require_binding, verify_installation
+    from ...db import get_database
+    identity = request.query_params.getlist("installation_id")
+    if identity != [SOURCE.config.installation_id] or not SOURCE.config.installation_id:
+        raise HTTPException(409, "DKU OJ installation identity does not match")
+    from .client import DkuojClient, OjError
+    try:
+        async with DkuojClient.from_config(SOURCE.config) as client:
+            await verify_installation(get_database().sessionmaker, client, SOURCE.config)
+    except OjError:
+        raise HTTPException(503, "DKU OJ installation binding needs operator verification") from None
+    async with get_database().sessionmaker() as session:
+        await require_binding(session, SOURCE.config)
     data: dict = {}
     if body:
         try:
@@ -98,6 +111,8 @@ async def signed_call(request: Request) -> BridgeCall:
             raise HTTPException(400, "The body is not JSON") from None
         if not isinstance(data, dict):
             raise HTTPException(400, "The body must be a JSON object")
+        if data.get("installation_id", SOURCE.config.installation_id) != SOURCE.config.installation_id:
+            raise HTTPException(409, "DKU OJ installation identity does not match")
     return BridgeCall(acting, data)
 
 
@@ -132,7 +147,11 @@ async def sync_ping(call: BridgeCall = Depends(signed_call)):
     from . import guard, ping
     body = ping.parse(call.data)
     await ping.check_rate(body.exam_key)
-    queued = await ping.start(body.exam_key or guard.ALL)
+    targets = set(body.exam_keys)
+    if body.exam_key:
+        targets.add(body.exam_key)
+    scope = next(iter(targets)) if len(targets) == 1 else guard.ALL
+    queued = await ping.start(scope, targets)
     return {"ok": True, "queued": queued}
 
 
@@ -163,8 +182,6 @@ async def _require_class_staff(session: AsyncSession, class_id: int, call: Bridg
     teacher = who if who is not None and who.role == "teacher" else None
     mirror = (await session.execute(select(SchoolClass.teacher_id).where(
         SchoolClass.external_ref == f"dkuoj:{class_id}"))).scalars().all()
-    if teacher is not None and teacher.id in mirror:
-        return
     exam_ids = await _class_exam_ids(session, class_id)
     if teacher is not None and exam_ids and (await session.execute(select(OjEditor.id).where(
             OjEditor.exam_id.in_(exam_ids), OjEditor.user_id == teacher.id).limit(1))).first():

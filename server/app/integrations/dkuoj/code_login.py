@@ -245,6 +245,12 @@ async def _pick(session: AsyncSession, secret: str, code: str, device: str | Non
     for row, e in found:
         if row.revoked_at is not None:
             continue
+        from .source import SOURCE
+        uid = (await session.execute(select(User.id).where(User.netid == row.netid))).scalar_one_or_none()
+        if uid is None or not await SOURCE.can_take(session, e.id, uid):
+            if await access_codes.has_unsent_attempt(session, e, row.netid):
+                stranded.append((row, e))
+            continue
         if not await access_codes.in_window(session, e, now):
             why = "outside_window"
             if e.delivery != "paper" and await access_codes.has_unsent_attempt(session, e, row.netid):

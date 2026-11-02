@@ -155,6 +155,9 @@ async def states(session: AsyncSession, exam_id: str) -> dict[str, str]:
 async def revoke_missing(session: AsyncSession, exam_id: str, netids: set[str]) -> int:
     """Revoke the codes of students who are no longer on the exam's list (no commit)."""
     q = update(ExamAccessCode).where(ExamAccessCode.exam_id == exam_id, ExamAccessCode.revoked_at.is_(None))
+    running = select(User.netid).join(Attempt, Attempt.student_id == User.id).where(
+        Attempt.exam_id == exam_id, Attempt.status == "in_progress", User.netid.is_not(None))
+    q = q.where(ExamAccessCode.netid.not_in(running))
     if netids:
         q = q.where(ExamAccessCode.netid.not_in(netids))
     return (await session.execute(q.values(revoked_at=utcnow()))).rowcount or 0

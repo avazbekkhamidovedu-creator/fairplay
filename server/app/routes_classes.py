@@ -69,7 +69,7 @@ class JoinIn(BaseModel):
 
 async def _own_class(session: AsyncSession, class_id: int, p: Principal) -> SchoolClass:
     c = await session.get(SchoolClass, class_id)
-    if c is None or c.teacher_id != p.user_id:
+    if c is None or c.teacher_id != p.user_id or (c.external_ref or "").startswith("dkuoj:"):
         raise HTTPException(404, "Class not found")
     return c
 
@@ -115,7 +115,8 @@ async def _insert_class(session: AsyncSession, teacher_id: int, name: str,
 async def list_classes(p: Principal = Depends(require_teacher),
                        session: AsyncSession = Depends(get_session)):
     rows = list((await session.execute(
-        select(SchoolClass).where(SchoolClass.teacher_id == p.user_id)
+        select(SchoolClass).where(SchoolClass.teacher_id == p.user_id,
+                                 or_(SchoolClass.external_ref.is_(None), ~SchoolClass.external_ref.startswith("dkuoj:")))
         .order_by(SchoolClass.name, SchoolClass.id))).scalars())
     members, exams = await _counts(session, [c.id for c in rows])
     who = await _teacher_name(session, p.user_id)
@@ -314,7 +315,7 @@ async def join_class(body: JoinIn, p: Principal = Depends(require_student),
         raise HTTPException(400, CLASS_LOGIN_TYPED)
     code = normalize_code(body.code)
     c = (await session.execute(select(SchoolClass).where(SchoolClass.join_code == code))).scalar_one_or_none()
-    if c is None:
+    if c is None or (c.external_ref or "").startswith("dkuoj:"):
         await store.incr(wrong_key, WRONG_JOIN_WINDOW_S)
         raise HTTPException(404, "No class has this code. Check it with your teacher.")
     out = {"id": c.id, "name": c.name,
@@ -344,6 +345,6 @@ async def check_class_for_exam(session: AsyncSession, class_id: int | None, p: P
     if class_id is None:
         return
     c = await session.get(SchoolClass, class_id)
-    if c is None or c.teacher_id != p.user_id:
+    if c is None or c.teacher_id != p.user_id or (c.external_ref or "").startswith("dkuoj:"):
         raise HTTPException(422, "Pick one of your classes for this exam")
 

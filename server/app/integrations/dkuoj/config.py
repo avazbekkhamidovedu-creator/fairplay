@@ -17,6 +17,7 @@ import ipaddress
 import os
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+from uuid import UUID
 
 MAX_TOKENS = 2
 MIN_TOKEN_LEN = 32
@@ -56,6 +57,9 @@ class DkuojConfig:
     delivery_rps: int = 10
     auth_retry_hours: int = 6     # 401 / 403 / 404 on a hand-in are retried this long, then dead
     public_url: str = ""          # FairPlay's own address (FAIRPLAY_PUBLIC_URL), for report links
+    installation_id: str = ""
+    confirm_existing_installation_id: str = ""
+    verified_url_aliases: list[str] = field(default_factory=list)
 
     @property
     def enabled(self) -> bool:
@@ -79,7 +83,10 @@ class DkuojConfig:
                    sync_seconds=_int("DKUOJ_SYNC_SECONDS", 30),
                    delivery_rps=_int("DKUOJ_DELIVERY_RPS", 10),
                    auth_retry_hours=_int("DKUOJ_AUTH_RETRY_HOURS", 6),
-                   public_url=public_url)
+                   public_url=public_url,
+                   installation_id=os.environ.get("DKUOJ_INSTALLATION_ID", "").strip(),
+                   confirm_existing_installation_id=os.environ.get("DKUOJ_CONFIRM_EXISTING_INSTALLATION_ID", "").strip(),
+                   verified_url_aliases=[u.strip() for u in os.environ.get("DKUOJ_VERIFIED_URL_ALIASES", "").split(",") if u.strip()])
 
     def check(self, dev: bool = False) -> None:
         """Startup checks (RuntimeError with what to change)."""
@@ -91,6 +98,11 @@ class DkuojConfig:
                                "silently ignores it and answers 404. Paste the whole token.")
         if not self.url:
             return
+        if self.enabled:
+            try:
+                self.installation_id = str(UUID(self.installation_id))
+            except ValueError:
+                raise RuntimeError("Set DKUOJ_INSTALLATION_ID to the explicitly provisioned DKU OJ installation UUID.") from None
         parts = urlsplit(self.url)
         scheme = parts.scheme.lower()
         if scheme not in ("http", "https") or not parts.hostname:

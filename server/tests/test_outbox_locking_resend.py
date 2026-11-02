@@ -82,7 +82,7 @@ def test_lease_expires_for_a_crashed_worker(oj, fake):
 def test_concurrent_workers_send_a_hand_in_once(oj, fake):
     _, aid = handed_in(oj, fake)
     sent = []
-    inner = fake.handle
+    inner = fake.signed_handle
 
     def counting(req):
         if req.method == "POST" and req.url.path.endswith("/submissions"):
@@ -235,4 +235,5 @@ def test_short_bridge_token_refuses_to_start():
     from app.integrations.dkuoj.config import DkuojConfig
     with pytest.raises(RuntimeError, match="under 32"):
         DkuojConfig(url="https://oj.example.edu", token="a" * 16).check()
-    DkuojConfig(url="https://oj.example.edu", token="a" * 32).check()
+    DkuojConfig(url="https://oj.example.edu", token="a" * 32,
+                installation_id="626c995f-840b-4ddc-9774-df8b5cf10df8").check()

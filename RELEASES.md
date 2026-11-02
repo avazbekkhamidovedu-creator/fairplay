@@ -1,11 +1,9 @@
-## What's new in 0.7.8
+## What's new in 0.7.9
 
-- The invigilator can leave the exam with an exit prompt, and there is a new **Take a break** menu item.
-- Leaving the exam stops it on that device; the student needs the start code to resume.
-- Each device has its own key. Reissuing a code frees the device it was bound to.
-- A handed-in exam can no longer be reopened by the student.
-- Simpler footer, and the progress now reads "1 / N answered".
-- Matches the exam server at commit c630890 (server and web are identical to this release's source).
+- Open the exam-code screen from DKU OJ on Mac, Windows and iPad, using the FairPlay button or a launch file.
+- Clearer Windows update notices, retry controls and installer guidance.
+- Reopened hand-ins retain numbered revisions, with the latest hand-in shown first.
+- Improved class, roster and instructor permission synchronization.
 
 ## Download FairPlay
 
@@ -59,6 +57,7 @@ Good to know:
 - FairPlay only allows Apple's own keyboards (third-party keyboards are switched off).
 
 ### Before the exam
-- In FairPlay, sign in with the username and password from your teacher.
+- In FairPlay, enter the exam access code supplied by your instructor.
+- On DKU OJ, use **Start exam in FairPlay** after installing this version. If the browser does not open the app, open FairPlay manually and enter the code.
 - Use **Check this Mac / Check this PC** any day before the exam and fix anything red.
-- Exam server: https://exam.speakupai.uz
+- Exam server: https://dku.speakupai.uz

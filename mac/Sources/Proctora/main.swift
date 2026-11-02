@@ -7,6 +7,38 @@ if let watchdog = Watchdog.parseArguments(CommandLine.arguments) {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var main: MainWindowController?
+    private var pendingExam: String?
+    private var recoveringExam = false
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        _ = receiveLaunch(urls)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        receiveLaunch([URL(fileURLWithPath: filename)])
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        sender.reply(toOpenOrPrint: receiveLaunch(filenames.map { URL(fileURLWithPath: $0) }) ? .success : .failure)
+    }
+
+    private func receiveLaunch(_ urls: [URL]) -> Bool {
+        guard !recoveringExam, urls.count == 1, let url = urls.first else { return false }
+        let exam: String?
+        if url.isFileURL {
+            guard (url.host == nil || url.host == "" || url.host == "localhost"),
+                  url.pathExtension.lowercased() == "fairplay",
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                  let file = try? FileHandle(forReadingFrom: url) else { return false }
+            defer { try? file.close() }
+            guard let data = try? file.read(upToCount: 4097) else { return false }
+            exam = ExamLaunch.parseFile(data)
+        } else { exam = ExamLaunch.parse(url) }
+        guard let exam else { return false }
+        if let main { main.openExamLaunch(exam) }
+        else { pendingExam = exam }
+        return true
+    }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         DebugLog.installHooks()
@@ -17,7 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main = wc
         let lock = LockdownController.shared
         lock.surface = wc
-        lock.onUnlocked = { [weak wc] in
+        lock.onUnlocked = { [weak self, weak wc] in
+            self?.recoveringExam = false
             wc?.endExternalIfActive()
             wc?.send(["type": "unlocked"])
         }
@@ -30,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: .proctoraEmergencyExit, object: nil, queue: .main) { [weak wc] _ in
             wc?.promptEmergencyExit()
         }
-        if Watchdog.cleanUpAtLaunch() {
+        recoveringExam = Watchdog.cleanUpAtLaunch()
+        if recoveringExam {
             // The last run ended while locked (killed / crashed). The page forwards this
             // once the student is back in the exam; the server also sees the beat gap.
             EventLog.shared.record(.previousRunKilled)
@@ -39,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Net.onUpgradeRequired = { [weak wc] minimum in wc?.showUpdateRequired(minimum: minimum) }
         wc.start()
+        if !recoveringExam, let pendingExam { wc.openExamLaunch(pendingExam) }
+        pendingExam = nil
         NSApp.activate(ignoringOtherApps: true)
         // 2026-10-22: release builds look for a newer FairPlay now and every 6 hours.
         Updater.shared.onAvailable = { [weak wc] in wc?.sendState() }

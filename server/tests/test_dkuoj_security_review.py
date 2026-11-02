@@ -112,7 +112,9 @@ def test_normal_gzip_answer_still_works(evil):
     body = gzip.compress(json.dumps({"classes": [{"id": 31, "name": "A"}]}).encode())
 
     def handler(req):
-        return httpx.Response(200, headers={"Content-Encoding": "gzip"}, stream=Trickle([body[:10], body[10:]]))
+        headers = signing.sign_headers(TOKEN, signing.OJ_TO_FP, "RESPONSE GET 200",
+            req.url.raw_path.decode(), gzip.decompress(body), acting_user=req.headers[signing.H_NONCE])
+        return httpx.Response(200, headers={**headers, "Content-Encoding": "gzip"}, stream=Trickle([body[:10], body[10:]]))
     with_transport(handler)
     assert _client_call(lambda c: c.student_classes("bl642")) == {"classes": [{"id": 31, "name": "A"}]}
 
@@ -127,7 +129,7 @@ def test_unknown_encoding_and_oversized_refusal(evil):
         _client_call(lambda c: c.roster(CLASS_ID))
     with pytest.raises(ojclient.OjError) as ei:
         _client_call(lambda c: c.list_exams(None))
-    assert ei.value.status == 400 and ei.value.body == ""
+    assert ei.value.status == 401 and "authentication failed" in ei.value.message
 
 
 def test_slow_trickle_hits_the_total_deadline(evil):
@@ -317,6 +319,7 @@ def test_http_client_logs_only_warnings():
 def test_plain_http_dkuoj_url_refused(monkeypatch, url, dev, insecure, ok):
     monkeypatch.setenv("DKUOJ_URL", url)
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setenv("DKUOJ_ALLOW_INSECURE", insecure)
     cfg = DkuojConfig.from_env()
@@ -332,6 +335,7 @@ def test_create_app_fails_on_plain_http(monkeypatch, tmp_path, static_dir):
     from .test_dkuoj_bridge import oj_settings
     monkeypatch.setenv("DKUOJ_URL", "http://oj.dku.edu")
     monkeypatch.setenv("DKUOJ_TOKEN", TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", "626c995f-840b-4ddc-9774-df8b5cf10df8")
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.delenv("DKUOJ_ALLOW_INSECURE", raising=False)
     try:

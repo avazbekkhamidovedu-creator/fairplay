@@ -1,0 +1,26 @@
+services:
+  fp-runner:
+    build: .
+    image: fp-runner-service:1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      RUNNER_TENANTS: "${RUNNER_TENANTS:?set tenant:secret pairs, secrets of 32+ characters}"
+      RUNNER_MAX_CONCURRENT: "4"
+      RUNNER_TENANT_CONCURRENT: "4"
+      RUNNER_WARM_POOL: "2"
+    # The service drives the host Docker daemon through the socket. Whoever can
+    # reach this socket controls the host, so run this on a dedicated machine
+    # (see "Hardening" in README.md).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

@@ -321,7 +321,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
     await require_member(session, exam, p.user_id)   # audit S-03: class / LMS course only
     integ = integration_for(exam)
     if integ is not None:
-        await integ.check_start(session, exam_id)
+        await integ.check_start(session, exam_id, p.user_id)
     # 2026-10-23: open to selected students only -> others are refused here, before the
     # start code is looked at (not a wrong code), unless they already started (resume).
     await require_open_for(session, exam_id, p.user_id)

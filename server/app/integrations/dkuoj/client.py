@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import zlib
 from typing import Any, Callable
 
@@ -93,9 +94,11 @@ def _retry_after(resp: httpx.Response) -> float | None:
 
 
 class DkuojClient:
-    def __init__(self, base_url: str, token: str):
+    def __init__(self, base_url: str, token: str, installation_id: str = "", tokens: list[str] | None = None):
         self.base_url = base_url.rstrip("/")
         self._token = token
+        self.installation_id = installation_id
+        self._verify_tokens = tokens or [token]
         transport = _transport_factory(self.base_url) if _transport_factory else None
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(READ_TIMEOUT_S, connect=CONNECT_TIMEOUT_S), transport=transport,
@@ -105,7 +108,9 @@ class DkuojClient:
 
     @classmethod
     def from_config(cls, cfg) -> "DkuojClient":
-        return cls(cfg.url, cfg.token)
+        client = cls(cfg.url, cfg.token, cfg.installation_id, cfg.verify_tokens)
+        client._config = cfg
+        return client
 
     async def __aenter__(self):
         return self
@@ -126,7 +131,14 @@ class DkuojClient:
         replaces the default connect / read timeouts for this call (a page someone is
         waiting on). Each try ends after min(2 x timeout, MAX_TOTAL_S) whatever the server
         does; a body larger than `max_bytes` once decompressed is refused (`too_big`)."""
+        cfg = getattr(self, "_config", None)
+        if cfg is not None and path.strip("/") != "installation":
+            from ...db import get_database
+            from .isolation import require_binding
+            async with get_database().sessionmaker() as session:
+                await require_binding(session, cfg)
         url = f"{self.base_url}{API}/{path.lstrip('/')}"
+        params = {**(params or {}), **({"installation_id": self.installation_id} if self.installation_id else {})}
         total = min(MAX_TOTAL_S, 2 * (timeout or READ_TIMEOUT_S))
         err: OjError | None = None
         for attempt in range(max(1, attempts)):
@@ -139,6 +151,16 @@ class DkuojClient:
                 path = req.url.raw_path.decode("ascii")
                 req.headers.update(signing.sign_headers(self._token, signing.FP_TO_OJ, method, path, body))
                 resp = await asyncio.wait_for(self._send(req, ok, max_bytes, too_big), total)
+                asset = (re.fullmatch(r"/api/fairplay/v1/exams/[^/]+/assets/[^/]+", path.split("?", 1)[0])
+                         and method.upper() == "GET" and resp.status_code == 200)
+                if not asset:
+                    try:
+                        acting = await signing.verify(self._verify_tokens, signing.OJ_TO_FP,
+                            f"RESPONSE {method.upper()} {resp.status_code}", path, resp.headers, resp.content)
+                        if acting != req.headers[signing.H_NONCE]:
+                            raise signing.BadSignature()
+                    except signing.BadSignature:
+                        raise OjError("DKU OJ response authentication failed", 401) from None
             except (httpx.TimeoutException, asyncio.TimeoutError):
                 err = OjError("DKU OJ did not answer in time")
             except httpx.HTTPError as exc:
@@ -190,6 +212,14 @@ class DkuojClient:
         return v
 
     # ------------------------------------------------------------ endpoints (contract §4)
+    async def installation(self) -> dict:
+        response = await self.request("GET", "installation", attempts=1)
+        data = self._json(response)
+        if (data.get("protocol") != 1 or data.get("installation_id") != self.installation_id
+                or data.get("request_nonce") != response.request.headers[signing.H_NONCE]):
+            raise OjError("DKU OJ installation identity does not match", 409)
+        return data
+
     async def list_exams(self, changed_since: str | None, page: int = 1) -> dict:
         params: dict = {"page": page}
         if changed_since:

@@ -322,6 +322,16 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         if !EventTap.isTrusted { showPermission() }
     }
 
+    func openExamLaunch(_ exam: String) {
+        let lock = LockdownController.shared
+        guard Config.serverIsAcceptable,
+              ExamLaunch.mayOpen(locked: lock.isLocked, prelocked: lock.isPreLock,
+                  bound: AppSession.shared.exam != nil, external: external.isActive, preview: deviceTest.isRunning),
+              let url = ExamLaunch.loginURL(server: Config.serverURL, exam: exam) else { return }
+        takeFocus()
+        webView.load(URLRequest(url: url))
+    }
+
     func reload() {
         guard Config.serverIsAcceptable else { return }
         if webView.url == nil || webView.url?.scheme == "about" {

@@ -147,11 +147,9 @@ async def _own_exam(session: AsyncSession, exam_id: str, p: Principal) -> Exam:
     e = await session.get(Exam, exam_id)
     if e is None or e.is_trial:                                 # never the sample exam
         raise HTTPException(404, "Exam not found")
-    if e.teacher_id != p.user_id:
-        # integrations: other teachers the external system names (e.g. its editors)
-        integ = integration_for(e)
-        if not (integ and await integ.is_teacher(session, e, p.user_id)):
-            raise HTTPException(404, "Exam not found")
+    integ = integration_for(e)
+    if (integ and not await integ.is_teacher(session, e, p.user_id)) or (not integ and e.teacher_id != p.user_id):
+        raise HTTPException(404, "Exam not found")
     return e
 
 
@@ -173,10 +171,8 @@ async def list_exams(p: Principal = Depends(require_teacher),
                      session: AsyncSession = Depends(get_session)):
     from .materials import maybe_cleanup_materials
     await maybe_cleanup_materials()      # 2026-10-23 (review 2): open-book retention, hourly
-    others = [and_(Exam.source == src.id, Exam.id.in_(ids)) for src in registry.sources()
-              if (ids := src.teacher_exam_ids(p.user_id)) is not None]
     res = await session.execute(
-        select(Exam).where(or_(Exam.teacher_id == p.user_id, *others),
+        select(Exam).where(registry.teacher_exam_condition(p.user_id),
                            Exam.is_trial == false())
         .order_by(Exam.created_at.desc(), Exam.id))
     exams = list(res.scalars())

@@ -117,20 +117,21 @@ def teacher_student_ids(teacher_id: int, exclude_paper: bool = False):
     Never every student on the server."""
     from .models import CourseLink, LmsConnection, SchoolClass
     in_class = (select(ClassMember.user_id).join(SchoolClass, SchoolClass.id == ClassMember.class_id)
-                .where(SchoolClass.teacher_id == teacher_id))
+                .where(SchoolClass.teacher_id == teacher_id,
+                       or_(SchoolClass.external_ref.is_(None), ~SchoolClass.external_ref.startswith("dkuoj:"))))
     in_course = (select(CourseMember.user_id).join(CourseLink, CourseLink.id == CourseMember.course_link_id)
                  .join(LmsConnection, LmsConnection.id == CourseLink.connection_id)
                  .where(LmsConnection.teacher_id == teacher_id))
     took = (select(Attempt.student_id).join(Exam, Exam.id == Attempt.exam_id)
-            .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
+            .where(Exam.teacher_id == teacher_id, Exam.source == "fairplay", Exam.is_trial == false()))
     if exclude_paper:
         took = took.where(or_(Attempt.source.is_(None), Attempt.source != "paper"))
     picked = (select(ExamRoster.user_id).join(Exam, Exam.id == ExamRoster.exam_id)
-              .where(Exam.teacher_id == teacher_id, Exam.is_trial == false()))
+              .where(Exam.teacher_id == teacher_id, Exam.source == "fairplay", Exam.is_trial == false()))
     from .integrations.dkuoj.models import OjEditor, OjRosterEntry
     bridge = (select(OjRosterEntry.user_id).join(Exam, Exam.id == OjRosterEntry.exam_id)
               .outerjoin(OjEditor, OjEditor.exam_id == Exam.id)
-              .where(or_(Exam.teacher_id == teacher_id, OjEditor.user_id == teacher_id)))
+              .where(OjEditor.user_id == teacher_id))
     return in_class.union(in_course, took, picked, bridge)
 
 
@@ -208,7 +209,7 @@ def _question_map(e: Exam) -> dict[str, dict]:
 async def scan_exams(p: Principal = Depends(require_teacher), session: AsyncSession = Depends(get_session)):
     """Paper exams (and any exam with printed booklets or uploaded scans), newest first."""
     exams = (await session.execute(
-        select(Exam).where(Exam.teacher_id == p.user_id, Exam.is_trial == false())
+        select(Exam).where(Exam.teacher_id == p.user_id, Exam.source == "fairplay", Exam.is_trial == false())
         .order_by(Exam.created_at.desc(), Exam.id)
     )).scalars().all()
     ids = [e.id for e in exams]
