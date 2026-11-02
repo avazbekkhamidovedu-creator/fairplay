@@ -9,8 +9,8 @@
 .sd-badge.wait{background:#fdf0e1;color:var(--warn)}
 .sd-title{font-size:24px;margin:10px 0 0;line-height:1.2}
 .sd-meta{display:flex;gap:18px;color:var(--muted);font-size:14px;margin-top:8px;flex-wrap:wrap}
-.sd-btn{border:0;border-radius:10px;padding:16px 26px;font:600 16px inherit;font-family:inherit;cursor:pointer;background:var(--brand);color:#fff;text-decoration:none;text-align:center;white-space:nowrap}
-.sd-btn:disabled{background:#eee;color:var(--ink);cursor:default;white-space:normal}
+.sd .sd-btn,.sd .sd-btn:visited,.sd .sd-btn:hover,.sd .sd-btn:focus-visible{border:0;border-radius:10px;padding:16px 26px;font:600 16px inherit;font-family:inherit;cursor:pointer;background:var(--brand);color:#fff;-webkit-text-fill-color:currentColor;text-decoration:none;text-align:center;white-space:nowrap}
+.sd .sd-btn:disabled{background:#eee;color:var(--ink);cursor:default;white-space:normal}
 .sd-foot{margin-top:18px;color:var(--muted);font-size:13px}
 .sd-link{background:none;border:0;padding:0;font:inherit;color:var(--brand);cursor:pointer}
 .sd-empty{border:1px solid var(--line);border-radius:18px;background:#fff;padding:26px 28px;color:var(--muted)}
