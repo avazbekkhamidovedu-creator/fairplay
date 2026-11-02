@@ -74,3 +74,20 @@ jobs:
             gh release edit "$RELEASE_TAG" -R "$REPO" --draft=false --latest
           fi
           gh release view "$RELEASE_TAG" -R "$REPO" --json tagName,isDraft,url
+      - name: Update student download instructions
+        if: env.PUBLISH_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO=avazbekkhamidovedu-creator/fairplay-download
+          gh api "repos/$REPO/contents/README.md" > current-readme.json
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+          current = json.loads(Path("current-readme.json").read_text())
+          owner = {"name": "avazbekkhamidovedu-creator", "email": "347462350+avazbekkhamidovedu-creator@users.noreply.github.com"}
+          payload = {"message": "Update download instructions for " + os.environ["RELEASE_TAG"], "sha": current["sha"], "content": base64.b64encode(Path("ops/release/public-README.md").read_bytes()).decode(), "author": owner, "committer": owner}
+          Path("readme-update.json").write_text(json.dumps(payload))
+          PY
+          gh api "repos/$REPO/contents/README.md" -X PUT --input readme-update.json > /dev/null

@@ -656,11 +656,139 @@ index 15edecf2a..cac9ca037 100644
                               token=token, direction=DIRECTION_FP_TO_OJ)
 -    return {'HTTP_' + key.upper().replace('-', '_'): value for key, value in headers.items()}
 +    return dict({'HTTP_' + key.upper().replace('-', '_'): value for key, value in headers.items()}, QUERY_STRING=urlsplit(path).query)
+diff --git a/judge/views/tests/test_fairplay_api.py b/judge/views/tests/test_fairplay_api.py
+index 0430b9ff8..f5fb10013 100644
+--- a/judge/views/tests/test_fairplay_api.py
++++ b/judge/views/tests/test_fairplay_api.py
+@@ -273,7 +273,10 @@ class FairPlayUploadTestCase(FairPlayAPIMixin, TestCase):
+         extra = fp_signed('POST', signed_url, data)
+         extra['HTTP_X_SHA256'] = hashlib.sha256(data).hexdigest()
+         tampered = signed_url.replace('fp_student', 'fp_other')
+-        response = self.client.post(tampered, data, content_type='application/octet-stream', **extra)
++        tampered_extra = dict(extra, QUERY_STRING=extra['QUERY_STRING'].replace('username=fp_student', 'username=fp_other'))
++        self.assertNotEqual(tampered_extra['QUERY_STRING'], extra['QUERY_STRING'])
++        response = self.client.post(tampered, data, content_type='application/octet-stream', **tampered_extra)
++        self.assertEqual(response.wsgi_request.GET['username'], 'fp_other')
+         self.assertEqual(response.status_code, 401)
+         headers_only = fp_signed('POST', url, data)
+         headers_only.update({'HTTP_X_SHA256': hashlib.sha256(data).hexdigest(), 'HTTP_X_USERNAME': 'fp_student',
+diff --git a/judge/views/tests/test_fairplay_app_login.py b/judge/views/tests/test_fairplay_app_login.py
+index b4d31fb87..9dd121478 100644
+--- a/judge/views/tests/test_fairplay_app_login.py
++++ b/judge/views/tests/test_fairplay_app_login.py
+@@ -96,9 +96,12 @@ class MintTestCase(TestCase):
+ 
+     def test_done_url_ignores_request_host(self):
+         self.login(self.student)
+-        response = self.client.get(reverse('fairplay_app_login'), {'state': STATE, 'challenge': CHALLENGE},
+-                                   HTTP_HOST='evil.example.com', secure=False)
++        with self.settings(ALLOWED_HOSTS=['testserver', 'evil.example.com']):
++            response = self.client.get(reverse('fairplay_app_login'), {'state': STATE, 'challenge': CHALLENGE},
++                                       HTTP_HOST='evil.example.com', secure=False)
++        self.assertEqual(response.status_code, 302)
+         self.assertTrue(response['Location'].startswith('https://oj.example.edu/fairplay/app-login/done#'))
++        self.assertNotIn('evil.example.com', response['Location'])
+ 
+     def test_unconfigured_public_url_is_refused(self):
+         self.login(self.student)
+diff --git a/judge/views/tests/test_fairplay_crawl.py b/judge/views/tests/test_fairplay_crawl.py
+index 11456ee4f..fce82c3f4 100644
+--- a/judge/views/tests/test_fairplay_crawl.py
++++ b/judge/views/tests/test_fairplay_crawl.py
+@@ -2,7 +2,7 @@
+ import re
+ 
+ from django.test import Client, TestCase
+-from django.urls import URLPattern, URLResolver, get_resolver
++from django.urls import URLPattern, URLResolver, get_resolver, reverse
+ 
+ from judge.models import ContestParticipation, ContestSubmission, Language, Problem, Submission, SubmissionSource
+ from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin
+@@ -85,7 +85,14 @@ class FairPlayHidingCrawlTestCase(FairPlayDataMixin, TestCase):
+                         continue
+                     body = b''.join(response) if response.streaming else response.content
+                     text = body.decode('utf-8', errors='replace')
+-                    found = [m for m in MARKERS if m in text]
++                    metadata_landing = user.pk == self.student.pk and url in {
++                        reverse('contest_view', args=[self.exam.key]),
++                        reverse('contest_fairplay_launch', args=[self.exam.key]),
++                    }
++                    if metadata_landing:
++                        self.assertIn('<main class="fp-launch">', text)
++                        self.assertIn('no-store', response['Cache-Control'])
++                    found = [m for m in MARKERS if m in text and not (metadata_landing and m == self.exam.name)]
+                     if found:
+                         leaks.append('%s %s?%s -> %s' % (user.username, url, '&'.join(query), found))
+         self.maxDiff = None
+diff --git a/judge/views/tests/test_fairplay_editor.py b/judge/views/tests/test_fairplay_editor.py
+index a733d2240..c4412f505 100644
+--- a/judge/views/tests/test_fairplay_editor.py
++++ b/judge/views/tests/test_fairplay_editor.py
+@@ -148,15 +148,23 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
+         ContestTag.objects.create(name='exam', color='#123456')
+         tag = ContestTag.objects.get(name=FAIRPLAY_TAG)
+         exam_tag = ContestTag.objects.get(name='exam')
++        reserved = set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True))
+         # The picker's tags replace the others but leave the FairPlay tag as the lock option says.
+         self.assertEqual(self.save(tags=[exam_tag.id], fairplay_required=Ellipsis).status_code, 200)
+         exam = self.reload_exam()
+-        self.assertEqual(sorted(exam.tags.values_list('name', flat=True)), ['exam', FAIRPLAY_TAG])
+-        self.assertEqual(self.save(tags=[exam_tag.id, tag.id], fairplay_required=False).status_code, 200)
++        self.assertEqual(sorted(exam.tags.exclude(name__startswith='fp-aud-').values_list('name', flat=True)),
++                         ['exam', FAIRPLAY_TAG])
++        self.assertEqual(set(exam.tags.filter(name__startswith='fp-aud-').values_list('id', flat=True)), reserved)
++        self.assertEqual(self.save(tags=[exam_tag.id, tag.id], fairplay_required=False).status_code, 400)
++        self.assertTrue(is_fairplay_exam(self.reload_exam()))
++        self.assertEqual(self.save(tags=[exam_tag.id], fairplay_required=False).status_code, 200)
+         self.assertFalse(is_fairplay_exam(self.reload_exam()))
++        self.assertEqual(set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True)), reserved)
+         # Not offered in the picker, and not creatable from it.
+         html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
+         self.assertNotIn('>%s</option>' % FAIRPLAY_TAG, html)
++        for name in exam.tags.filter(name__startswith='fp-aud-').values_list('name', flat=True):
++            self.assertNotIn('>%s</option>' % name, html)
+         self.assertIn('>exam</option>', html)
+         response = self.client.post(reverse('contest_tag_create'), json.dumps({'name': FAIRPLAY_TAG}),
+                                     content_type='application/json')
+@@ -201,6 +209,7 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
+         curator = create_user(username='fp_curator', user_permissions=('edit_own_contest',))
+         self.exam.curators.add(curator.profile)
+         set_fairplay(self.exam, False)
++        reserved = set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True))
+         client = Client()
+         client.force_login(curator)
+         html = client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
+@@ -209,6 +218,12 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
+                                json.dumps(self.payload(fairplay_settings=EDITOR_SETTINGS,
+                                                        tags=[ContestTag.objects.get(name=FAIRPLAY_TAG).id])),
+                                content_type='application/json')
++        self.assertEqual(response.status_code, 400, response.content)
++        self.assertFalse(is_fairplay_exam(self.reload_exam()))
++        self.assertEqual(set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True)), reserved)
++        response = client.post(reverse('contest_edit', args=['fpexam']),
++                               json.dumps(self.payload(fairplay_settings=EDITOR_SETTINGS, tags=[])),
++                               content_type='application/json')
+         self.assertEqual(response.status_code, 200, response.content)
+         self.assertFalse(is_fairplay_exam(self.reload_exam()))
+         self.fp.set_settings.assert_not_called()
 diff --git a/judge/views/tests/test_fairplay_launch.py b/judge/views/tests/test_fairplay_launch.py
-index 3766fb67b..4a66974fe 100644
+index 3766fb67b..ace525e76 100644
 --- a/judge/views/tests/test_fairplay_launch.py
 +++ b/judge/views/tests/test_fairplay_launch.py
-@@ -84,6 +84,10 @@ class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
+@@ -77,6 +77,12 @@ class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
+         Contest.objects.filter(pk=self.exam.pk).update(is_private=True)
+         self.assertEqual(self.client.get(self.url()).status_code, 404)
+         self.exam.private_contestants.add(self.student.profile)
++        self.assertEqual(self.client.get(self.url()).status_code, 404)
++        from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
++        exam = Contest.objects.get(pk=self.exam.pk)
++        apply_fairplay_editor(exam, parse_fairplay_payload(exam, {
++            'fairplay_required': True, 'fairplay_audience_confirm': True,
++            'fairplay_audience_mode': 'classes'}, set()))
+         self.assertEqual(self.client.get(self.url()).status_code, 200)
+         self.exam.private_contestants.add(self.outsider.profile)
+         self.client.force_login(self.outsider)
+@@ -84,6 +90,10 @@ class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
  
      def test_org_only_exam_uses_org_membership_when_no_classes_are_assigned(self):
          self.exam.classes.clear()
