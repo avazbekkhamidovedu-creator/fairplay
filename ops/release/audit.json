@@ -2,5 +2,6 @@
   "tag": "v0.7.9",
   "native_main_sha": "0aa492beef37c3373f8b4e04a8f0112723eb6f68",
   "native_windows_sha": "ee11fa7407532ad93560f56b778e8753486d0915",
-  "purpose": "asset-audit-only"
+  "purpose": "asset-audit-only",
+  "audit_revision": 2
 }
