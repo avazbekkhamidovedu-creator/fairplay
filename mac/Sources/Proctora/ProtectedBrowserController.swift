@@ -279,7 +279,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) { decisionHandler(.deny) }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        browser?.isHidden = true
+        discardBrowser()
         notice?.stringValue = "The website stopped. Leave and unlock, then start again."
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if lockIsOwned { notice?.stringValue = "The page could not load. The Mac is still locked; retry or leave and unlock." }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if lockIsOwned { notice?.stringValue = "The page stopped loading. The Mac is still locked; retry or leave and unlock." }
     }
 }
