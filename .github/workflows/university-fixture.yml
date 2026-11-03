@@ -1,0 +1,35 @@
+name: university-fixture
+
+# Feature-branch-only test infrastructure. No releases, deploys or repository writes.
+on:
+  push:
+    branches: ["codex/mac-university-webview-pilot-2026-11-03"]
+    paths:
+      - "fixture/**"
+      - "server/app/university_profile.py"
+      - "server/tests/test_university_profile.py"
+      - "mac/**"
+      - ".github/workflows/university-fixture.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native-fixture:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated fixture dependencies
+        run: python -m pip install -r fixture/requirements-test.txt
+      - name: Profile and HTTP fixture tests
+        env:
+          PYTHONPATH: server:fixture
+        run: |
+          python -m unittest discover -s server/tests -p test_university_profile.py -v
+          python -m unittest discover -s fixture -p 'test_*.py' -v
+      - name: Swift to loopback fixture interoperability
+        run: python fixture/run_native_test.py

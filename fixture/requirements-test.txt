@@ -1,0 +1,5 @@
+# Exact versions used for the isolated ASGI integration run.
+fastapi==0.162.0
+httpx==0.28.1
+starlette==1.10.0
+uvicorn==0.54.0
