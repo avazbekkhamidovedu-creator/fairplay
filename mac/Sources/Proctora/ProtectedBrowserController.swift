@@ -26,6 +26,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var ruleIdentifier: String?
     private var pendingRuleIdentifier: String?
     private var held = false
+    private let dialogs = ProtectedBrowserDialogs()
     private let busy: () -> Bool
     private let didClose: () -> Void
     var isOpen: Bool { overlay != nil }
@@ -217,6 +218,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         browser?.uiDelegate = nil
         browser?.removeFromSuperview()
         browser = nil
+        dialogs.cancel()
     }
 
     private func close(release: Bool) {
@@ -250,6 +252,55 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             refuse(); decisionHandler(.cancel); return
         }
         decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        dialogs.cancel()
+    }
+
+    private func dialogOrigin(_ webView: WKWebView, frame: WKFrameInfo) -> String? {
+        guard webView === browser, lockIsOwned else { return nil }
+        let source = frame.securityOrigin
+        var components = URLComponents()
+        components.scheme = source.protocol
+        components.host = source.host
+        if source.port != 0 { components.port = source.port }
+        guard let url = components.url, policy?.allows(url, mainFrame: true) == true,
+              let origin = ProtectedBrowserPolicy.origin(url) else { return nil }
+        return origin
+    }
+
+    private func showDialog(_ kind: ProtectedBrowserDialogSession.Kind, message: String,
+                            defaultText: String? = nil, webView: WKWebView, frame: WKFrameInfo,
+                            completion: @escaping (ProtectedBrowserDialogSession.Result) -> Void) {
+        guard let origin = dialogOrigin(webView, frame: frame) else {
+            completion(ProtectedBrowserDialogSession.cancelled(kind)); return
+        }
+        dialogs.present(kind, message: message, defaultText: defaultText, origin: origin,
+                        in: overlay?.window, stillAllowed: { [weak self, weak webView] in
+            guard let self, let webView else { return false }
+            return self.dialogOrigin(webView, frame: frame) == origin
+        }, leave: { [weak self] in self?.close(release: true) }, completion: completion)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        showDialog(.alert, message: message, webView: webView, frame: frame) { _ in completionHandler() }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        showDialog(.confirm, message: message, webView: webView, frame: frame) { result in
+            if case .confirmed(let value) = result { completionHandler(value) } else { completionHandler(false) }
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        showDialog(.prompt, message: prompt, defaultText: defaultText, webView: webView, frame: frame) { result in
+            if case .text(let value) = result { completionHandler(value) } else { completionHandler(nil) }
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,

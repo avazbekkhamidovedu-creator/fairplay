@@ -9,6 +9,8 @@ Open **View → Protected Browser…** in the Mac app. This separate entry leave
 
 Configuration is in-memory client data, not university registration. No tokens, exam attempts, question imports, submission calls or institution adapters are added. The WebView has no FairPlay JavaScript message handler, no shared persistent website store, and no cross-mode navigation authority. While its native overlay is open, the retained FairPlay page cannot drive bridge actions or navigation.
 
+Website JavaScript alerts, confirmation dialogs and text prompts use origin-labelled native sheets. Confirmations require an explicit OK; cancellation, navigation, a security blocker or lock loss never approves submission. Every sheet offers Leave and unlock. Pending callbacks complete once and are cancelled when the browser is discarded.
+
 The university remains responsible for login, exam content and submission. Only the configured origins load; additional CDN/SSO origins may be necessary. New windows are flattened into the same view. Opener-dependent SSO, file upload/download, camera/microphone and some LMS features are intentionally unsupported in this basic prototype. Leaving is always possible and is not proof of exam completion. This does not prevent another browser/device from reaching the university, protect already-downloaded files, or attest enrollment/lock state to the university.
 
 Tests cover policy parsing, lookalike/credential/port denial, cancellation and stale callbacks, lock-before-content ordering, clear-before-unlock ordering, and actual WebKit content-rule compilation. Tests use fake lock effects, never lock a CI machine. A physical Mac walkthrough with Accessibility enabled and a permitted test university account is still required before production use.
