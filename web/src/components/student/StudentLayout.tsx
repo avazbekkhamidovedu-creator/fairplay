@@ -59,12 +59,22 @@ function useStickyHeader() {
   return { ref, scrolled };
 }
 
-/** Top-nav layout for every student page except the exam itself. */
-export function StudentLayout({ children, white }: { children: ReactNode; white?: boolean }) {
+/** Top-nav layout for student pages. Completion pages keep only the FairPlay branding. */
+export function StudentLayout({
+  children,
+  white,
+  navigation = true,
+}: {
+  children: ReactNode;
+  white?: boolean;
+  navigation?: boolean;
+}) {
   const navigate = useNavigate();
   // 2026-10-22: while the app is locked (the done page waiting for the unlock) there is nowhere to
   // go: no links, no Sign out (the apps refuse to leave the exam pages while locked anyway).
   const locked = useAppLocked();
+  // Completion pages must not regain dashboard links when the native app unlocks.
+  const showNavigation = navigation && !locked;
   const me = useMe("student");
   const features = useFeatures();
   const gradesOn = useStudentGradesOn();
@@ -82,7 +92,7 @@ export function StudentLayout({ children, white }: { children: ReactNode; white?
         className={`stu-topnav stu-topnav-sticky${header.scrolled ? " scrolled" : ""}`}
         data-testid="stu-topnav"
       >
-        {locked ? (
+        {!showNavigation ? (
           <span className="stu-logo" aria-label="FairPlay">
             <LogoMark size={32} />
             <Wordmark />
@@ -90,7 +100,7 @@ export function StudentLayout({ children, white }: { children: ReactNode; white?
         ) : (
           <StudentLogo />
         )}
-        {!locked && (
+        {showNavigation && (
           <>
             <nav aria-label="Main" className="stu-nav">
               <NavLink to="/student" end>
