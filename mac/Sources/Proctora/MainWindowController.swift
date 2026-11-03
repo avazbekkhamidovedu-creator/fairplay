@@ -855,18 +855,14 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     /// else as WebKit's own default (show what it can show, cancel the rest).
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-        if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url,
-           external.blocksExamServer(u) {
-            external.reportBlocked(u)
-            decisionHandler(.cancel)
-            return
-        }
-        if external.isCanvas, navigationResponse.isForMainFrame, let u = navigationResponse.response.url,
-           !isServerURL(u), !external.childAllows(u) {
-            if external.allows(u) {
-                external.reportBlocked(u)
+        if external.isCanvas,
+           !external.allowsCanvasResponse(navigationResponse.response.url,
+                                          mainFrame: navigationResponse.isForMainFrame) {
+            if let url = navigationResponse.response.url,
+               external.allows(url) || external.blocksExamServer(url) {
+                external.reportBlocked(url)
             } else {
-                EventLog.shared.record(.blockedNavigation(u.host ?? u.absoluteString))
+                EventLog.shared.record(.blockedNavigation(navigationResponse.response.url?.host ?? "unknown response"))
             }
             decisionHandler(.cancel)
             return
@@ -1604,3 +1600,4 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         return l
     }
 }
+

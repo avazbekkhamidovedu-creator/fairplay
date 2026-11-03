@@ -568,6 +568,34 @@ import Foundation
 
     private func page(_ path: String) -> URL { URL(string: "https://canvas.dku.edu" + path)! }
 
+    @Test func redirectedFrameResponsesAreCheckedBeforeDisplay() {
+        let c = makeController()
+        defer { c.abort() }
+        #expect(c.start(body: canvasBody()) == nil)
+        c.canvasCommitted(page("/courses/123/quizzes/456/take"))
+        for mainFrame in [true, false] {
+            #expect(!c.allowsCanvasResponse(nil, mainFrame: mainFrame))
+            for raw in ["https://evil.example.com/", "https://exam.example.com/student",
+                        "https://canvas.dku.edu/courses/999/quizzes/1",
+                        "https://canvas.dku.edu/conversations", "http://canvas.dku.edu/courses/123/quizzes/456",
+                        "https://user:password@canvas.dku.edu/courses/123/quizzes/456",
+                        "https://canvas.dku.edu:8443/courses/123/quizzes/456"] {
+                #expect(!c.allowsCanvasResponse(URL(string: raw), mainFrame: mainFrame), "\(raw)")
+            }
+            #expect(c.allowsCanvasResponse(page("/courses/123/quizzes/456/take"), mainFrame: mainFrame))
+            #expect(c.allowsCanvasResponse(URL(string: "https://login.microsoftonline.com/common/oauth2"), mainFrame: mainFrame))
+        }
+        // The embedded LTI helper is still usable, but cannot become the top-level page.
+        let helper = page("/api/lti/courses/123/jwt")
+        #expect(c.allowsCanvasResponse(helper, mainFrame: false))
+        #expect(!c.allowsCanvasResponse(helper, mainFrame: true))
+        #expect(c.allowsCanvasResponse(URL(string: "about:srcdoc"), mainFrame: false))
+        #expect(!c.allowsCanvasResponse(URL(string: "about:srcdoc"), mainFrame: true))
+        #expect(!c.allowsCanvasResponse(URL(string: "about:config"), mainFrame: false))
+        c.abort()
+        #expect(!c.allowsCanvasResponse(page("/courses/123/quizzes/456/take"), mainFrame: false))
+    }
+
     @Test func startValidatesTheScope() {
         let c = makeController()
         defer { c.abort() }
@@ -1313,3 +1341,4 @@ import Foundation
         #expect(r.actions.count == 1)
     }
 }
+

@@ -498,6 +498,14 @@ final class ExternalExamController {
         isCanvas && (CanvasPolicy.isBlank(url) || (allows(url) && !(mainFrame ? blocksMainFrame(url) : blocksExamHostFrame(url))))
     }
 
+    /// Recheck the final response URL, including redirected frames. An allowed initial
+    /// request does not authorize its redirect destination or a different Canvas course.
+    func allowsCanvasResponse(_ url: URL?, mainFrame: Bool) -> Bool {
+        guard isCanvas, let url else { return false }
+        if !mainFrame, url.absoluteString.lowercased() == "about:srcdoc" { return true }
+        return childAllows(url, mainFrame: mainFrame)
+    }
+
     /// During a Canvas exam no page may open any page of the exam server: it could end the exam or
     /// leave the lock. The app's own load of the hand-in page happens after the session is gone.
     func blocksExamServer(_ url: URL) -> Bool {
@@ -910,3 +918,4 @@ final class ExternalExamController {
         }
     }
 }
+
