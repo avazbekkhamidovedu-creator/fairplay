@@ -125,6 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main?.reload()
     }
 
+    @objc func openProtectedBrowser(_ sender: Any?) {
+        main?.showProtectedBrowser()
+    }
+
     private func buildMenu() {
         let bar = NSMenu()
 
@@ -154,6 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let reload = NSMenuItem(title: "Reload", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         reload.target = self
         view.addItem(reload)
+        let browser = NSMenuItem(title: "Protected Browser…", action: #selector(openProtectedBrowser(_:)), keyEquivalent: "")
+        browser.target = self
+        view.addItem(browser)
         viewItem.submenu = view
         bar.addItem(viewItem)
 
@@ -165,3 +172,4 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
+
