@@ -1,0 +1,12 @@
+{
+  "judge/utils/fairplay_editor.py": "ad78e4817822f15b662ee035f5ca04b5579806ec9c7c9ecef1fdd691724de4d2",
+  "judge/views/contests.py": "6b19fc394a1396a9fe69ae4cb15c81d867ea3e50741e07944381e5ba14dbb02d",
+  "judge/views/fairplay_discovery.py": null,
+  "judge/views/fairplay_launch.py": "a7191d03c5c89be9eacf0a4a4706816ac945012563d909d3e35b2dcefa64f6c3",
+  "judge/views/tests/test_fairplay_audience_editor.py": null,
+  "judge/views/tests/test_fairplay_discovery.py": null,
+  "judge/views/tests/test_fairplay_hiding.py": "bc7a59d53c5b33309e41ae465699918dde4aa3f1c8c0fd5c2b28e55a7974ddfd",
+  "templates/contest/fairplay_discovery.html": null,
+  "templates/contest/list-v2.html": "339c62724b1e7794ce856e19e4290af892fdbc6fce2767ae4ee05071b222355a",
+  "templates/contest/list.html": "54d529fea8539490a4f8d3790fda6c0070458d9349b43d9f2003e3a2682556a4"
+}

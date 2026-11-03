@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "expected_image": "dkuoj-local:fairplaylaunch-20261102-132316",
+  "expected_source": "/srv/dkuoj-fairplay-launch-20261102-132316/src",
+  "patch_sha256": "29e56190a672fe44ef4d211557561e5cae697ddeba4c079b6fd29733e9661b0f",
+  "optimized_discovery_sha256": "c500c80a5bc9961b67a078bac266daf75cbd185991eb3d81ffe0fdc1155e4fcd",
+  "current_verification": {
+    "tests": 17,
+    "result": "PASS",
+    "scope": "16 audience/discovery regressions plus identical query probe",
+    "log": "/Users/ava/fairplay-review/test-launch-runtime/native/discovery-optimized-verification.log"
+  },
+  "prior_related_verification": {
+    "tests": 73,
+    "result": "PASS",
+    "scope": "launch/editor/hiding regressions before final discovery-only batching"
+  },
+  "query_probe": {
+    "one_exam_before": 29,
+    "one_exam_after": 27,
+    "ten_exams_before": 225,
+    "ten_exams_after": 196,
+    "capacity_100_students": "UNVERIFIED; authorization queries remain linear"
+  },
+  "patch_replay": "PASS exact10 files; resulting hashes match after.json",
+  "safety": "No schema/settings/token/UUID/domain changes; no FairPlay server or native app source."
+}

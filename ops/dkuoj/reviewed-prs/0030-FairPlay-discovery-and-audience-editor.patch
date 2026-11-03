@@ -1,0 +1,500 @@
+diff --git a/judge/utils/fairplay_editor.py b/judge/utils/fairplay_editor.py
+--- a/judge/utils/fairplay_editor.py
++++ b/judge/utils/fairplay_editor.py
+@@ -28,6 +28,7 @@
+ MAX_WEBSITE_LINES = 100
+ MAX_WEBSITE_LENGTH = 2100
+ MAX_UPLOAD_DAYS = 7
++_AUDIENCE_FIELDS = {'classes', 'organizations', 'private_contestants', 'is_private', 'is_organization_private'}
+ BOX_LINK_RE = re.compile(r'https://duke(?:\.app)?\.box\.com/s/[A-Za-z0-9_-]+', re.IGNORECASE)
+ BOX_CHANGE_REFUSED = _('The Duke Box folder cannot be changed after students have started.')
+ 
+@@ -149,6 +150,7 @@
+     def __init__(self, want=None, settings=None, was_on=False):
+         self.want, self.settings, self.was_on = want, settings, was_on
+         self.audience_mode = None
++        self.audience_from_scope = False
+ 
+ 
+ def parse_fairplay_payload(contest, payload, restricted):
+@@ -163,8 +165,10 @@
+             plan.want = None
+     if payload.get('fairplay_settings') is not None and fairplay_enabled():
+         plan.settings = clean_settings(payload['fairplay_settings'], partial=True)
++    can_reconcile = not (_AUDIENCE_FIELDS & set(restricted))
++    plan.audience_from_scope = bool((_AUDIENCE_FIELDS | {'vis_mode'}) & payload.keys()) and can_reconcile
+     if payload.get('fairplay_audience_confirm') is True:
+-        if 'fairplay_audience_confirm' in restricted or 'fairplay_required' in restricted:
++        if 'fairplay_audience_confirm' in restricted or not can_reconcile:
+             raise ValidationError('You cannot confirm this FairPlay audience.')
+         mode = payload.get('fairplay_audience_mode')
+         if mode not in ('classes', 'organizations', 'selected'):
+@@ -178,7 +182,11 @@
+     on = plan.was_on if plan.want is None else plan.want
+     set_fairplay_exam(contest, on)
+     fairplay_check_contest(contest)
+-    if on and plan.audience_mode is not None:
++    if on and plan.audience_from_scope:
++        mode = ('classes' if contest.is_organization_private and contest.classes.exists() else
++                'organizations' if contest.is_organization_private else 'selected')
++        confirm_audience(contest, mode)
++    elif on and plan.audience_mode is not None:
+         confirm_audience(contest, plan.audience_mode)
+ 
+ 
+diff --git a/judge/views/contests.py b/judge/views/contests.py
+--- a/judge/views/contests.py
++++ b/judge/views/contests.py
+@@ -68,6 +68,7 @@
+     generic_message
+ from judge.views.fairplay_editor import fairplay_editor_saved
+ from judge.views.fairplay_launch import hidden_exam_launch
++from judge.views.fairplay_discovery import discovery_context
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -96,6 +97,11 @@
+ 
+ 
+ class ContestListMixin(object):
++    def render_to_response(self, context, **response_kwargs):
++        response = super().render_to_response(context, **response_kwargs)
++        response['Cache-Control'] = 'private, no-store'
++        return response
++
+     def get_queryset(self):
+         return Contest.get_visible_contests(self.request.user)
+ 
+@@ -164,6 +170,7 @@
+ 
+     def get_context_data(self, **kwargs):
+         context = super(ContestList, self).get_context_data(**kwargs)
++        context.update(discovery_context(self.request, self._now, filter_rows=True))
+         present, active, future = [], [], []
+         finished = set()
+         for contest in self._get_queryset().exclude(end_time__lt=self._now):
+@@ -272,6 +279,7 @@
+ 
+     def get_context_data(self, **kwargs):
+         context = super(ContestListV2, self).get_context_data(**kwargs)
++        context.update(discovery_context(self.request, self._now))
+         tf = self.time_filter
+         finished = set()
+         active = []
+@@ -323,7 +331,9 @@
+         # Filter options are scoped to the contests the user can actually see,
+         # so private course/class/tag names never leak to unauthorized visitors
+         # (the contest rows themselves are gated by get_visible_contests).
+-        visible_contests = self._get_queryset()
++        visible_contests = Contest.objects.filter(
++            Q(pk__in=self._get_queryset().values('pk')) |
++            Q(pk__in=context['fairplay_discovery_ids']))
+         context['organizations'] = Organization.objects.filter(contest__in=visible_contests).distinct()
+         context['classes'] = (
+             Class.objects.filter(contest__in=visible_contests)
+@@ -361,7 +371,7 @@
+             context['contest_authors'] = Profile.objects.none()
+             context['selected_author_profiles'] = []
+         context['selected_authors'] = selected_authors
+-        context['total_count'] = self._total_count(active, present, future)
++        context['total_count'] = self._total_count(active, present, future) + len(context['fairplay_discovery'])
+         context['sort_by'] = self.order
+         context['group'] = self.group
+         context['time_filter'] = tf
+diff --git a/judge/views/fairplay_discovery.py b/judge/views/fairplay_discovery.py
+new file mode 100644
+--- /dev/null
++++ b/judge/views/fairplay_discovery.py
+@@ -0,0 +1,53 @@
++from django.urls import reverse
++
++from judge.models import ContestParticipation
++from judge.utils.fairplay import fairplay_exams, fairplay_hidden_for
++from judge.views.fairplay_launch import student_can_launch
++
++
++def discovery_context(request, now, filter_rows=False):
++    rows, ids = [], []
++    if not request.user.is_authenticated:
++        return {'fairplay_discovery': rows, 'fairplay_discovery_ids': ids}
++    from judge.views.problem import user_can_see_problem_author_metadata
++    can_see_authors = user_can_see_problem_author_metadata(request.user)
++    exams = list(fairplay_exams().filter(is_visible=True).prefetch_related(
++        'tags', 'organizations', 'classes', 'authors'))
++    participations = {}
++    for participation in ContestParticipation.objects.filter(
++            contest__in=exams, user=request.profile, virtual=ContestParticipation.LIVE
++    ).select_related('contest').order_by('pk'):
++        participations.setdefault(participation.contest_id, participation)
++    for exam in exams:
++        if not fairplay_hidden_for(request.user, exam) or not student_can_launch(request, exam):
++            continue
++        ids.append(exam.pk)
++        status = ('upcoming' if exam.start_time > now else
++                  'past' if exam.end_time is not None and exam.end_time < now else 'ongoing')
++        participation = participations.get(exam.pk)
++        if participation is not None and not participation.ended:
++            status = 'active'
++        row = {'key': exam.key, 'name': exam.name, 'start': exam.start_time, 'end': exam.end_time,
++               'url': reverse('contest_fairplay_launch', args=[exam.key]), 'status': status,
++               'orgs': [organization.name for organization in exam.organizations.all()],
++               'classes': [klass.name for klass in exam.classes.all()],
++               'tags': [tag.name for tag in exam.tags.all() if not tag.name.startswith('fp-aud-')],
++               'authors': [author.id for author in exam.authors.all()] if can_see_authors else []}
++        if filter_rows and not _matches(request.GET, row, can_see_authors):
++            continue
++        rows.append(row)
++    return {'fairplay_discovery': rows, 'fairplay_discovery_ids': ids}
++
++
++def _matches(params, row, can_see_authors):
++    for param, field in (('org', 'orgs'), ('class', 'classes'), ('tag', 'tags'), ('author', 'authors')):
++        if param == 'author' and not can_see_authors:
++            continue
++        chosen = {part.strip() for raw in params.getlist(param) for part in raw.split(',') if part.strip()}
++        available = {str(value) for value in row[field]}
++        if chosen and (not chosen.issubset(available) if param == 'tag' else not chosen & available):
++            return False
++    if params.get('time') in ('upcoming', 'ongoing', 'active', 'past') and params['time'] != row['status']:
++        return False
++    haystack = (row['name'] + ' ' + row['key']).lower()
++    return all(term.strip().lower() in haystack for term in params.getlist('search'))
+diff --git a/judge/views/fairplay_launch.py b/judge/views/fairplay_launch.py
+--- a/judge/views/fairplay_launch.py
++++ b/judge/views/fairplay_launch.py
+@@ -15,15 +15,21 @@
+ from judge.utils.fairplay_audience import audience_descriptor
+ 
+ 
++def student_can_launch(request, contest):
++    return bool(request.user.is_authenticated and fairplay_enabled() and
++                is_fairplay_exam(contest) and contest.is_visible and
++                re.fullmatch(r'[A-Za-z0-9_-]{1,128}', contest.key) and
++                audience_descriptor(contest)['confirmed'] and
++                exam_roster(contest).filter(pk=request.profile.pk).exists())
++
++
+ def _contest(request, key):
+     contest = get_object_or_404(Contest, key=key)
+     if not request.user.is_authenticated or not fairplay_enabled() or not is_fairplay_exam(contest):
+         raise Http404()
+     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', contest.key):
+         raise Http404()
+-    if not contest.is_editable_by(request.user) and (
+-            not contest.is_visible or not audience_descriptor(contest)['confirmed'] or
+-            not exam_roster(contest).filter(pk=request.profile.pk).exists()):
++    if not contest.is_editable_by(request.user) and not student_can_launch(request, contest):
+         raise Http404()
+     return contest
+ 
+diff --git a/judge/views/tests/test_fairplay_audience_editor.py b/judge/views/tests/test_fairplay_audience_editor.py
+new file mode 100644
+--- /dev/null
++++ b/judge/views/tests/test_fairplay_audience_editor.py
+@@ -0,0 +1,111 @@
++from django.core.exceptions import ValidationError
++from django.test import TestCase
++from django.urls import reverse
++
++from judge.models.tests.util import create_user
++from judge.utils.fairplay_audience import audience_descriptor
++from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
++from judge.views.tests.fairplay_base import FAIRPLAY_ON
++from judge.views.tests.test_fairplay_editor import FairPlayEditorMixin
++
++
++@FAIRPLAY_ON
++class FairPlayAudienceEditorTestCase(FairPlayEditorMixin, TestCase):
++    def clear_confirmation(self):
++        self.exam.tags.remove(*self.exam.tags.filter(name__startswith='fp-aud-'))
++
++    def can_launch(self, user):
++        from django.test import Client
++        client = Client()
++        client.force_login(user)
++        return client.get(reverse('contest_fairplay_launch', args=[self.exam.key])).status_code
++
++    def test_form_has_no_duplicate_audience_question_or_js_payload(self):
++        response = self.client.get(reverse('contest_edit', args=[self.exam.key]))
++        for removed in ('FairPlay audience intent', 'fairplay_audience_mode', 'fairplay_audience_confirm'):
++            self.assertNotContains(response, removed)
++        self.assertContains(response, 'id="id_fairplay_required"')
++
++    def test_existing_scope_is_confirmed_by_normal_authorized_save(self):
++        self.clear_confirmation()
++        self.assertEqual(self.can_launch(self.student), 404)
++        response = self.save()
++        self.assertEqual(response.status_code, 200, response.content)
++        descriptor = audience_descriptor(self.reload_exam())
++        self.assertTrue(descriptor['confirmed'])
++        self.assertEqual(descriptor['mode'], 'classes')
++        self.assertEqual(self.can_launch(self.student), 200)
++        self.assertEqual(self.can_launch(self.outsider), 404)
++
++    def test_mode_comes_from_saved_relations_not_submitted_choice(self):
++        self.clear_confirmation()
++        response = self.save(fairplay_audience_mode='organizations')
++        self.assertEqual(response.status_code, 200, response.content)
++        self.assertEqual(audience_descriptor(self.reload_exam())['mode'], 'classes')
++        self.assertEqual(self.can_launch(self.outsider), 404)
++
++    def test_explicit_authorized_class_removal_reconciles_organization_scope(self):
++        response = self.save(classes=[])
++        self.assertEqual(response.status_code, 200, response.content)
++        descriptor = audience_descriptor(self.reload_exam())
++        self.assertEqual(descriptor['mode'], 'organizations')
++        self.assertTrue(descriptor['confirmed'])
++        self.assertEqual(self.can_launch(self.outsider), 200)
++        self.outsider.profile.organizations.clear()
++        self.assertEqual(self.can_launch(self.outsider), 404)
++
++    def test_out_of_band_deletion_and_settings_only_apply_remain_blocked(self):
++        self.exam.classes.clear()
++        self.assertFalse(audience_descriptor(self.reload_exam())['confirmed'])
++        exam = self.reload_exam()
++        plan = parse_fairplay_payload(exam, {'fairplay_required': True,
++                                            'fairplay_settings': {'open_book': True}}, set())
++        apply_fairplay_editor(exam, plan)
++        self.assertFalse(audience_descriptor(self.reload_exam())['confirmed'])
++        self.assertEqual(self.can_launch(self.outsider), 404)
++
++    def test_private_subset_intersects_class_membership(self):
++        response = self.save(vis_mode=Ellipsis, is_visible=True, is_private=True, is_organization_private=True,
++                             private_contestants=[self.student.profile.pk, self.outsider.profile.pk])
++        self.assertEqual(response.status_code, 200, response.content)
++        descriptor = audience_descriptor(self.reload_exam())
++        self.assertTrue(descriptor['confirmed'])
++        self.assertTrue(descriptor['selected_only'])
++        self.assertEqual(descriptor['mode'], 'classes')
++        self.assertEqual(self.can_launch(self.student), 200)
++        self.assertEqual(self.can_launch(self.classmate), 404)
++        self.assertEqual(self.can_launch(self.outsider), 404)
++
++    def test_selected_only_scope_is_derived_from_private_assignment(self):
++        response = self.save(vis_mode='private', private_contestants=[self.student.profile.pk])
++        self.assertEqual(response.status_code, 200, response.content)
++        descriptor = audience_descriptor(self.reload_exam())
++        self.assertTrue(descriptor['confirmed'])
++        self.assertEqual(descriptor['mode'], 'selected')
++        self.assertEqual(self.can_launch(self.student), 200)
++        self.assertEqual(self.can_launch(self.classmate), 404)
++
++    def test_invalid_empty_scope_rolls_back_scope_and_markers(self):
++        before = audience_descriptor(self.reload_exam())
++        for overrides in ({'classes': [], 'organizations': []},
++                          {'vis_mode': 'private', 'private_contestants': []}):
++            response = self.save(**overrides)
++            self.assertEqual(response.status_code, 400, response.content)
++            self.assertEqual(audience_descriptor(self.reload_exam()), before)
++        self.assertEqual(self.can_launch(self.student), 200)
++
++    def test_restricted_editor_cannot_reconfirm_via_scope_or_legacy_flag(self):
++        self.clear_confirmation()
++        curator = create_user(username='audience_curator',
++                              user_permissions=('edit_own_contest', 'contest_seb_requirement'))
++        self.exam.curators.add(curator.profile)
++        self.client.force_login(curator)
++        response = self.save()
++        self.assertEqual(response.status_code, 200, response.content)
++        self.assertFalse(audience_descriptor(self.reload_exam())['confirmed'])
++        response = self.save(fairplay_audience_confirm=True, fairplay_audience_mode='classes')
++        self.assertEqual(response.status_code, 400, response.content)
++        self.assertFalse(audience_descriptor(self.reload_exam())['confirmed'])
++        with self.assertRaises(ValidationError):
++            parse_fairplay_payload(self.reload_exam(), {'fairplay_audience_confirm': True,
++                                   'fairplay_audience_mode': 'classes'}, {'classes'})
+diff --git a/judge/views/tests/test_fairplay_discovery.py b/judge/views/tests/test_fairplay_discovery.py
+new file mode 100644
+--- /dev/null
++++ b/judge/views/tests/test_fairplay_discovery.py
+@@ -0,0 +1,106 @@
++from unittest import mock
++
++from django.test import RequestFactory, TestCase
++from django.urls import reverse
++from django.utils import timezone
++
++from judge.utils.fairplay import fairplay_hidden_for
++from judge.views.contests import ContestList
++from judge.views.fairplay_discovery import discovery_context
++from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, SECRETS
++
++
++@FAIRPLAY_ON
++class FairPlayDiscoveryTestCase(FairPlayDataMixin, TestCase):
++    def setUp(self):
++        super().setUp()
++        self.client.force_login(self.student)
++
++    def request(self, user=None, **params):
++        request = RequestFactory().get('/contests/', params)
++        request.user = user or self.student
++        request.profile = request.user.profile
++        return request
++
++    def rows(self, user=None, **params):
++        return discovery_context(self.request(user, **params), timezone.now(), filter_rows=True)['fairplay_discovery']
++
++    def test_enrolled_student_sees_metadata_and_existing_three_action_launch(self):
++        self.assertEqual([row['key'] for row in self.rows()], [self.exam.key])
++        response = self.client.get(reverse('contest_list'))
++        self.assertContains(response, 'Your FairPlay exams')
++        self.assertContains(response, reverse('contest_fairplay_launch', args=[self.exam.key]))
++        self.assertEqual(response['Cache-Control'], 'private, no-store')
++        for secret in SECRETS:
++            self.assertNotContains(response, secret)
++        self.assertNotContains(response, 'data-authors=')
++        self.assertNotContains(response, 'Write it.')
++        row = self.rows()[0]
++        for field, value in (('orgs', ','.join(row['orgs'])), ('classes', ','.join(row['classes'])),
++                             ('tags', ','.join(row['tags'])), ('status', row['status']),
++                             ('search', row['name'] + ' ' + row['key'])):
++            self.assertContains(response, 'data-%s="%s"' % (field, value))
++        self.assertEqual(response.context['total_count'], 1)
++        self.assertNotContains(response, '<div class="cl-empty">There are no assignments.</div>', html=True)
++        problem = self.client.get(reverse('problem_detail', args=[self.code.code]))
++        self.assertNotContains(problem, 'Write it.', status_code=problem.status_code)
++        self.assertIn(problem.status_code, (403, 404))
++        launch = self.client.get(reverse('contest_fairplay_launch', args=[self.exam.key]))
++        for label in ('Start exam in FairPlay', 'Download FairPlay', 'Download launch file'):
++            self.assertContains(launch, label)
++        self.assertTrue(fairplay_hidden_for(self.student, self.exam))
++        self.assertFalse(self.exam.is_accessible_by(self.student))
++
++    def test_legacy_list_uses_same_metadata(self):
++        request = self.client.get(reverse('contest_list')).wsgi_request
++        response = ContestList.as_view()(request)
++        response.render()
++        self.assertContains(response, 'Your FairPlay exams')
++        self.assertContains(response, reverse('contest_fairplay_launch', args=[self.exam.key]))
++        self.assertEqual(response['Cache-Control'], 'private, no-store')
++
++    def test_outsider_banned_and_revoked_membership_have_no_discovery(self):
++        self.assertEqual(self.rows(self.outsider), [])
++        self.exam.banned_users.add(self.student.profile)
++        self.assertEqual(self.rows(), [])
++        self.exam.banned_users.clear()
++        self.klass.members.remove(self.student.profile)
++        self.assertEqual(self.rows(), [])
++        self.assertEqual(self.client.get(reverse('contest_fairplay_launch', args=[self.exam.key])).status_code, 404)
++
++    def test_invisible_or_unconfirmed_audience_is_not_listed(self):
++        self.exam.is_visible = False
++        self.exam.save(update_fields=['is_visible'])
++        self.assertEqual(self.rows(), [])
++        self.exam.is_visible = True
++        self.exam.save(update_fields=['is_visible'])
++        self.exam.tags.remove(*self.exam.tags.filter(name__startswith='fp-aud-'))
++        self.assertEqual(self.rows(), [])
++
++    def test_metadata_filters_and_student_author_privacy(self):
++        row = self.rows()[0]
++        for field, value in (('org', row['orgs'][0]), ('class', row['classes'][0]),
++                             ('tag', 'fairplay'), ('search', self.exam.key), ('time', row['status'])):
++            self.assertEqual(len(self.rows(**{field: value})), 1)
++            self.assertEqual(self.rows(**{field: 'no-match'}), [] if field != 'time' else self.rows())
++        self.assertEqual(self.rows(time='upcoming'), [])
++        self.assertEqual(self.rows(author='999999')[0]['authors'], [])
++        with mock.patch('judge.views.problem.user_can_see_problem_author_metadata', return_value=True):
++            self.assertEqual(self.rows(author=str(self.teacher.profile.pk))[0]['authors'], [self.teacher.profile.pk])
++            self.assertEqual(self.rows(author='999999'), [])
++
++    def test_v2_filter_catalog_includes_only_authorized_exam_scope(self):
++        response = self.client.get(reverse('contest_list'))
++        self.assertIn(self.org, response.context['organizations'])
++        self.assertIn(self.klass, response.context['classes'])
++        self.client.force_login(self.outsider)
++        response = self.client.get(reverse('contest_list'))
++        self.assertEqual(response.context['fairplay_discovery'], [])
++        self.assertNotContains(response, reverse('contest_fairplay_launch', args=[self.exam.key]))
++
++    def test_anonymous_and_outsider_cannot_discover_or_open(self):
++        self.client.logout()
++        response = self.client.get(reverse('contest_list'))
++        self.assertEqual(response.context['fairplay_discovery'], [])
++        self.client.force_login(self.outsider)
++        self.assertEqual(self.client.get(reverse('contest_fairplay_launch', args=[self.exam.key])).status_code, 404)
+diff --git a/judge/views/tests/test_fairplay_hiding.py b/judge/views/tests/test_fairplay_hiding.py
+--- a/judge/views/tests/test_fairplay_hiding.py
++++ b/judge/views/tests/test_fairplay_hiding.py
+@@ -125,10 +125,16 @@
+                 self.assertTrue(hidden(client.get(url)))
+ 
+     def test_contest_lists_and_api(self):
+-        for user in (self.student, AnonymousUser()):
++        for user in (self.student, self.outsider, AnonymousUser()):
+             client = self.as_user(user)
+             with self.subTest(user=str(user)):
+-                self.assertNotContains(client.get(reverse('contest_list')), 'CS 101 Midterm')
++                response = client.get(reverse('contest_list'))
++                if user == self.student:
++                    self.assertContains(response, 'CS 101 Midterm')
++                    self.assertContains(response, reverse('contest_fairplay_launch', args=['fpexam']))
++                    self.assertNotContains(response, MARK)
++                else:
++                    self.assertNotContains(response, 'CS 101 Midterm')
+                 data = client.get('/api/v2/contests').json()
+                 self.assertNotIn('fpexam', [c['key'] for c in data['data']['objects']])
+                 self.assertEqual(client.get('/api/v2/contest/fpexam').status_code, 404)
+diff --git a/templates/contest/fairplay_discovery.html b/templates/contest/fairplay_discovery.html
+new file mode 100644
+--- /dev/null
++++ b/templates/contest/fairplay_discovery.html
+@@ -0,0 +1,17 @@
++{% if fairplay_discovery %}
++<section class="cl-section fairplay-discovery" aria-label="{{ _('Your FairPlay exams') }}">
++    <h2>{{ _('Your FairPlay exams') }}</h2>
++    {% for exam in fairplay_discovery %}
++    <article class="cl-row" data-key="{{ exam.key }}" data-status="{{ exam.status }}"
++             data-orgs="{{ exam.orgs|join(',') }}" data-classes="{{ exam.classes|join(',') }}"
++             data-tags="{{ exam.tags|join(',') }}"{% if exam.authors %} data-authors="{{ exam.authors|join(',') }}"{% endif %}
++             data-search="{{ exam.name }} {{ exam.key }}">
++        <div class="cl-main">
++            <a class="contest-list-title" href="{{ exam.url }}">{{ exam.name }}</a>
++            <div>{{ exam.start|date(_("M j, Y, G:i")) }}{% if exam.end %} – {{ exam.end|date(_("M j, Y, G:i")) }}{% endif %}</div>
++        </div>
++        <a class="btn btn-primary" href="{{ exam.url }}">{{ _('Open in FairPlay') }}</a>
++    </article>
++    {% endfor %}
++</section>
++{% endif %}
+diff --git a/templates/contest/list-v2.html b/templates/contest/list-v2.html
+--- a/templates/contest/list-v2.html
++++ b/templates/contest/list-v2.html
+@@ -908,6 +908,7 @@
+ 
+     {# ── Contest List ── #}
+     <div class="cl-list" id="contest-list">
++        {% include "contest/fairplay_discovery.html" %}
+         {% if group == 'course' %}
+             {% if course_groups %}
+                 {% for course_name, contests in course_groups.items() %}
+@@ -940,7 +941,7 @@
+                         {% endif %}
+                     </div>
+                 {% endif %}
+-            {% else %}
++            {% elif not fairplay_discovery %}
+                 <div class="cl-empty">{{ _('There are no assignments.') }}</div>
+             {% endif %}
+         {% else %}
+@@ -1018,7 +1019,7 @@
+         </div>
+ 
+         {# Nothing matches the current filters. #}
+-        {% if not active_participations and not current_contests and not future_contests and not past_contests %}
++        {% if not fairplay_discovery and not active_participations and not current_contests and not future_contests and not past_contests %}
+             <div class="cl-empty">{{ _('There are no assignments.') }}</div>
+         {% endif %}
+         {% endif %}
+diff --git a/templates/contest/list.html b/templates/contest/list.html
+--- a/templates/contest/list.html
++++ b/templates/contest/list.html
+@@ -142,6 +142,7 @@
+ {% endmacro %}
+ 
+ {% block body %}
++    {% include "contest/fairplay_discovery.html" %}
+     <div class="content-description">
+         {% if active_participations %}
+             <h4>{{ _('Active assignment') }}</h4>

@@ -1,0 +1,15 @@
+Run on the owner Mac:
+
+bash ~/fairplay-review/professor-reviewed-prs-bundle/run-from-mac.command
+
+The launcher uploads only this DKU OJ patch/helper bundle to ax19@10.200.31.64, then runs sudo --check and sudo --apply. Enter the professor account sudo password yourself. Type APPLY only when NO student is taking an exam.
+
+Expected live image: dkuoj-local:fairplaylaunch-20261102-132316
+Expected source: /srv/dkuoj-fairplay-launch-20261102-132316/src
+The exact 10-file delta is baseline-guarded against the live source; old staged launch/lifecycle/mode/menu changes are excluded. Patch 0030 adds enrolled-student metadata discovery, normal authorized audience-save confirmation, and safe relation/participation batching. It keeps question hiding and existing launch authorization.
+
+The script copies only existing DKU OJ source ON the professor VM into a new build, verifies the applied file hashes, builds a new image, runs audience/discovery/launch/editor/hiding tests against a separate MariaDB container, and checks Django before switching web/celery. It backs up the image environment and automatically rolls back the image if post-switch checks fail. Settings, bridge token, installation UUID, beta server domain, production data and schema are unchanged. No FairPlay application source is transferred. Old images/builds/backups/test containers are retained; nothing is deleted or pruned.
+
+Local evidence: optimized-source 17/17 tests passed (16 regressions + query probe); prior related launch/editor/hiding 73/73 passed. Patch replay, shell syntax and embedded Python syntax verified. Query counts improved 29 to27 (one exam), 225 to196 (ten exams). Authorization work still scales with visible exams; 100-student capacity is NOT verified by these tests. This is a guarded beta deployment, not a capacity certification.
+
+The old user-provided staged tree is not committed or pushed by this bundle. Run --check alone to verify without building, testing, restarting or changing settings.
