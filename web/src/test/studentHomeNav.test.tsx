@@ -10,7 +10,7 @@ const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").repla
 
 beforeEach(() => {
   localStorage.clear();
-  setToken(`${b64("7:student:9999999999:0:abc12345")}.sig`, "student");
+  setToken("student", `${b64("7:student:9999999999:0:abc12345")}.sig`);
   _resetFeaturesForTests();
   vi.stubGlobal(
     "fetch",
