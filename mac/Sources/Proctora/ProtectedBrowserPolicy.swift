@@ -47,8 +47,14 @@ struct ProtectedBrowserPolicy {
     var contentRules: String {
         var rules: [[String: Any]] = [["trigger": ["url-filter": ".*"], "action": ["type": "block"]]]
         for origin in origins.sorted() {
-            let pattern = "^" + NSRegularExpression.escapedPattern(for: origin) + "(:443)?([/?#]|$)"
-            rules.append(["trigger": ["url-filter": pattern], "action": ["type": "ignore-previous-rules"]])
+            // WebKit's content-blocker regex grammar does not support alternation.
+            // Network URLs are canonicalized with '/' after the authority. Keep the
+            // default and explicit 443 forms separate; never allow a generic ':'.
+            let escaped = origin.replacingOccurrences(of: ".", with: "\\.")
+            for suffix in ["/", ":443/"] {
+                rules.append(["trigger": ["url-filter": "^" + escaped + suffix],
+                              "action": ["type": "ignore-previous-rules"]])
+            }
         }
         return String(data: try! JSONSerialization.data(withJSONObject: rules), encoding: .utf8)!
     }
