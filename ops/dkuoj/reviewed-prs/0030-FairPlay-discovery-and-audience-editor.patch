@@ -436,6 +436,39 @@ diff --git a/judge/views/tests/test_fairplay_hiding.py b/judge/views/tests/test_
                  data = client.get('/api/v2/contests').json()
                  self.assertNotIn('fpexam', [c['key'] for c in data['data']['objects']])
                  self.assertEqual(client.get('/api/v2/contest/fpexam').status_code, 404)
+diff --git a/templates/contest/create.html b/templates/contest/create.html
+--- a/templates/contest/create.html
++++ b/templates/contest/create.html
+@@ -769,10 +769,6 @@
+                 }
+                 delete data.exam_lock;
+                 Object.keys(data).forEach(function (f) { if (f.indexOf('fairplay_') === 0 && f !== 'fairplay_required') delete data[f]; });
+-                if (lockChoice && lockChoice.value === 'fairplay' && fd.has('fairplay_audience_confirm')) {
+-                    data.fairplay_audience_confirm = true;
+-                    data.fairplay_audience_mode = fd.get('fairplay_audience_mode');
+-                }
+                 // Open exam: only changed values go to FairPlay; switching it off clears them.
+                 var openExam = document.getElementById('fp-open-exam');
+                 if (openExam && lockChoice && lockChoice.value === 'fairplay') {
+@@ -3204,18 +3200,6 @@
+                                     <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
+                                         <input type="radio" name="exam_lock" value="fairplay" id="id_fairplay_required"{% if exam_lock == 'fairplay' %} checked{% endif %}> {{ _('FairPlay') }}
+                                     </label>
+-                                <div class="field" style="margin: 12px 0">
+-                                    <label for="id_fairplay_audience_mode">{{ _('FairPlay audience intent') }}</label>
+-                                    <select name="fairplay_audience_mode" id="id_fairplay_audience_mode">
+-                                        <option value="">{{ _('Choose the intended audience') }}</option>
+-                                        <option value="classes"{% if fairplay_audience and fairplay_audience.mode == 'classes' %} selected{% endif %}>{{ _('Selected classes') }}</option>
+-                                        <option value="organizations"{% if fairplay_audience and fairplay_audience.mode == 'organizations' %} selected{% endif %}>{{ _('Selected organizations (no classes)') }}</option>
+-                                        <option value="selected"{% if fairplay_audience and fairplay_audience.mode == 'selected' %} selected{% endif %}>{{ _('Explicitly selected students only') }}</option>
+-                                    </select>
+-                                    <label><input type="checkbox" name="fairplay_audience_confirm"> {{ _('I confirm this audience matches the classes, organizations and student restrictions saved above.') }}</label>
+-                                    <div class="helptext">{{ _('Existing unconfirmed audiences stay blocked until you explicitly confirm. Removing the last class never grants access to the whole organization.') }}</div>
+-                                    {% if fairplay_audience %}<div class="helptext">{{ _('Saved scope: %(classes)d classes, %(orgs)d organizations.', classes=fairplay_audience.class_ids|length, orgs=fairplay_audience.organization_ids|length) }} {{ _('Confirmed') if fairplay_audience.confirmed else _('Needs confirmation') }}</div>{% endif %}
+-                                </div>
+                                     {% endif %}
+                                     <div id="lock-error" style="display:none;color:#b91c1c;font-size:13px;margin-top:0.3rem;"></div>
+                                 </div>
 diff --git a/templates/contest/fairplay_discovery.html b/templates/contest/fairplay_discovery.html
 new file mode 100644
 --- /dev/null

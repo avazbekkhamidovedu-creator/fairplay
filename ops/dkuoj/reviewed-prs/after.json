@@ -6,6 +6,7 @@
   "judge/views/tests/test_fairplay_audience_editor.py": "c3ba6a06bbea5804813ff51f8403c138f53216b7cc8e746257c1809479b6a204",
   "judge/views/tests/test_fairplay_discovery.py": "f32d6f476adbf4efff790095980a29d61d488415bc4a65f6ca2a7d80fc29324d",
   "judge/views/tests/test_fairplay_hiding.py": "07c1ae69832c532bd5b61e1f38397d951ffa21bc528f33a246458c9c9794bf53",
+  "templates/contest/create.html": "f9e22e31111ae7ed5fd2207abd1dd2790005ac0405f681c84fdbee4b18f9a569",
   "templates/contest/fairplay_discovery.html": "9cb5d5d645da7b63094f921bfa38c5d66b304fa03573b52cbc931e07700b07a4",
   "templates/contest/list-v2.html": "f06ccddd86b576e42b8c91cd034ac51359bcad2ded9a4f8dcfaa50f450bda5a4",
   "templates/contest/list.html": "66e4a3ace3aeef6ad203dde914ffdc05f45f8a482638ec8c80c8331543e8e815"

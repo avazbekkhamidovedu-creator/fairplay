@@ -2,18 +2,18 @@
   "passed": true,
   "expected_image": "dkuoj-local:fairplaylaunch-20261102-132316",
   "expected_source": "/srv/dkuoj-fairplay-launch-20261102-132316/src",
-  "patch_sha256": "29e56190a672fe44ef4d211557561e5cae697ddeba4c079b6fd29733e9661b0f",
+  "patch_sha256": "7d20d6287805e5f48cee4e6e8df8501fa348d120884e56a917deea5b784d8c83",
   "optimized_discovery_sha256": "c500c80a5bc9961b67a078bac266daf75cbd185991eb3d81ffe0fdc1155e4fcd",
   "current_verification": {
-    "tests": 17,
+    "tests": 102,
     "result": "PASS",
-    "scope": "16 audience/discovery regressions plus identical query probe",
-    "log": "/Users/ava/fairplay-review/test-launch-runtime/native/discovery-optimized-verification.log"
-  },
-  "prior_related_verification": {
-    "tests": 73,
-    "result": "PASS",
-    "scope": "launch/editor/hiding regressions before final discovery-only batching"
+    "duration_seconds": 198.097,
+    "scope": "EXACT full professor baseline plus corrected patch; audience/discovery/launch/editor/hiding",
+    "candidate_source": "/private/tmp/fairplay-oj-corrected-candidate-0030",
+    "base_dir_and_template_origin": "verified inside exact candidate",
+    "all_11_after_hashes": "verified before/after test",
+    "patch_sha256": "7d20d6287805e5f48cee4e6e8df8501fa348d120884e56a917deea5b784d8c83",
+    "log": "/Users/ava/fairplay-review/test-launch-runtime/native/exact0030-corrected102.log"
   },
   "query_probe": {
     "one_exam_before": 29,
@@ -22,6 +22,22 @@
     "ten_exams_after": 196,
     "capacity_100_students": "UNVERIFIED; authorization queries remain linear"
   },
-  "patch_replay": "PASS exact10 files; resulting hashes match after.json",
-  "safety": "No schema/settings/token/UUID/domain changes; no FairPlay server or native app source."
+  "patch_replay": "PASS exact11 files; after.json hashes match",
+  "safety": "No schema/settings/token/UUID/domain changes; no FairPlay server or native app source.",
+  "exact_candidate": "/private/tmp/fairplay-oj-corrected-candidate-0030",
+  "failed_bundle_preserved": "/Users/ava/fairplay-review/professor-reviewed-prs-bundle-failed-before-template-fix-20261103-134722",
+  "candidate_gate": "PASS EXACT reconstructed deployed source + corrected11-filepatch, all102tests",
+  "failed_candidate_reproduction": {
+    "tests": 1,
+    "result": "EXPECTED FAIL",
+    "reason": "obsolete FairPlay audience intent panel in deployed create.html omitted by original10filepatch",
+    "log": "/Users/ava/fairplay-review/test-launch-runtime/native/exact0030-old-single.log"
+  },
+  "baseline_audit": {
+    "method": "full local/deployed filesystem hashes, not git status",
+    "deployed_files": 1044,
+    "local_files": 1015,
+    "runtime_python_template_delta_files": 11,
+    "preserved_other_differences": "deployed Dockerfile, documentation, vendor assets, backup script remain unchanged"
+  }
 }

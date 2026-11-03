@@ -6,6 +6,7 @@
   "judge/views/tests/test_fairplay_audience_editor.py": null,
   "judge/views/tests/test_fairplay_discovery.py": null,
   "judge/views/tests/test_fairplay_hiding.py": "bc7a59d53c5b33309e41ae465699918dde4aa3f1c8c0fd5c2b28e55a7974ddfd",
+  "templates/contest/create.html": "f38af2f8279a02016518803ce394374bab4775cf725a12eb7e80914ffe6bef24",
   "templates/contest/fairplay_discovery.html": null,
   "templates/contest/list-v2.html": "339c62724b1e7794ce856e19e4290af892fdbc6fce2767ae4ee05071b222355a",
   "templates/contest/list.html": "54d529fea8539490a4f8d3790fda6c0070458d9349b43d9f2003e3a2682556a4"
