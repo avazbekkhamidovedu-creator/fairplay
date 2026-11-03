@@ -78,6 +78,19 @@ class OjError(Exception):
         return self.status in (401, 403, 404)
 
 
+class UnconfirmedSubmission(OjError):
+    """A successful HTTP response without the required hand-in receipt.
+
+    The hand-in may already be filed. Retry its frozen attempt id and payload,
+    which DKU OJ's submission contract makes idempotent, until confirmed.
+    Keep the real HTTP status so the teacher can diagnose the broken response.
+    """
+
+    @property
+    def retryable(self) -> bool:
+        return True
+
+
 def _retry_after(resp: httpx.Response) -> float | None:
     ra = resp.headers.get("retry-after")
     if not ra:
@@ -260,7 +273,14 @@ class DkuojClient:
     async def submit(self, key: str, body: dict, attempts: int = MAX_ATTEMPTS) -> dict:
         resp = await self.request("POST", f"exams/{key}/submissions", json=body, attempts=attempts,
                                   max_bytes=MAX_SMALL_BYTES)
-        return self._json(resp)
+        try:
+            data = self._json(resp)
+        except OjError:
+            raise UnconfirmedSubmission("DKU OJ did not return a valid hand-in receipt", resp.status_code) from None
+        receipt = data.get("receipt")
+        if not isinstance(receipt, str) or not receipt.strip():
+            raise UnconfirmedSubmission("DKU OJ did not return a valid hand-in receipt", resp.status_code)
+        return data
 
     async def roster(self, class_id: int) -> dict:
         """GET classes/<id>/roster (v2 §2): {class, course, students: [{username, first_name,

@@ -64,7 +64,7 @@ function TrialDone({ how }: { how: "stopped" | "finished" }) {
       </div>
     );
   return (
-    <StudentLayout>
+    <StudentLayout navigation={false}>
       <main className="stu-main">
         <section className="stu-done" aria-labelledby="trial-done-h" role="status">
           <h1 id="trial-done-h">{how === "stopped" ? "Sample questions stopped" : "Sample questions finished"}</h1>
@@ -117,7 +117,7 @@ function ExamDone({ fromState }: { fromState: DoneState | null }) {
   }, [attemptId, info]);
 
   return (
-    <StudentLayout>
+    <StudentLayout navigation={false}>
       <main className="stu-main">
         <section className="stu-done" aria-labelledby="done-h">
           <span className="stu-done-check" aria-hidden="true">
