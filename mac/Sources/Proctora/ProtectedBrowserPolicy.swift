@@ -163,3 +163,21 @@ struct ProtectedBrowserNavigation {
         }
     }
 }
+
+struct ProtectedBrowserPolicyDenial {
+    let viewID: ObjectIdentifier
+    let navigationID: ObjectIdentifier?
+    let target: URL?
+
+    init(view: AnyObject, navigation: AnyObject?, target: URL?) {
+        viewID = ObjectIdentifier(view)
+        navigationID = navigation.map(ObjectIdentifier.init)
+        self.target = target
+    }
+
+    func matches(view: AnyObject, navigation: AnyObject?, failedURL: URL?) -> Bool {
+        guard ObjectIdentifier(view) == viewID else { return false }
+        if let navigationID { return navigation.map(ObjectIdentifier.init) == navigationID }
+        return target != nil && target == failedURL
+    }
+}

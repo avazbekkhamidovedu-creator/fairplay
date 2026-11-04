@@ -184,6 +184,46 @@ import Network
     }
 
 
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["FAIRPLAY_CANVAS_NETWORK_TEST"] == "1"))
+    func publicCanvasNavigationWithSimulatedLock() async throws {
+        for (label, start, extra) in [
+            ("strict", "https://canvas.duke.edu/", ""),
+            ("portal", "https://canvas.duke.edu/", "https://go.canvas.duke.edu, https://shib.oit.duke.edu"),
+            ("saml", "https://canvas.duke.edu/login/saml", "https://go.canvas.duke.edu, https://shib.oit.duke.edu")
+        ] {
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+            var locked = false
+            var events: [String] = []
+            var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true }, ownsLock: { locked }, release: { locked = false }, load: { view, url in view.load(URLRequest(url: url)) })
+            effects.diagnostic = { event in events.append(event) }
+            let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+            controller.show(in: root)
+            let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+            fields[0].stringValue = start
+            fields[1].stringValue = extra
+            try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" }).performClick(nil)
+            for _ in 0..<1000 {
+                let view = descendants(root).compactMap { $0 as? WKWebView }.first
+                if events.contains(where: { $0.contains("navigation-failed") }) || (view?.isLoading == false && view?.title?.isEmpty == false) { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            for event in events { print("Canvas " + label + " " + event) }
+            let view = descendants(root).compactMap { $0 as? WKWebView }.first
+            print("Canvas " + label + " final-origin=" + (view?.url.flatMap(ProtectedBrowserPolicy.origin) ?? "unavailable") + " has-title=" + String(view?.title?.isEmpty == false))
+            #expect(!events.isEmpty)
+            if label == "strict" {
+                #expect(events.contains { $0.contains("policy-denied") })
+                #expect(events.contains { $0.contains("policy-cancelled domain=WebKitErrorDomain code=102") })
+                #expect(!events.contains { $0.contains("navigation-failed") })
+                let message = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
+                #expect(message.contains("Blocked site: https://go.canvas.duke.edu"))
+                #expect(!message.contains("Page failed to load"))
+            }
+            else { #expect(view?.title?.isEmpty == false) }
+            controller.lockEnded()
+        }
+    }
+
     @Test(.enabled(if: Config.isDevBuild)) func actualLoopbackHTTPAndBlockedTargetStayExact() async throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -258,6 +298,9 @@ import Network
         let messages = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
         #expect(messages.contains("NSURLErrorDomain (-1004)"))
         #expect(!messages.contains("never-use"))
+        controller.webView(view, didFailProvisionalNavigation: nil,
+                           withError: NSError(domain: "WebKitErrorDomain", code: 102))
+        #expect(descendants(root).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("WebKitErrorDomain (102)") })
         reload.performClick(nil)
         #expect(requests.count == 2)
         #expect(requests.allSatisfy { $0.absoluteString == "https://university.example.edu/initial" })
@@ -329,6 +372,7 @@ import Network
         // Detached child callbacks must not change the current parent's presentation.
         let statusBefore = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue)
         controller.webView(child, didFinish: nil)
+        controller.webView(child, didFailProvisionalNavigation: nil, withError: NSError(domain: "WebKitErrorDomain", code: 102))
         #expect(descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue) == statusBefore)
         _ = try await view.evaluateJavaScript("window.open('about:blank', 'second'); true")
         #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 2 })
@@ -344,5 +388,20 @@ import Network
         #expect(released)
         #expect(!locked)
         #expect(root.subviews.isEmpty)
+    }
+}
+
+@Suite struct ProtectedBrowserPolicyDenialTests {
+    @Test func onlySameViewAndCancelledNavigationMatch() {
+        let view = NSObject(), otherView = NSObject(), navigation = NSObject(), next = NSObject()
+        let target = URL(string: "https://blocked.example.edu/path?not-logged")!
+        let denial = ProtectedBrowserPolicyDenial(view: view, navigation: navigation, target: target)
+        #expect(denial.matches(view: view, navigation: navigation, failedURL: nil))
+        #expect(!denial.matches(view: view, navigation: next, failedURL: target))
+        #expect(!denial.matches(view: otherView, navigation: navigation, failedURL: target))
+        let early = ProtectedBrowserPolicyDenial(view: view, navigation: nil, target: target)
+        #expect(early.matches(view: view, navigation: nil, failedURL: target))
+        #expect(!early.matches(view: view, navigation: nil, failedURL: nil))
+        #expect(!early.matches(view: view, navigation: nil, failedURL: URL(string: "https://other.example.edu")))
     }
 }

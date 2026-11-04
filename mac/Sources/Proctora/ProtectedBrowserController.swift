@@ -29,6 +29,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var backButton: NSButton?
     private var reloadButton: NSButton?
     private var navigationState: ProtectedBrowserNavigation?
+    private var activeNavigation: WKNavigation?
+    private var policyDenial: ProtectedBrowserPolicyDenial?
     private var ruleIdentifier: String?
     private var pendingRuleIdentifier: String?
     private var held = false
@@ -42,6 +44,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let release: () -> Void
         let load: (WKWebView, URL) -> Void
         var configuration: (WKContentRuleList) -> WKWebViewConfiguration = ProtectedBrowserController.websiteConfiguration
+        var diagnostic: (String) -> Void = { DebugLog.log("protected-browser", $0) }
         static var live: Effects {
             Effects(checks: { LockdownController.shared.preflightProblems().map { $0.message } },
                     acquire: {
@@ -286,6 +289,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     private func discardBrowser() {
+        activeNavigation = nil
+        policyDenial = nil
         let pages = parents + (browser.map { [$0] } ?? [])
         parents.removeAll()
         browser = nil
@@ -323,7 +328,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         pendingRuleIdentifier = nil
     }
 
+    private func diagnostic(_ event: String, url: URL?) {
+        effects.diagnostic(event + " origin=" + (url.flatMap(ProtectedBrowserPolicy.origin) ?? "unavailable"))
+    }
+
     private func refuse(_ url: URL? = nil) {
+        diagnostic("policy-denied", url: url)
         if let origin = url.flatMap(ProtectedBrowserPolicy.origin) {
             notice?.stringValue = "Blocked site: " + origin + ". Leave and add this exact origin only if you trust it."
         } else {
@@ -340,17 +350,26 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             && action.request.url?.absoluteString == "about:blank"
         guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
               (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
-            refuse(action.request.url); decisionHandler(.cancel); return
+            if webView === browser, lockIsOwned {
+                if action.targetFrame?.isMainFrame == true {
+                    policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: action.request.url)
+                }
+                refuse(action.request.url)
+            }
+            decisionHandler(.cancel); return
         }
         if webView === browser, action.targetFrame?.isMainFrame == true,
            let url = action.request.url, policy?.allows(url, mainFrame: true) == true {
+            policyDenial = nil
             navigationState?.requested(url)
+            diagnostic("navigation-allowed", url: url)
         }
         decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         guard webView === browser, lockIsOwned else { return }
+        activeNavigation = navigation
         dialogs.cancel()
         navigationState?.started()
         updateNavigation()
@@ -360,6 +379,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard webView === browser, lockIsOwned, let url = webView.url,
               policy?.allows(url, mainFrame: true) == true else { return }
         navigationState?.committed(url)
+        diagnostic("navigation-committed", url: url)
         updateNavigation()
     }
 
@@ -421,7 +441,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             && response.response.url?.absoluteString == "about:blank"
         guard tracked(webView), lockIsOwned, response.canShowMIMEType, !AllowedSites.isAttachment(contentDisposition: disposition),
               initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
-            refuse(response.response.url); decisionHandler(.cancel); return
+            if webView === browser, lockIsOwned {
+                if response.isForMainFrame {
+                    policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: response.response.url)
+                }
+                refuse(response.response.url)
+            }
+            decisionHandler(.cancel); return
         }
         decisionHandler(.allow)
     }
@@ -447,6 +473,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         child.allowsLinkPreview = false
         webView.isHidden = true
         parents.append(webView)
+        activeNavigation = nil
+        policyDenial = nil
         browser = child
         overlay?.addSubview(child, positioned: .below, relativeTo: webView)
         navigationState = ProtectedBrowserNavigation(startURL: opener)
@@ -481,6 +509,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         child.uiDelegate = nil
         child.removeFromSuperview()
         browser = parent
+        activeNavigation = nil
+        policyDenial = nil
         parent.isHidden = false
         navigationState = ProtectedBrowserNavigation(startURL: parent.url ?? policy!.startURL)
         if !parent.isLoading { navigationState?.finished() }
@@ -501,16 +531,23 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        navigationFailed(webView, error: error)
+        navigationFailed(webView, navigation: navigation, error: error)
     }
 
-    private func navigationFailed(_ webView: WKWebView, error: Error) {
+    private func navigationFailed(_ webView: WKWebView, navigation: WKNavigation?, error: Error) {
         guard webView === browser, lockIsOwned else { return }
         let failure = error as NSError
         guard failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled else { return }
-        let domain = [NSURLErrorDomain, WKError.errorDomain].contains(failure.domain) ? failure.domain : "NavigationError"
+        let domain = [NSURLErrorDomain, WKError.errorDomain, "WebKitErrorDomain"].contains(failure.domain) ? failure.domain : "NavigationError"
         let failedURL = (failure.userInfo[NSURLErrorFailingURLErrorKey] as? URL)
             ?? (failure.userInfo[NSURLErrorFailingURLStringErrorKey] as? String).flatMap(URL.init(string:))
+        if failure.domain == "WebKitErrorDomain", failure.code == 102,
+           let denial = policyDenial, denial.matches(view: webView, navigation: navigation, failedURL: failedURL) {
+            policyDenial = nil
+            diagnostic("policy-cancelled domain=WebKitErrorDomain code=102", url: denial.target)
+            return
+        }
+        diagnostic("navigation-failed domain=" + domain + " code=" + String(failure.code), url: failedURL)
         let blockedOrigin = failedURL.flatMap(ProtectedBrowserPolicy.origin).flatMap { origin in
             policy?.allows(failedURL, mainFrame: true) == false ? " · Blocked site: " + origin : nil
         } ?? ""
@@ -519,6 +556,6 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        navigationFailed(webView, error: error)
+        navigationFailed(webView, navigation: navigation, error: error)
     }
 }
