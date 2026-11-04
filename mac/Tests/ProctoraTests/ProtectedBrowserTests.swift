@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import WebKit
 import AppKit
+import Network
 @testable import Proctora
 
 @Suite struct ProtectedBrowserPolicyTests {
@@ -25,9 +26,21 @@ import AppKit
         #expect(policy.allows(URL(string: "about:srcdoc"), mainFrame: false))
     }
 
+    @Test func exactLocalAddressesPortsAndHttpConsent() throws {
+        let secure = try #require(ProtectedBrowserPolicy(start: "intranet:8443/exam", additionalOrigins: "https://localhost, https://127.0.0.1:9443, https://[::1]:9443", forbiddenOrigin: server))
+        #expect(secure.startURL.absoluteString == "https://intranet:8443/exam")
+        for raw in ["https://intranet:8443/x", "https://localhost:443/", "https://127.0.0.1:9443/", "https://[::1]:9443/"] { #expect(secure.allows(URL(string: raw), mainFrame: true)) }
+        for raw in ["http://intranet:8443/", "https://intranet/", "https://intranet:8444/", "https://[::1]:9444/", "https://intranet.evil:8443/"] { #expect(!secure.allows(URL(string: raw), mainFrame: true)) }
+        #expect(ProtectedBrowserPolicy(start: "http://localhost:8765", additionalOrigins: "", forbiddenOrigin: server) == nil)
+        #expect(ProtectedBrowserPolicy(start: "http://public.example.edu", additionalOrigins: "", forbiddenOrigin: server, allowHTTP: true) == nil)
+        let local = try #require(ProtectedBrowserPolicy(start: "http://localhost:8765/page", additionalOrigins: "http://intranet, http://[::1]:9000", forbiddenOrigin: server, allowHTTP: true))
+        #expect(local.allows(URL(string: "http://intranet:80/"), mainFrame: true))
+        for raw in ["http://localhost:8766/", "https://localhost:8765/", "http://user:pass@localhost:8765/", "http://intranet:81/"] { #expect(!local.allows(URL(string: raw), mainFrame: true)) }
+        #expect(ProtectedBrowserPolicy.normalizedURL("example.edu")?.scheme == "https")
+    }
+
     @Test func malformedLocalConfigurationIsRejected() {
-        for start in ["http://university.example.edu", "https://127.0.0.1", "https://localhost",
-                      "https://fairplay.example.edu/", "https://university.example.edu:8443", "https://*.example.edu"] {
+        for start in ["http://university.example.edu", "https://fairplay.example.edu/", "https://*.example.edu", "https://bad..host", "https://127.1", "https://host:0", "https://host:65536"] {
             #expect(ProtectedBrowserPolicy(start: start, additionalOrigins: "", forbiddenOrigin: server) == nil)
         }
         for origin in ["https://fairplay.example.edu", "https://login.example.edu/path", "https://*.example.edu",
@@ -105,7 +118,7 @@ import AppKit
 
     @Test func actualWebKitCompilesResourceRestrictions() async throws {
         let policy = try #require(ProtectedBrowserPolicy(start: "https://university.example.edu/",
-            additionalOrigins: "https://login.example.edu", forbiddenOrigin: URL(string: "https://fairplay.example.edu")!))
+            additionalOrigins: "https://login.example.edu, https://[::1]:9443, https://intranet:8080", forbiddenOrigin: URL(string: "https://fairplay.example.edu")!))
         let id = "fairplay.protected-browser.test." + UUID().uuidString
         let result: WKContentRuleList = try await withCheckedThrowingContinuation { continuation in
             WKContentRuleListStore.default().compileContentRuleList(forIdentifier: id, encodedContentRuleList: policy.contentRules) { rules, error in
@@ -171,6 +184,53 @@ import AppKit
     }
 
 
+    @Test(.enabled(if: Config.isDevBuild)) func actualLoopbackHTTPAndBlockedTargetStayExact() async throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters, on: .any)
+        let queue = DispatchQueue(label: "protected-browser.loopback-test")
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { _, _, _, _ in
+                let body = "<html><title>Loopback HTTP fixture</title><body>Local fixture only</body></html>"
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
+                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.start(queue: queue)
+        defer { listener.cancel() }
+        #expect(await waitUntil { (listener.port?.rawValue ?? 0) > 0 })
+        let port = try #require(listener.port)
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        var locked = false
+        let effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true }, ownsLock: { locked }, release: { locked = false }, load: { view, url in view.load(URLRequest(url: url)) })
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        defer { controller.lockEnded() }
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        fields[0].stringValue = "http://127.0.0.1:\(port.rawValue)/"
+        let buttons = descendants(root).compactMap { $0 as? NSButton }
+        let consent = try #require(buttons.first { $0.title.hasPrefix("Allow local/intranet HTTP") })
+        #expect(consent.state == .off)
+        consent.state = .on
+        try #require(buttons.first { $0.title == "Lock and open" }).performClick(nil)
+        let loaded = await waitUntil { self.descendants(root).compactMap { $0 as? WKWebView }.first?.title == "Loopback HTTP fixture" }
+        let status = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined(separator: " | ")
+        #expect(loaded, "Local fixture status: \(status)")
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        #expect(view.url?.scheme == "http")
+        #expect(view.url?.port == Int(port.rawValue))
+        #expect(locked)
+        let blockedPort = port.rawValue == 65535 ? 65534 : port.rawValue + 1
+        _ = try await view.evaluateJavaScript("location.href = 'http://127.0.0.1:\(blockedPort)/secret?token=hidden'; true")
+        #expect(await waitUntil { self.descendants(root).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Blocked site: http://127.0.0.1:\(blockedPort)") } })
+        let messages = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
+        #expect(!messages.contains("secret"))
+        #expect(!messages.contains("hidden"))
+        try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Leave and unlock" }).performClick(nil)
+        #expect(!locked)
+    }
+
     @Test func firstLoadFailureRetriesAllowedRequestWithoutCommittedDocument() async throws {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
         var locked = false
@@ -195,6 +255,9 @@ import AppKit
         controller.webView(view, didFailProvisionalNavigation: nil, withError: failure)
         let reload = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Reload" })
         #expect(reload.isEnabled)
+        let messages = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
+        #expect(messages.contains("NSURLErrorDomain (-1004)"))
+        #expect(!messages.contains("never-use"))
         reload.performClick(nil)
         #expect(requests.count == 2)
         #expect(requests.allSatisfy { $0.absoluteString == "https://university.example.edu/initial" })

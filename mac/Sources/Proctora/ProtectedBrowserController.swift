@@ -23,6 +23,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var flow = ProtectedBrowserFlow()
     private var startField: NSTextField?
     private var originsField: NSTextField?
+    private var httpOption: NSButton?
     private var notice: NSTextField?
     private var startButton: NSButton?
     private var backButton: NSButton?
@@ -87,7 +88,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         url.placeholderString = "https://your-university.example.edu"
         let origins = NSTextField(string: "")
         origins.placeholderString = "https://login.example.edu, https://assets.example.edu"
-        let safety = NSTextField(wrappingLabelWithString: "Save your work first. Locking restricts this Mac and may close other apps. Only the listed HTTPS sites can load. You can leave and unlock at any time; leaving does not submit answers. Some SSO, popups and uploads are not supported. This does not protect other devices or previously downloaded files.")
+        let safety = NSTextField(wrappingLabelWithString: "Save your work first. Locking restricts this Mac and may close other apps. Only the listed sites can load. You can leave and unlock at any time; leaving does not submit answers. Some SSO, popups and uploads are not supported. This does not protect other devices or previously downloaded files. HTTP is unencrypted and can be read or changed by others. Never enter passwords or sensitive information on HTTP.")
+        let http = NSButton(checkboxWithTitle: "Allow local/intranet HTTP (development only)", target: nil, action: nil)
+        http.isEnabled = Config.isDevBuild
+        http.toolTip = Config.isDevBuild ? "HTTP is available only for IP addresses, unqualified intranet names and .local sites. Traffic can be read or changed by others." : "HTTP is unavailable in this build. Use HTTPS."
+        httpOption = http
         let status = NSTextField(wrappingLabelWithString: "Check this Mac, then choose Lock and open. No university page opens before the lock succeeds.")
         notice = status
         startField = url
@@ -100,7 +105,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         buttons.spacing = 12
         let stack = NSStackView(views: [title, detail, NSTextField(labelWithString: "University start URL"), url,
                                       NSTextField(labelWithString: "Additional login / resource origins (optional)"), origins,
-                                      safety, status, buttons])
+                                      http, safety, status, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -129,8 +134,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     @objc private func startPressed() {
         guard flow.state == .setup, !busy(),
               let parsed = ProtectedBrowserPolicy(start: startField?.stringValue ?? "",
-                  additionalOrigins: originsField?.stringValue ?? "", forbiddenOrigin: Config.serverURL) else {
-            notice?.stringValue = "Enter an HTTPS university URL and exact HTTPS login/resource origins. Wildcards, IP addresses, custom ports and the FairPlay server are not allowed."
+                  additionalOrigins: originsField?.stringValue ?? "", forbiddenOrigin: Config.serverURL,
+                  allowHTTP: Config.isDevBuild && httpOption?.state == .on) else {
+            notice?.stringValue = "Enter a valid address and exact login/resource origins. Bare addresses use HTTPS. Local/intranet HTTP requires the development build’s HTTP checkbox; other HTTP sites are unsupported. Wildcards, credentials and the FairPlay server are not allowed."
             return
         }
         let problems = checks()
@@ -177,7 +183,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
         self.policy = policy
         root.subviews.forEach { $0.removeFromSuperview() }
-        startField = nil; originsField = nil; startButton = nil
+        startField = nil; originsField = nil; httpOption = nil; startButton = nil
         let config = effects.configuration(rules)
         let view = ProtectedUniversityWebView(frame: NSRect(x: 0, y: 0, width: root.bounds.width, height: max(0, root.bounds.height - 58)), configuration: config)
         view.autoresizingMask = [.width, .height]
@@ -301,7 +307,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             self.overlay = nil
             self.policy = nil
             self.notice = nil
-            self.startField = nil; self.originsField = nil; self.startButton = nil
+            self.startField = nil; self.originsField = nil; self.httpOption = nil; self.startButton = nil
             self.backButton = nil; self.reloadButton = nil; self.closePopupButton = nil; self.navigationState = nil
             self.removeRules()
         }, releaseLock: {
@@ -317,9 +323,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         pendingRuleIdentifier = nil
     }
 
-    private func refuse() {
-        let origin = navigationState.flatMap { ProtectedBrowserPolicy.origin($0.currentURL) } ?? ""
-        notice?.stringValue = "Blocked: this site or action is not in your browser configuration. Current site: " + origin
+    private func refuse(_ url: URL? = nil) {
+        if let origin = url.flatMap(ProtectedBrowserPolicy.origin) {
+            notice?.stringValue = "Blocked site: " + origin + ". Leave and add this exact origin only if you trust it."
+        } else {
+            notice?.stringValue = "Blocked navigation or feature. Only configured site origins are allowed."
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -331,7 +340,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             && action.request.url?.absoluteString == "about:blank"
         guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
               (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
-            refuse(); decisionHandler(.cancel); return
+            refuse(action.request.url); decisionHandler(.cancel); return
         }
         if webView === browser, action.targetFrame?.isMainFrame == true,
            let url = action.request.url, policy?.allows(url, mainFrame: true) == true {
@@ -412,7 +421,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             && response.response.url?.absoluteString == "about:blank"
         guard tracked(webView), lockIsOwned, response.canShowMIMEType, !AllowedSites.isAttachment(contentDisposition: disposition),
               initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
-            refuse(); decisionHandler(.cancel); return
+            refuse(response.response.url); decisionHandler(.cancel); return
         }
         decisionHandler(.allow)
     }
@@ -422,7 +431,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard webView === browser, lockIsOwned, parents.count < 4,
               let opener = webView.url, policy?.allows(opener, mainFrame: true) == true,
               action.request.url?.absoluteString == "about:blank" || policy?.allows(action.request.url, mainFrame: true) == true else {
-            refuse(); return nil
+            refuse(action.request.url); return nil
         }
         // WebKit supplies the configuration to preserve window.opener and the ephemeral session.
         // Do not replace it with a fresh configuration or flatten the navigation into its opener.
@@ -499,7 +508,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard webView === browser, lockIsOwned else { return }
         let failure = error as NSError
         guard failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled else { return }
-        navigationState?.failed()
+        let domain = [NSURLErrorDomain, WKError.errorDomain].contains(failure.domain) ? failure.domain : "NavigationError"
+        let failedURL = (failure.userInfo[NSURLErrorFailingURLErrorKey] as? URL)
+            ?? (failure.userInfo[NSURLErrorFailingURLStringErrorKey] as? String).flatMap(URL.init(string:))
+        let blockedOrigin = failedURL.flatMap(ProtectedBrowserPolicy.origin).flatMap { origin in
+            policy?.allows(failedURL, mainFrame: true) == false ? " · Blocked site: " + origin : nil
+        } ?? ""
+        navigationState?.failed(diagnostic: domain + " (" + String(failure.code) + ")" + blockedOrigin)
         updateNavigation()
     }
 
