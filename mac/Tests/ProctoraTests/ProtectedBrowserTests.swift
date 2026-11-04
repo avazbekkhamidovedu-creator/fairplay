@@ -1,0 +1,557 @@
+import Testing
+import Foundation
+import WebKit
+import AppKit
+import Network
+@testable import Proctora
+
+@Suite struct ProtectedBrowserPolicyTests {
+    private let server = URL(string: "https://fairplay.example.edu")!
+
+    @Test func exactOriginsAndSSO() throws {
+        let policy = try #require(ProtectedBrowserPolicy(start: "https://university.example.edu/course?section=1",
+            additionalOrigins: "https://login.example.edu, https://cdn.example.edu:443/", forbiddenOrigin: server))
+        for raw in ["https://university.example.edu/quiz", "https://login.example.edu/sso", "https://cdn.example.edu:443/file.js"] {
+            #expect(policy.allows(URL(string: raw), mainFrame: true))
+        }
+        for raw in ["https://university.example.edu.evil.test/", "https://x.university.example.edu/",
+                    "http://university.example.edu/", "https://user:pw@university.example.edu/",
+                    "https://university.example.edu:8443/", "https://university.example.edu./",
+                    "https://fairplay.example.edu/student", "javascript:alert(1)", "data:text/html,hi", "file:///tmp/test"] {
+            #expect(!policy.allows(URL(string: raw), mainFrame: true), "\(raw)")
+            #expect(!policy.allows(URL(string: raw), mainFrame: false), "\(raw)")
+        }
+        #expect(!policy.allows(nil, mainFrame: true))
+        #expect(!policy.allows(URL(string: "about:blank"), mainFrame: true))
+        #expect(policy.allows(URL(string: "about:srcdoc"), mainFrame: false))
+    }
+
+    @Test func exactLocalAddressesPortsAndHttpConsent() throws {
+        let secure = try #require(ProtectedBrowserPolicy(start: "intranet:8443/exam", additionalOrigins: "https://localhost, https://127.0.0.1:9443, https://[::1]:9443", forbiddenOrigin: server))
+        #expect(secure.startURL.absoluteString == "https://intranet:8443/exam")
+        for raw in ["https://intranet:8443/x", "https://localhost:443/", "https://127.0.0.1:9443/", "https://[::1]:9443/"] { #expect(secure.allows(URL(string: raw), mainFrame: true)) }
+        for raw in ["http://intranet:8443/", "https://intranet/", "https://intranet:8444/", "https://[::1]:9444/", "https://intranet.evil:8443/"] { #expect(!secure.allows(URL(string: raw), mainFrame: true)) }
+        #expect(ProtectedBrowserPolicy(start: "http://localhost:8765", additionalOrigins: "", forbiddenOrigin: server) == nil)
+        #expect(ProtectedBrowserPolicy(start: "http://public.example.edu", additionalOrigins: "", forbiddenOrigin: server, allowHTTP: true) == nil)
+        let local = try #require(ProtectedBrowserPolicy(start: "http://localhost:8765/page", additionalOrigins: "http://intranet, http://[::1]:9000", forbiddenOrigin: server, allowHTTP: true))
+        #expect(local.allows(URL(string: "http://intranet:80/"), mainFrame: true))
+        for raw in ["http://localhost:8766/", "https://localhost:8765/", "http://user:pass@localhost:8765/", "http://intranet:81/"] { #expect(!local.allows(URL(string: raw), mainFrame: true)) }
+        #expect(ProtectedBrowserPolicy.normalizedURL("example.edu")?.scheme == "https")
+    }
+
+    @Test func malformedLocalConfigurationIsRejected() {
+        for start in ["http://university.example.edu", "https://fairplay.example.edu/", "https://*.example.edu", "https://bad..host", "https://127.1", "https://host:0", "https://host:65536"] {
+            #expect(ProtectedBrowserPolicy(start: start, additionalOrigins: "", forbiddenOrigin: server) == nil)
+        }
+        for origin in ["https://fairplay.example.edu", "https://login.example.edu/path", "https://*.example.edu",
+                       "https://login.example.edu?x=1", "https://login.example.edu#x", "https://a..example.edu",
+                       Array(repeating: "https://login.example.edu", count: 33).joined(separator: ",")] {
+            #expect(ProtectedBrowserPolicy(start: "https://university.example.edu", additionalOrigins: origin,
+                                           forbiddenOrigin: server) == nil)
+        }
+    }
+}
+
+@Suite struct ProtectedBrowserFlowTests {
+    @Test func lockAlwaysPrecedesOpeningAndClearingPrecedesUnlock() throws {
+        let flow = ProtectedBrowserFlow()
+        let token = try #require(flow.prepare())
+        var effects: [String] = []
+        #expect(flow.activate(token, acquireLock: { effects.append("lock"); return true }, open: { effects.append("open") }))
+        #expect(effects == ["lock", "open"])
+        #expect(flow.state == .browsing)
+        #expect(flow.prepare() == nil)
+        flow.close(clear: { effects.append("clear") }, releaseLock: { effects.append("unlock") })
+        #expect(effects == ["lock", "open", "clear", "unlock"])
+        flow.close(clear: { effects.append("unexpected") }, releaseLock: { effects.append("unexpected") })
+        #expect(effects.count == 4)
+    }
+
+    @Test func failedLockNeverOpensContentAndCanRetry() throws {
+        let flow = ProtectedBrowserFlow()
+        let first = try #require(flow.prepare())
+        var opened = false
+        #expect(!flow.activate(first, acquireLock: { false }, open: { opened = true }))
+        #expect(!opened)
+        #expect(!flow.ownsLock)
+        #expect(flow.state == .setup)
+        #expect(flow.prepare() != nil)
+    }
+
+    @Test func cancelledAndStalePreparationNeverLocks() throws {
+        let flow = ProtectedBrowserFlow()
+        let first = try #require(flow.prepare())
+        flow.preparationFailed(first)
+        let second = try #require(flow.prepare())
+        var locked = false
+        #expect(!flow.activate(first, acquireLock: { locked = true; return true }, open: {}))
+        flow.close(clear: {}, releaseLock: { locked = true })
+        #expect(!flow.activate(second, acquireLock: { locked = true; return true }, open: {}))
+        #expect(!locked)
+    }
+}
+
+@MainActor @Suite struct ProtectedBrowserWebKitTests {
+    @Test func firstScreenDoesNotCreateAWebViewOrLock() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {})
+        let wasLocked = LockdownController.shared.isLocked
+        controller.show(in: container)
+        #expect(controller.isOpen)
+        func containsBrowser(_ view: NSView) -> Bool {
+            view is WKWebView || view.subviews.contains(where: containsBrowser)
+        }
+        #expect(!containsBrowser(container))
+        #expect(LockdownController.shared.isLocked == wasLocked)
+        controller.lockEnded()
+        #expect(!controller.isOpen)
+        #expect(container.subviews.isEmpty)
+    }
+
+    @Test func busyExamCannotOpenTheNewScreen() {
+        let container = NSView(frame: .zero)
+        let controller = ProtectedBrowserController(busy: { true }, didClose: {})
+        controller.show(in: container)
+        #expect(!controller.isOpen)
+        #expect(container.subviews.isEmpty)
+    }
+
+    @Test func actualWebKitCompilesResourceRestrictions() async throws {
+        let policy = try #require(ProtectedBrowserPolicy(start: "https://university.example.edu/",
+            additionalOrigins: "https://login.example.edu, https://[::1]:9443, https://intranet:8080", forbiddenOrigin: URL(string: "https://fairplay.example.edu")!))
+        let id = "fairplay.protected-browser.test." + UUID().uuidString
+        let result: WKContentRuleList = try await withCheckedThrowingContinuation { continuation in
+            WKContentRuleListStore.default().compileContentRuleList(forIdentifier: id, encodedContentRuleList: policy.contentRules) { rules, error in
+                if let rules { continuation.resume(returning: rules) }
+                else { continuation.resume(throwing: error ?? NSError(domain: "ProtectedBrowserTest", code: 1)) }
+            }
+        }
+        #expect(result.identifier == id)
+        let configuration = ProtectedBrowserController.websiteConfiguration(rules: result)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        #expect(!webView.configuration.websiteDataStore.isPersistent)
+        #expect(webView.configuration.userContentController.userScripts.isEmpty)
+        #expect(!webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically)
+        #expect(webView.url == nil)
+        #expect(!webView.isLoading)
+        await withCheckedContinuation { continuation in
+            WKContentRuleListStore.default().removeContentRuleList(forIdentifier: id) { _ in continuation.resume() }
+        }
+    }
+}
+
+@Suite struct ProtectedBrowserNavigationTests {
+    @Test func committedOriginAndFailedPageOfferReload() {
+        var state = ProtectedBrowserNavigation(startURL: URL(string: "https://university.example.edu/exam")!)
+        #expect(!state.canReload)
+        state.committed(URL(string: "https://login.example.edu/sso?secret=hidden")!)
+        state.finished()
+        #expect(state.message == "Locked browser · https://login.example.edu")
+        #expect(state.canReload)
+        state.started()
+        #expect(!state.canReload)
+        state.failed()
+        #expect(state.canReload)
+        #expect(state.message.contains("Reload or leave and unlock"))
+        #expect(!state.message.contains("secret"))
+    }
+    @Test func discardedRendererCannotBeRevivedByLateCallbacks() {
+        var state = ProtectedBrowserNavigation(startURL: URL(string: "https://university.example.edu")!)
+        state.discarded()
+        state.requested(URL(string: "https://login.example.edu")!)
+        state.started()
+        state.committed(URL(string: "https://login.example.edu")!)
+        state.finished()
+        state.failed()
+        #expect(state.phase == .unavailable)
+        #expect(!state.canReload)
+        #expect(state.message.contains("Leave and unlock"))
+        #expect(state.currentURL.host == "university.example.edu")
+        #expect(state.requestedURL.host == "university.example.edu")
+    }
+}
+
+@MainActor @Suite struct ProtectedBrowserCoordinatorTests {
+    private func descendants(_ root: NSView) -> [NSView] {
+        [root] + root.subviews.flatMap { descendants($0) }
+    }
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
+    }
+
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["FAIRPLAY_CANVAS_NETWORK_TEST"] == "1"))
+    func publicCanvasNavigationWithSimulatedLock() async throws {
+        for (label, start, extra) in [
+            ("strict", "https://canvas.duke.edu/", ""),
+            ("portal", "https://canvas.duke.edu/", "https://go.canvas.duke.edu, https://shib.oit.duke.edu"),
+            ("saml", "https://canvas.duke.edu/login/saml", "https://go.canvas.duke.edu, https://shib.oit.duke.edu")
+        ] {
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+            var locked = false
+            var events: [String] = []
+            var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true }, ownsLock: { locked }, release: { locked = false }, load: { view, url in view.load(URLRequest(url: url)) })
+            effects.diagnostic = { event in events.append(event) }
+            let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+            controller.show(in: root)
+            let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+            fields[0].stringValue = start
+            fields[1].stringValue = extra
+            try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" }).performClick(nil)
+            for _ in 0..<1000 {
+                let view = descendants(root).compactMap { $0 as? WKWebView }.first
+                if events.contains(where: { $0.contains("navigation-failed") }) || (view?.isLoading == false && view?.title?.isEmpty == false) { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            for event in events { print("Canvas " + label + " " + event) }
+            let view = descendants(root).compactMap { $0 as? WKWebView }.first
+            print("Canvas " + label + " final-origin=" + (view?.url.flatMap(ProtectedBrowserPolicy.origin) ?? "unavailable") + " has-title=" + String(view?.title?.isEmpty == false))
+            #expect(!events.isEmpty)
+            if label == "strict" {
+                #expect(events.contains { $0.contains("policy-denied") })
+                #expect(events.contains { $0.contains("policy-cancelled domain=WebKitErrorDomain code=102") })
+                #expect(!events.contains { $0.contains("navigation-failed") })
+                let message = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
+                #expect(message.contains("Blocked site: https://go.canvas.duke.edu"))
+                #expect(!message.contains("Page failed to load"))
+            }
+            else { #expect(view?.title?.isEmpty == false) }
+            controller.lockEnded()
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["FAIRPLAY_HTTPS_RESOURCE_TEST"] == "1"))
+    func actualHTTPSImageRequiresExplicitResourceOrigin() async throws {
+        let image = "https://www.python.org/static/community_logos/python-powered-w-100x40.png"
+        for explicitlyAllowed in [false, true] {
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+            var locked = false
+            let effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true }, ownsLock: { locked }, release: { locked = false }, load: { view, url in
+                let html = "<html><head><meta name='referrer' content='no-referrer'><title>HTTPS resource fixture</title></head><body><img id='public-image' referrerpolicy='no-referrer' src='\(image)'></body></html>"
+                view.loadHTMLString(html, baseURL: url)
+            })
+            let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+            controller.show(in: root)
+            defer { controller.lockEnded() }
+            let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+            fields[0].stringValue = "https://fixture.example.edu/"
+            fields[1].stringValue = explicitlyAllowed ? "https://www.python.org" : ""
+            try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" }).performClick(nil)
+            var settled = false
+            for _ in 0..<1000 {
+                if let view = descendants(root).compactMap({ $0 as? WKWebView }).first,
+                   !view.isLoading, view.title == "HTTPS resource fixture" {
+                    settled = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(settled)
+            let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+            #expect(!view.configuration.websiteDataStore.isPersistent)
+            let width = try await view.evaluateJavaScript("document.getElementById('public-image').naturalWidth") as? Int
+            let height = try await view.evaluateJavaScript("document.getElementById('public-image').naturalHeight") as? Int
+            let complete = try await view.evaluateJavaScript("document.getElementById('public-image').complete") as? Bool
+            #expect(complete == true)
+            #expect(explicitlyAllowed ? (width ?? 0) > 0 : width == 0)
+            #expect(explicitlyAllowed ? (height ?? 0) > 0 : height == 0)
+            #expect(locked)
+            print("HTTPS resource explicit-origin=\(explicitlyAllowed) width=\(width ?? -1) height=\(height ?? -1)")
+            try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Leave and unlock" }).performClick(nil)
+            #expect(!locked)
+        }
+    }
+
+    @Test(.enabled(if: Config.isDevBuild)) func actualSubresourcesRequireExactConfiguredPort() async throws {
+        let queue = DispatchQueue(label: "protected-browser.subresource-test")
+        let sameRequests = ProtectedBrowserRequestCounter()
+        let otherRequests = ProtectedBrowserRequestCounter()
+        let connections = ProtectedBrowserFixtureConnections()
+        defer { connections.cancelAll() }
+        let pixel = try #require(Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="))
+        func listener(_ response: @escaping (String) -> (String, Data)) throws -> NWListener {
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+            let server = try NWListener(using: parameters, on: .any)
+            server.newConnectionHandler = { connection in
+                connections.add(connection)
+                connection.start(queue: queue)
+                queue.asyncAfter(deadline: .now() + 5) { connection.cancel() }
+                receiveProtectedBrowserFixtureLine(connection) { firstLine in
+                    let (mime, body) = response(firstLine)
+                    let header = "HTTP/1.1 200 OK\r\nContent-Type: \(mime)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+                    connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+                }
+            }
+            server.start(queue: queue)
+            return server
+        }
+        let other = try listener { request in
+            if request.hasPrefix("GET /other.gif ") { otherRequests.increment() }
+            return ("image/gif", pixel)
+        }
+        defer { other.cancel() }
+        try #require(await waitUntil { (other.port?.rawValue ?? 0) > 0 })
+        let otherPort = try #require(other.port)
+        let otherOrigin = "http://127.0.0.1:\(otherPort.rawValue)"
+        let main = try listener { request in
+            if request.hasPrefix("GET /same.gif ") {
+                sameRequests.increment()
+                return ("image/gif", pixel)
+            }
+            let html = "<html><title>Exact-port resources</title><body><img id='same' src='/same.gif'><img id='other' src='\(otherOrigin)/other.gif'></body></html>"
+            return ("text/html", Data(html.utf8))
+        }
+        defer { main.cancel() }
+        try #require(await waitUntil { (main.port?.rawValue ?? 0) > 0 })
+        let mainPort = try #require(main.port)
+        #expect(mainPort != otherPort)
+        for explicitlyAllowed in [false, true] {
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+            var locked = false
+            let effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true }, ownsLock: { locked }, release: { locked = false }, load: { view, url in view.load(URLRequest(url: url)) })
+            let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+            controller.show(in: root)
+            defer { controller.lockEnded() }
+            let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+            fields[0].stringValue = "http://127.0.0.1:\(mainPort.rawValue)/"
+            fields[1].stringValue = explicitlyAllowed ? otherOrigin : ""
+            let buttons = descendants(root).compactMap { $0 as? NSButton }
+            try #require(buttons.first { $0.title.hasPrefix("Allow local/intranet HTTP") }).state = .on
+            try #require(buttons.first { $0.title == "Lock and open" }).performClick(nil)
+            #expect(await waitUntil {
+                guard let view = self.descendants(root).compactMap({ $0 as? WKWebView }).first else { return false }
+                return !view.isLoading && view.title == "Exact-port resources"
+            })
+            let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+            let sameWidth = try await view.evaluateJavaScript("document.getElementById('same').naturalWidth") as? Int
+            let otherWidth = try await view.evaluateJavaScript("document.getElementById('other').naturalWidth") as? Int
+            #expect(sameWidth == 1)
+            #expect(sameRequests.value > 0)
+            #expect(otherWidth == (explicitlyAllowed ? 1 : 0))
+            #expect(explicitlyAllowed ? otherRequests.value > 0 : otherRequests.value == 0)
+            #expect(locked)
+            print("Subresource explicit-other-port=\(explicitlyAllowed) same-requests=\(sameRequests.value) other-requests=\(otherRequests.value)")
+            try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Leave and unlock" }).performClick(nil)
+            #expect(!locked)
+        }
+    }
+
+    @Test(.enabled(if: Config.isDevBuild)) func actualLoopbackHTTPAndBlockedTargetStayExact() async throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters, on: .any)
+        let queue = DispatchQueue(label: "protected-browser.loopback-test")
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { _, _, _, _ in
+                let body = "<html><title>Loopback HTTP fixture</title><body>Local fixture only</body></html>"
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
+                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.start(queue: queue)
+        defer { listener.cancel() }
+        #expect(await waitUntil { (listener.port?.rawValue ?? 0) > 0 })
+        let port = try #require(listener.port)
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        var locked = false
+        let effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true }, ownsLock: { locked }, release: { locked = false }, load: { view, url in view.load(URLRequest(url: url)) })
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        defer { controller.lockEnded() }
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        fields[0].stringValue = "http://127.0.0.1:\(port.rawValue)/"
+        let buttons = descendants(root).compactMap { $0 as? NSButton }
+        let consent = try #require(buttons.first { $0.title.hasPrefix("Allow local/intranet HTTP") })
+        #expect(consent.state == .off)
+        consent.state = .on
+        try #require(buttons.first { $0.title == "Lock and open" }).performClick(nil)
+        let loaded = await waitUntil { self.descendants(root).compactMap { $0 as? WKWebView }.first?.title == "Loopback HTTP fixture" }
+        let status = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined(separator: " | ")
+        #expect(loaded, "Local fixture status: \(status)")
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        #expect(view.url?.scheme == "http")
+        #expect(view.url?.port == Int(port.rawValue))
+        #expect(locked)
+        let blockedPort = port.rawValue == 65535 ? 65534 : port.rawValue + 1
+        _ = try await view.evaluateJavaScript("location.href = 'http://127.0.0.1:\(blockedPort)/secret?token=hidden'; true")
+        #expect(await waitUntil { self.descendants(root).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Blocked site: http://127.0.0.1:\(blockedPort)") } })
+        let messages = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
+        #expect(!messages.contains("secret"))
+        #expect(!messages.contains("hidden"))
+        try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Leave and unlock" }).performClick(nil)
+        #expect(!locked)
+    }
+
+    @Test func firstLoadFailureRetriesAllowedRequestWithoutCommittedDocument() async throws {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        var locked = false
+        var requests: [URL] = []
+        let effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true },
+            ownsLock: { locked }, release: { locked = false }, load: { _, url in requests.append(url) })
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        defer { controller.lockEnded() }
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        try #require(fields.count == 2)
+        fields[0].stringValue = "https://university.example.edu/initial"
+        let start = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" })
+        start.performClick(nil)
+        #expect(await waitUntil { requests.count == 1 })
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        #expect(view.url == nil)
+        #expect(view.reload() == nil) // Actual WebKit has no committed request to reload.
+        // Inject only the failure callback; no HTTP request or native lock is performed.
+        let failure = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost,
+            userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "https://unlisted.example.test/never-use")!])
+        controller.webView(view, didFailProvisionalNavigation: nil, withError: failure)
+        let reload = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Reload" })
+        #expect(reload.isEnabled)
+        let messages = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
+        #expect(messages.contains("NSURLErrorDomain (-1004)"))
+        #expect(!messages.contains("never-use"))
+        controller.webView(view, didFailProvisionalNavigation: nil,
+                           withError: NSError(domain: "WebKitErrorDomain", code: 102))
+        #expect(descendants(root).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("WebKitErrorDomain (102)") })
+        reload.performClick(nil)
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.absoluteString == "https://university.example.edu/initial" })
+        #expect(!reload.isEnabled)
+        controller.webViewWebContentProcessDidTerminate(view)
+        controller.webView(view, didFailProvisionalNavigation: nil, withError: failure)
+        #expect(!reload.isEnabled)
+        #expect(requests.count == 2)
+        let leave = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Leave and unlock" })
+        leave.performClick(nil)
+        #expect(!locked)
+    }
+
+    @Test func actualCoordinatorDestroysPagesBeforeReleasingSimulatedLock() async throws {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        let window = NSWindow(contentRect: root.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = root
+        defer { window.orderOut(nil) }
+        var locked = false
+        var released = false
+        var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true },
+            ownsLock: { locked }, release: {
+                #expect(!self.descendants(root).contains { $0 is WKWebView })
+                locked = false; released = true
+            }, load: { view, url in
+                #expect(locked)
+                view.loadHTMLString("<html><title>Isolated fixture</title><body>Local test only</body></html>", baseURL: url)
+            })
+        // Script evaluation has no physical user gesture. Enable automatic popups only
+        // before constructing this injected inline-HTML fixture, never in product configuration.
+        effects.configuration = { rules in
+            let config = ProtectedBrowserController.websiteConfiguration(rules: rules)
+            config.preferences.javaScriptCanOpenWindowsAutomatically = true
+            return config
+        }
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        try #require(fields.count == 2)
+        fields[0].stringValue = "https://university.example.edu/exam"
+        let start = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" })
+        start.performClick(nil)
+        #expect(await waitUntil { self.descendants(root).contains { $0 is WKWebView } })
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        #expect(!view.configuration.websiteDataStore.isPersistent)
+        #expect(view.configuration.userContentController.userScripts.isEmpty)
+        #expect(await waitUntil { !view.isLoading && view.url?.host == "university.example.edu" })
+        let denied = try await view.evaluateJavaScript("!!window.open('https://unlisted.example.test/', 'denied')")
+        #expect(denied as? Bool == false)
+        #expect(descendants(root).filter { $0 is WKWebView }.count == 1)
+        let opened = try await view.evaluateJavaScript("window.testPopup = window.open('about:blank', 'signin'); !!window.testPopup")
+        #expect(opened as? Bool == true)
+        #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 2 })
+        let child = try #require(descendants(root).compactMap { $0 as? WKWebView }.first { $0 !== view })
+        #expect(child.configuration.websiteDataStore === view.configuration.websiteDataStore)
+        #expect(!child.configuration.websiteDataStore.isPersistent)
+        #expect(child.configuration.userContentController.userScripts.isEmpty)
+        #expect(child.configuration.userContentController === view.configuration.userContentController)
+        #expect(view.isHidden)
+        #expect(await waitUntil { child.url?.absoluteString == "about:blank" })
+        let opener = try await child.evaluateJavaScript("window.opener !== null")
+        #expect(opener as? Bool == true)
+        let bridge = try await child.evaluateJavaScript("typeof window.webkit?.messageHandlers?.proctora")
+        #expect(bridge as? String == "undefined")
+        _ = try await child.evaluateJavaScript("window.close(); true")
+        #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 1 })
+        #expect(!view.isHidden)
+        #expect(locked)
+        // Detached child callbacks must not change the current parent's presentation.
+        let statusBefore = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        controller.webView(child, didFinish: nil)
+        controller.webView(child, didFailProvisionalNavigation: nil, withError: NSError(domain: "WebKitErrorDomain", code: 102))
+        #expect(descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue) == statusBefore)
+        _ = try await view.evaluateJavaScript("window.open('about:blank', 'second'); true")
+        #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 2 })
+        let second = try #require(descendants(root).compactMap { $0 as? WKWebView }.first { $0 !== view })
+        controller.webViewWebContentProcessDidTerminate(second)
+        #expect(locked)
+        #expect(!descendants(root).contains { $0 is WKWebView })
+        let buttons = descendants(root).compactMap { $0 as? NSButton }
+        #expect(buttons.first { $0.title == "Reload" }?.isEnabled == false)
+        let leave = try #require(buttons.first { $0.title == "Leave and unlock" })
+        #expect(leave.isEnabled)
+        leave.performClick(nil)
+        #expect(released)
+        #expect(!locked)
+        #expect(root.subviews.isEmpty)
+    }
+}
+
+@Suite struct ProtectedBrowserPolicyDenialTests {
+    @Test func onlySameViewAndCancelledNavigationMatch() {
+        let view = NSObject(), otherView = NSObject(), navigation = NSObject(), next = NSObject()
+        let target = URL(string: "https://blocked.example.edu/path?not-logged")!
+        let denial = ProtectedBrowserPolicyDenial(view: view, navigation: navigation, target: target)
+        #expect(denial.matches(view: view, navigation: navigation, failedURL: nil))
+        #expect(!denial.matches(view: view, navigation: next, failedURL: target))
+        #expect(!denial.matches(view: otherView, navigation: navigation, failedURL: target))
+        let early = ProtectedBrowserPolicyDenial(view: view, navigation: nil, target: target)
+        #expect(early.matches(view: view, navigation: nil, failedURL: target))
+        #expect(!early.matches(view: view, navigation: nil, failedURL: nil))
+        #expect(!early.matches(view: view, navigation: nil, failedURL: URL(string: "https://other.example.edu")))
+    }
+}
+
+private final class ProtectedBrowserRequestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
+private final class ProtectedBrowserFixtureConnections: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connections: [NWConnection] = []
+    func add(_ connection: NWConnection) { lock.withLock { connections.append(connection) } }
+    func cancelAll() {
+        let current = lock.withLock { let values = connections; connections.removeAll(); return values }
+        current.forEach { $0.cancel() }
+    }
+}
+
+private func receiveProtectedBrowserFixtureLine(_ connection: NWConnection, buffer: Data = Data(), completion: @escaping (String) -> Void) {
+    guard buffer.count < 8192 else { connection.cancel(); return }
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 8192 - buffer.count) { data, _, complete, error in
+        guard error == nil else { connection.cancel(); return }
+        var bytes = buffer
+        if let data { bytes.append(data) }
+        if let end = bytes.range(of: Data("\r\n".utf8)), let line = String(data: bytes[..<end.lowerBound], encoding: .utf8) {
+            completion(line)
+        } else if complete || bytes.count >= 8192 {
+            connection.cancel()
+        } else {
+            receiveProtectedBrowserFixtureLine(connection, buffer: bytes, completion: completion)
+        }
+    }
+}

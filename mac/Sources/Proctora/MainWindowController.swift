@@ -75,6 +75,22 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     private var deviceTestTapOn = false
     private let homework = HomeworkLoginCoordinator()
     private let box = BoxCoordinator()
+    private lazy var protectedBrowser = ProtectedBrowserController(busy: { [weak self] in
+        guard let self else { return true }
+        return LockdownController.shared.isLocked || AppSession.shared.exam != nil
+            || self.external.isActive || self.deviceTest.isRunning
+    }, didClose: { [weak self] in self?.takeFocus() })
+
+    /// Opt-in native mode; the existing student/exam pages and codes are unchanged.
+    func showProtectedBrowser() {
+        guard let content = window?.contentView, !LockdownController.shared.isLocked,
+              AppSession.shared.exam == nil, !external.isActive, !deviceTest.isRunning else { return }
+        box.close()
+        homework.dismiss()
+        if let panel = openPanel, let window { window.endSheet(panel, returnCode: .cancel) }
+        webView.stopLoading()
+        protectedBrowser.show(in: content)
+    }
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
@@ -323,6 +339,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func openExamLaunch(_ exam: String) {
+        guard !protectedBrowser.isOpen else { return }
         let lock = LockdownController.shared
         guard Config.serverIsAcceptable,
               ExamLaunch.mayOpen(locked: lock.isLocked, prelocked: lock.isPreLock,
@@ -333,6 +350,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func reload() {
+        guard !protectedBrowser.isOpen else { return }
         guard Config.serverIsAcceptable else { return }
         if webView.url == nil || webView.url?.scheme == "about" {
             webView.load(URLRequest(url: external.canvasStartURL ?? Config.startURL))
@@ -367,6 +385,9 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        // The old FairPlay page remains underneath the native overlay. It cannot start,
+        // promote or release a session while the separate browser owns the UI.
+        guard !protectedBrowser.isOpen else { return }
         // Dev trace lines from any page (exam page or website exam). Never drive anything.
         if let body = message.body as? [String: Any], body["action"] as? String == "log" {
             let host: String = message.frameInfo.securityOrigin.host
@@ -727,6 +748,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if protectedBrowser.isOpen { decisionHandler(.cancel); return }
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
         // 2026-10-23: the bundled files are never a page or a frame (only subresources).
         if url.scheme?.lowercased() == AssetPack.scheme {
@@ -1273,6 +1295,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func exitLockedMode() {
+        protectedBrowser.lockEnded()
         allowedSites = []                       // the next exam sends its own
         lastStartExamId = nil                   // 2026-10-23 (review): the next pre-exam lock sets its own
         lastPreLockPage = nil
@@ -1351,6 +1374,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         let covered = HomeworkPanelPolicy.hidden(blockingShown: blockingView != nil, permissionShown: permissionView != nil)
         box.setHeld(covered)
         homework.setHeld(covered)
+        protectedBrowser.setHeld(covered)
     }
 
     @objc private func blockingButtonPressed() {
@@ -1604,3 +1628,4 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         return l
     }
 }
+
