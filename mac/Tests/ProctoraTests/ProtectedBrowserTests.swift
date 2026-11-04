@@ -114,8 +114,172 @@ import AppKit
             }
         }
         #expect(result.identifier == id)
+        let configuration = ProtectedBrowserController.websiteConfiguration(rules: result)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        #expect(!webView.configuration.websiteDataStore.isPersistent)
+        #expect(webView.configuration.userContentController.userScripts.isEmpty)
+        #expect(!webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically)
+        #expect(webView.url == nil)
+        #expect(!webView.isLoading)
         await withCheckedContinuation { continuation in
             WKContentRuleListStore.default().removeContentRuleList(forIdentifier: id) { _ in continuation.resume() }
         }
+    }
+}
+
+@Suite struct ProtectedBrowserNavigationTests {
+    @Test func committedOriginAndFailedPageOfferReload() {
+        var state = ProtectedBrowserNavigation(startURL: URL(string: "https://university.example.edu/exam")!)
+        #expect(!state.canReload)
+        state.committed(URL(string: "https://login.example.edu/sso?secret=hidden")!)
+        state.finished()
+        #expect(state.message == "Locked browser · https://login.example.edu")
+        #expect(state.canReload)
+        state.started()
+        #expect(!state.canReload)
+        state.failed()
+        #expect(state.canReload)
+        #expect(state.message.contains("Reload or leave and unlock"))
+        #expect(!state.message.contains("secret"))
+    }
+    @Test func discardedRendererCannotBeRevivedByLateCallbacks() {
+        var state = ProtectedBrowserNavigation(startURL: URL(string: "https://university.example.edu")!)
+        state.discarded()
+        state.requested(URL(string: "https://login.example.edu")!)
+        state.started()
+        state.committed(URL(string: "https://login.example.edu")!)
+        state.finished()
+        state.failed()
+        #expect(state.phase == .unavailable)
+        #expect(!state.canReload)
+        #expect(state.message.contains("Leave and unlock"))
+        #expect(state.currentURL.host == "university.example.edu")
+        #expect(state.requestedURL.host == "university.example.edu")
+    }
+}
+
+@MainActor @Suite struct ProtectedBrowserCoordinatorTests {
+    private func descendants(_ root: NSView) -> [NSView] {
+        [root] + root.subviews.flatMap { descendants($0) }
+    }
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
+    }
+
+
+    @Test func firstLoadFailureRetriesAllowedRequestWithoutCommittedDocument() async throws {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        var locked = false
+        var requests: [URL] = []
+        let effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true },
+            ownsLock: { locked }, release: { locked = false }, load: { _, url in requests.append(url) })
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        defer { controller.lockEnded() }
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        try #require(fields.count == 2)
+        fields[0].stringValue = "https://university.example.edu/initial"
+        let start = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" })
+        start.performClick(nil)
+        #expect(await waitUntil { requests.count == 1 })
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        #expect(view.url == nil)
+        #expect(view.reload() == nil) // Actual WebKit has no committed request to reload.
+        // Inject only the failure callback; no HTTP request or native lock is performed.
+        let failure = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost,
+            userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "https://unlisted.example.test/never-use")!])
+        controller.webView(view, didFailProvisionalNavigation: nil, withError: failure)
+        let reload = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Reload" })
+        #expect(reload.isEnabled)
+        reload.performClick(nil)
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.absoluteString == "https://university.example.edu/initial" })
+        #expect(!reload.isEnabled)
+        controller.webViewWebContentProcessDidTerminate(view)
+        controller.webView(view, didFailProvisionalNavigation: nil, withError: failure)
+        #expect(!reload.isEnabled)
+        #expect(requests.count == 2)
+        let leave = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Leave and unlock" })
+        leave.performClick(nil)
+        #expect(!locked)
+    }
+
+    @Test func actualCoordinatorDestroysPagesBeforeReleasingSimulatedLock() async throws {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        let window = NSWindow(contentRect: root.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = root
+        defer { window.orderOut(nil) }
+        var locked = false
+        var released = false
+        var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true },
+            ownsLock: { locked }, release: {
+                #expect(!self.descendants(root).contains { $0 is WKWebView })
+                locked = false; released = true
+            }, load: { view, url in
+                #expect(locked)
+                view.loadHTMLString("<html><title>Isolated fixture</title><body>Local test only</body></html>", baseURL: url)
+            })
+        // Script evaluation has no physical user gesture. Enable automatic popups only
+        // before constructing this injected inline-HTML fixture, never in product configuration.
+        effects.configuration = { rules in
+            let config = ProtectedBrowserController.websiteConfiguration(rules: rules)
+            config.preferences.javaScriptCanOpenWindowsAutomatically = true
+            return config
+        }
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        try #require(fields.count == 2)
+        fields[0].stringValue = "https://university.example.edu/exam"
+        let start = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" })
+        start.performClick(nil)
+        #expect(await waitUntil { self.descendants(root).contains { $0 is WKWebView } })
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        #expect(!view.configuration.websiteDataStore.isPersistent)
+        #expect(view.configuration.userContentController.userScripts.isEmpty)
+        #expect(await waitUntil { !view.isLoading && view.url?.host == "university.example.edu" })
+        let denied = try await view.evaluateJavaScript("!!window.open('https://unlisted.example.test/', 'denied')")
+        #expect(denied as? Bool == false)
+        #expect(descendants(root).filter { $0 is WKWebView }.count == 1)
+        let opened = try await view.evaluateJavaScript("window.testPopup = window.open('about:blank', 'signin'); !!window.testPopup")
+        #expect(opened as? Bool == true)
+        #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 2 })
+        let child = try #require(descendants(root).compactMap { $0 as? WKWebView }.first { $0 !== view })
+        #expect(child.configuration.websiteDataStore === view.configuration.websiteDataStore)
+        #expect(!child.configuration.websiteDataStore.isPersistent)
+        #expect(child.configuration.userContentController.userScripts.isEmpty)
+        #expect(child.configuration.userContentController === view.configuration.userContentController)
+        #expect(view.isHidden)
+        #expect(await waitUntil { child.url?.absoluteString == "about:blank" })
+        let opener = try await child.evaluateJavaScript("window.opener !== null")
+        #expect(opener as? Bool == true)
+        let bridge = try await child.evaluateJavaScript("typeof window.webkit?.messageHandlers?.proctora")
+        #expect(bridge as? String == "undefined")
+        _ = try await child.evaluateJavaScript("window.close(); true")
+        #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 1 })
+        #expect(!view.isHidden)
+        #expect(locked)
+        // Detached child callbacks must not change the current parent's presentation.
+        let statusBefore = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue)
+        controller.webView(child, didFinish: nil)
+        #expect(descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue) == statusBefore)
+        _ = try await view.evaluateJavaScript("window.open('about:blank', 'second'); true")
+        #expect(await waitUntil { self.descendants(root).filter { $0 is WKWebView }.count == 2 })
+        let second = try #require(descendants(root).compactMap { $0 as? WKWebView }.first { $0 !== view })
+        controller.webViewWebContentProcessDidTerminate(second)
+        #expect(locked)
+        #expect(!descendants(root).contains { $0 is WKWebView })
+        let buttons = descendants(root).compactMap { $0 as? NSButton }
+        #expect(buttons.first { $0.title == "Reload" }?.isEnabled == false)
+        let leave = try #require(buttons.first { $0.title == "Leave and unlock" })
+        #expect(leave.isEnabled)
+        leave.performClick(nil)
+        #expect(released)
+        #expect(!locked)
+        #expect(root.subviews.isEmpty)
     }
 }

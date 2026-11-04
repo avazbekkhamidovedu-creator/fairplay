@@ -56,6 +56,9 @@ struct ProtectedBrowserPolicy {
                               "action": ["type": "ignore-previous-rules"]])
             }
         }
+        // A network-free initial popup document is needed by opener-based SSO.
+        // Native navigation policy still rejects arbitrary top-level about:blank navigation.
+        rules.append(["trigger": ["url-filter": "^about:blank$"], "action": ["type": "ignore-previous-rules"]])
         return String(data: try! JSONSerialization.data(withJSONObject: rules), encoding: .utf8)!
     }
 }
@@ -99,5 +102,34 @@ final class ProtectedBrowserFlow {
         state = .closed
         clear() // Content is removed before any requested unlock.
         if release { releaseLock() }
+    }
+}
+
+struct ProtectedBrowserNavigation {
+    enum Phase: Equatable { case loading, ready, failed, unavailable }
+    private(set) var phase: Phase = .loading
+    private(set) var currentURL: URL
+    private(set) var requestedURL: URL
+
+    init(startURL: URL) { currentURL = startURL; requestedURL = startURL }
+
+    mutating func requested(_ url: URL) { if phase != .unavailable { requestedURL = url } }
+
+    mutating func started() { if phase != .unavailable { phase = .loading } }
+    mutating func committed(_ url: URL) { if phase != .unavailable { currentURL = url; requestedURL = url } }
+    mutating func finished() { if phase != .unavailable { phase = .ready } }
+    mutating func failed() { if phase != .unavailable { phase = .failed } }
+    mutating func discarded() { phase = .unavailable }
+
+    var canReload: Bool { phase == .ready || phase == .failed }
+    var message: String {
+        let displayedURL = (phase == .loading || phase == .failed) ? requestedURL : currentURL
+        let origin = ProtectedBrowserPolicy.origin(displayedURL) ?? "unavailable site"
+        switch phase {
+        case .loading: return "Locked browser · Loading " + origin
+        case .ready: return "Locked browser · " + origin
+        case .failed: return "Locked browser · " + origin + " · Page failed to load. Reload or leave and unlock."
+        case .unavailable: return "The website stopped. The Mac is still locked. Leave and unlock, then start again."
+        }
     }
 }

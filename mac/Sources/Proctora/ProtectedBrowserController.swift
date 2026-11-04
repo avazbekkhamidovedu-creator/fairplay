@@ -17,21 +17,54 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private weak var container: NSView?
     private var overlay: NSView?
     private var browser: WKWebView?
+    private var parents: [WKWebView] = []
+    private var closePopupButton: NSButton?
     private var policy: ProtectedBrowserPolicy?
     private var flow = ProtectedBrowserFlow()
     private var startField: NSTextField?
     private var originsField: NSTextField?
     private var notice: NSTextField?
     private var startButton: NSButton?
+    private var backButton: NSButton?
+    private var reloadButton: NSButton?
+    private var navigationState: ProtectedBrowserNavigation?
     private var ruleIdentifier: String?
     private var pendingRuleIdentifier: String?
     private var held = false
     private let dialogs = ProtectedBrowserDialogs()
     private let busy: () -> Bool
     private let didClose: () -> Void
+    struct Effects {
+        let checks: () -> [String]
+        let acquire: () -> Bool
+        let ownsLock: () -> Bool
+        let release: () -> Void
+        let load: (WKWebView, URL) -> Void
+        var configuration: (WKContentRuleList) -> WKWebViewConfiguration = ProtectedBrowserController.websiteConfiguration
+        static var live: Effects {
+            Effects(checks: { LockdownController.shared.preflightProblems().map { $0.message } },
+                    acquire: {
+                        Allowlist.setTeacherAllowed(nil)
+                        guard LockdownController.shared.preflightProblems().isEmpty else { return false }
+                        return LockdownController.shared.preLock()
+                    },
+                    ownsLock: { LockdownController.shared.isLocked && LockdownController.shared.isPreLock && AppSession.shared.exam == nil },
+                    release: { LockdownController.shared.endPreLock() },
+                    load: { $0.load(URLRequest(url: $1)) })
+        }
+    }
+    private let effects: Effects
     var isOpen: Bool { overlay != nil }
 
     init(busy: @escaping () -> Bool, didClose: @escaping () -> Void) {
+        self.busy = busy
+        self.didClose = didClose
+        self.effects = .live
+    }
+
+    // Dependency injection for isolated tests; production callers always use the live initializer above.
+    init(busy: @escaping () -> Bool, didClose: @escaping () -> Void, effects: Effects) {
+        self.effects = effects
         self.busy = busy
         self.didClose = didClose
     }
@@ -84,7 +117,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     private func checks() -> [String] {
-        LockdownController.shared.preflightProblems().map { $0.message }
+        effects.checks()
     }
 
     @objc private func checkPressed() {
@@ -125,9 +158,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 self.ruleIdentifier = identifier
                 let opened = self.flow.activate(token, acquireLock: {
                     guard !self.busy(), !self.held else { return false }
-                    Allowlist.setTeacherAllowed(nil)
                     guard self.checks().isEmpty else { return false }
-                    return LockdownController.shared.preLock()
+                    return self.effects.acquire()
                 }, open: { self.open(parsed, rules: rules) })
                 if !opened {
                     self.removeRules()
@@ -146,6 +178,41 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         self.policy = policy
         root.subviews.forEach { $0.removeFromSuperview() }
         startField = nil; originsField = nil; startButton = nil
+        let config = effects.configuration(rules)
+        let view = ProtectedUniversityWebView(frame: NSRect(x: 0, y: 0, width: root.bounds.width, height: max(0, root.bounds.height - 58)), configuration: config)
+        view.autoresizingMask = [.width, .height]
+        view.navigationDelegate = self
+        view.uiDelegate = self
+        view.allowsBackForwardNavigationGestures = false
+        view.allowsLinkPreview = false
+        root.addSubview(view)
+        browser = view
+        navigationState = ProtectedBrowserNavigation(startURL: policy.startURL)
+        let strip = NSStackView()
+        strip.orientation = .horizontal
+        strip.spacing = 14
+        strip.frame = NSRect(x: 16, y: root.bounds.height - 52, width: root.bounds.width - 32, height: 46)
+        strip.autoresizingMask = [.width, .minYMargin]
+        let status = NSTextField(labelWithString: "")
+        status.lineBreakMode = .byTruncatingTail
+        notice = status
+        strip.addArrangedSubview(status)
+        let back = NSButton(title: "Back", target: self, action: #selector(backPressed))
+        let reload = NSButton(title: "Reload", target: self, action: #selector(reloadPressed))
+        backButton = back; reloadButton = reload
+        strip.addArrangedSubview(back)
+        strip.addArrangedSubview(reload)
+        let closePopup = NSButton(title: "Close sign-in window", target: self, action: #selector(closePopupPressed))
+        closePopupButton = closePopup
+        strip.addArrangedSubview(closePopup)
+        strip.addArrangedSubview(NSButton(title: "Leave and unlock", target: self, action: #selector(leavePressed)))
+        root.addSubview(strip)
+        root.window?.makeFirstResponder(view)
+        updateNavigation()
+        effects.load(view, policy.startURL)
+    }
+
+    static func websiteConfiguration(rules: WKContentRuleList) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -156,34 +223,18 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
         config.userContentController = WKUserContentController()
         config.userContentController.add(rules)
-        let view = ProtectedUniversityWebView(frame: NSRect(x: 0, y: 0, width: root.bounds.width, height: max(0, root.bounds.height - 58)), configuration: config)
-        view.autoresizingMask = [.width, .height]
-        view.navigationDelegate = self
-        view.uiDelegate = self
-        view.allowsBackForwardNavigationGestures = false
-        view.allowsLinkPreview = false
-        root.addSubview(view)
-        browser = view
-        let strip = NSStackView()
-        strip.orientation = .horizontal
-        strip.spacing = 14
-        strip.frame = NSRect(x: 16, y: root.bounds.height - 52, width: root.bounds.width - 32, height: 46)
-        strip.autoresizingMask = [.width, .minYMargin]
-        let status = NSTextField(labelWithString: "Locked browser · " + (policy.startURL.host ?? ""))
-        status.lineBreakMode = .byTruncatingTail
-        notice = status
-        strip.addArrangedSubview(status)
-        strip.addArrangedSubview(NSButton(title: "Back", target: self, action: #selector(backPressed)))
-        strip.addArrangedSubview(NSButton(title: "Reload", target: self, action: #selector(reloadPressed)))
-        strip.addArrangedSubview(NSButton(title: "Leave and unlock", target: self, action: #selector(leavePressed)))
-        root.addSubview(strip)
-        root.window?.makeFirstResponder(view)
-        view.load(URLRequest(url: policy.startURL))
+        return config
+    }
+
+    private func updateNavigation() {
+        notice?.stringValue = navigationState?.message ?? ""
+        closePopupButton?.isHidden = parents.isEmpty
+        backButton?.isEnabled = browser?.canGoBack == true && lockIsOwned
+        reloadButton?.isEnabled = browser != nil && reloadTarget != nil && lockIsOwned
     }
 
     private var lockIsOwned: Bool {
-        !held && flow.ownsLock && LockdownController.shared.isLocked && LockdownController.shared.isPreLock
-            && AppSession.shared.exam == nil
+        !held && flow.ownsLock && effects.ownsLock()
     }
 
     @objc private func backPressed() {
@@ -191,7 +242,23 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
               policy?.allows(previous, mainFrame: true) == true else { return }
         browser?.goBack()
     }
-    @objc private func reloadPressed() { if lockIsOwned { browser?.reload() } }
+    private var reloadTarget: URL? {
+        guard let state = navigationState, state.canReload else { return nil }
+        let target = state.phase == .failed ? state.requestedURL : browser?.url
+        guard policy?.allows(target, mainFrame: true) == true else { return nil }
+        return target
+    }
+
+    @objc private func reloadPressed() {
+        guard lockIsOwned, let view = browser, let target = reloadTarget else { return }
+        let retryFailedRequest = navigationState?.phase == .failed
+        navigationState?.started()
+        updateNavigation()
+        // reload() has no committed page after a first-load failure, and may otherwise
+        // reload the old document instead of the failed destination. Retry the permitted request.
+        if retryFailedRequest { effects.load(view, target) }
+        else { view.reload() }
+    }
 
     @objc private func leavePressed() {
         // No submission endpoint is called. The native view is destroyed before unlocking.
@@ -213,11 +280,17 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     private func discardBrowser() {
-        browser?.stopLoading()
-        browser?.navigationDelegate = nil
-        browser?.uiDelegate = nil
-        browser?.removeFromSuperview()
+        let pages = parents + (browser.map { [$0] } ?? [])
+        parents.removeAll()
         browser = nil
+        for page in pages {
+            page.stopLoading()
+            page.navigationDelegate = nil
+            page.uiDelegate = nil
+            page.removeFromSuperview()
+        }
+        navigationState?.discarded()
+        updateNavigation()
         dialogs.cancel()
     }
 
@@ -229,9 +302,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             self.policy = nil
             self.notice = nil
             self.startField = nil; self.originsField = nil; self.startButton = nil
+            self.backButton = nil; self.reloadButton = nil; self.closePopupButton = nil; self.navigationState = nil
             self.removeRules()
         }, releaseLock: {
-            if release { LockdownController.shared.endPreLock() }
+            if release { self.effects.release() }
         })
         didClose()
     }
@@ -243,19 +317,47 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         pendingRuleIdentifier = nil
     }
 
-    private func refuse() { notice?.stringValue = "Blocked: this site or action is not in your browser configuration." }
+    private func refuse() {
+        let origin = navigationState.flatMap { ProtectedBrowserPolicy.origin($0.currentURL) } ?? ""
+        notice?.stringValue = "Blocked: this site or action is not in your browser configuration. Current site: " + origin
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard lockIsOwned, !action.shouldPerformDownload,
-              policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
+        let initialPopupBlank = !parents.isEmpty && webView === browser
+            && webView.url == nil && action.request.url?.absoluteString == "about:blank"
+        let trustedPopupRequest = action.targetFrame == nil && webView === browser
+            && policy?.allows(webView.url, mainFrame: true) == true
+            && action.request.url?.absoluteString == "about:blank"
+        guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
+              (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
             refuse(); decisionHandler(.cancel); return
+        }
+        if webView === browser, action.targetFrame?.isMainFrame == true,
+           let url = action.request.url, policy?.allows(url, mainFrame: true) == true {
+            navigationState?.requested(url)
         }
         decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === browser, lockIsOwned else { return }
         dialogs.cancel()
+        navigationState?.started()
+        updateNavigation()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard webView === browser, lockIsOwned, let url = webView.url,
+              policy?.allows(url, mainFrame: true) == true else { return }
+        navigationState?.committed(url)
+        updateNavigation()
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === browser, lockIsOwned else { return }
+        navigationState?.finished()
+        updateNavigation()
     }
 
     private func dialogOrigin(_ webView: WKWebView, frame: WKFrameInfo) -> String? {
@@ -306,8 +408,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")
-        guard lockIsOwned, response.canShowMIMEType, !AllowedSites.isAttachment(contentDisposition: disposition),
-              policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
+        let initialPopupBlank = !parents.isEmpty && webView === browser
+            && response.response.url?.absoluteString == "about:blank"
+        guard tracked(webView), lockIsOwned, response.canShowMIMEType, !AllowedSites.isAttachment(contentDisposition: disposition),
+              initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
             refuse(); decisionHandler(.cancel); return
         }
         decisionHandler(.allow)
@@ -315,9 +419,31 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard lockIsOwned, policy?.allows(action.request.url, mainFrame: true) == true else { refuse(); return nil }
-        webView.load(action.request) // Basic one-view mode; no external browser or privileged popup.
-        return nil
+        guard webView === browser, lockIsOwned, parents.count < 4,
+              let opener = webView.url, policy?.allows(opener, mainFrame: true) == true,
+              action.request.url?.absoluteString == "about:blank" || policy?.allows(action.request.url, mainFrame: true) == true else {
+            refuse(); return nil
+        }
+        // WebKit supplies the configuration to preserve window.opener and the ephemeral session.
+        // Do not replace it with a fresh configuration or flatten the navigation into its opener.
+        guard !configuration.websiteDataStore.isPersistent,
+              configuration.websiteDataStore === webView.configuration.websiteDataStore,
+              configuration.userContentController === webView.configuration.userContentController else { refuse(); return nil }
+        dialogs.cancel()
+        let child = ProtectedUniversityWebView(frame: webView.frame, configuration: configuration)
+        child.autoresizingMask = [.width, .height]
+        child.navigationDelegate = self
+        child.uiDelegate = self
+        child.allowsBackForwardNavigationGestures = false
+        child.allowsLinkPreview = false
+        webView.isHidden = true
+        parents.append(webView)
+        browser = child
+        overlay?.addSubview(child, positioned: .below, relativeTo: webView)
+        navigationState = ProtectedBrowserNavigation(startURL: opener)
+        updateNavigation()
+        overlay?.window?.makeFirstResponder(child)
+        return child
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
@@ -330,15 +456,54 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) { decisionHandler(.deny) }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard tracked(webView) else { return }
         discardBrowser()
-        notice?.stringValue = "The website stopped. Leave and unlock, then start again."
+    }
+
+    private func tracked(_ webView: WKWebView) -> Bool {
+        webView === browser || parents.contains { $0 === webView }
+    }
+
+    @objc private func closePopupPressed() {
+        guard lockIsOwned, let child = browser, let parent = parents.popLast() else { return }
+        dialogs.cancel()
+        child.stopLoading()
+        child.navigationDelegate = nil
+        child.uiDelegate = nil
+        child.removeFromSuperview()
+        browser = parent
+        parent.isHidden = false
+        navigationState = ProtectedBrowserNavigation(startURL: parent.url ?? policy!.startURL)
+        if !parent.isLoading { navigationState?.finished() }
+        updateNavigation()
+        overlay?.window?.makeFirstResponder(parent)
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        if webView === browser { closePopupPressed() }
+        else if let index = parents.firstIndex(where: { $0 === webView }), index > 0 {
+            // A hidden popup may close after opening another; detach it without touching the root.
+            parents.remove(at: index)
+            webView.stopLoading()
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+            webView.removeFromSuperview()
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if lockIsOwned { notice?.stringValue = "The page could not load. The Mac is still locked; retry or leave and unlock." }
+        navigationFailed(webView, error: error)
+    }
+
+    private func navigationFailed(_ webView: WKWebView, error: Error) {
+        guard webView === browser, lockIsOwned else { return }
+        let failure = error as NSError
+        guard failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled else { return }
+        navigationState?.failed()
+        updateNavigation()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if lockIsOwned { notice?.stringValue = "The page stopped loading. The Mac is still locked; retry or leave and unlock." }
+        navigationFailed(webView, error: error)
     }
 }
