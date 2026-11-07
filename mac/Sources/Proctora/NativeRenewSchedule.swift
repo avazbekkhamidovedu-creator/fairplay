@@ -20,6 +20,8 @@ struct NativeRenewSchedule {
         case overloaded(retryAfter: TimeInterval?)
         /// Any other refusal: normal pace, the backoff is neither advanced nor reset.
         case other
+        /// An unsigned, display-only refusal (instructor, not open, not FairPlay): a fixed slow pace.
+        case refused(after: TimeInterval)
     }
 
     enum Pace { case renew, hold }
@@ -71,6 +73,8 @@ struct NativeRenewSchedule {
             return interval(pace)
         case .other:
             return interval(pace)
+        case .refused(let after):
+            return jittered(after)
         case .overloaded(let retryAfter):
             failures += 1
             let wait = Self.equalJitter(step: Self.step(forFailure: failures), random: random())

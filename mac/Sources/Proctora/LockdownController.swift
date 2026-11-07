@@ -725,7 +725,10 @@ final class LockdownController {
         }
         for app in apps { app.terminate() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            for app in apps where !app.isTerminated { LockdownController.forceQuit(app) }
+            // Re-read: an app opened (or relaunched) after the first list is closed too.
+            let late = (self?.appsToClose() ?? []).filter { a in !apps.contains { $0.processIdentifier == a.processIdentifier } }
+            if !late.isEmpty { DebugLog.log("quit", "before lock: opened since: " + LockdownController.names(late).joined(separator: ", ")) }
+            for app in apps + late where !app.isTerminated { LockdownController.forceQuit(app) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                 let still = LockdownController.names(self?.appsToClose() ?? [])
                 DebugLog.log("quit", still.isEmpty ? "before lock: all closed" : "before lock: still running " + still.joined(separator: ", "))

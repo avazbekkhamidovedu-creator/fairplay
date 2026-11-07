@@ -2,20 +2,20 @@
 
 Secure exam app for universities. This repository hosts the app downloads.
 
-## What's new in 0.7.9
+## What's new in 0.8.0
 
-- Open the exam-code screen from DKU OJ on Mac, Windows and iPad, using the FairPlay button or a launch file.
-- Clearer Windows update notices, retry controls and installer guidance.
-- Reopened hand-ins retain numbered revisions, with the latest hand-in shown first.
-- Improved class, roster and instructor permission synchronization.
+- DKU OJ now opens inside FairPlay on Mac and Windows: sign in to DKU OJ in the locked app and take the exam there.
+- Leave an exam with your instructor's code, or your instructor can unlock you from the DKU OJ page.
+- After a restart, the DKU OJ page reloads by itself. If the university network is not reachable, FairPlay offers Cisco Secure Client / AnyConnect so you can connect the VPN without leaving the app.
+- Reload the page with Cmd+R (Mac) or Ctrl+R / F5 (Windows), like in a browser.
 
 ## Download FairPlay
 
-| Your computer | File |
+| Your computer | Download |
 |---|---|
-| Mac (Apple Silicon or Intel, macOS 13 or newer) | **FairPlay-Mac.dmg** (or FairPlay-Mac.zip) |
-| Windows 10/11 (64-bit) | **FairPlay-Windows-Setup.exe** (or FairPlay-Windows.zip without installing) |
-| iPad (iPadOS 17.5 or newer), **test build** | **FairPlay-iPad.ipa** (install with a Mac or PC, see below) |
+| Mac (Apple Silicon or Intel, macOS 13 or newer) | [**FairPlay-Mac.dmg**](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Mac.dmg) (or [FairPlay-Mac.zip](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Mac.zip)) |
+| Windows 10/11 (64-bit) | [**FairPlay-Windows-Setup.exe**](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Windows-Setup.exe) (or [FairPlay-Windows.zip](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest/download/FairPlay-Windows.zip) without installing) |
+| iPad (iPadOS 17.5 or newer), **test build 0.7.9** | [**FairPlay-iPad.ipa**](https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v0.7.9/FairPlay-iPad.ipa) (install with a Mac or PC, see below) |
 
 The newest version is always at https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest
 

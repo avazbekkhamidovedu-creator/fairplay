@@ -212,6 +212,37 @@ import CryptoKit
         #expect(!ProtectedBrowserController.isLockConflict(status: 409, data: nil))
     }
 
+    @Test func anUnsignedOJRefusalIsShownOnlyWhenWellFormed() {
+        func parse(_ json: String, status: Int = 403) -> ProtectedBrowserController.OJRefusal? {
+            ProtectedBrowserController.ojRefusal(status: status, data: Data(json.utf8))
+        }
+        #expect(parse(#"{"error":"You are the instructor.","reason":"instructor"}"#)?.text == "You are the instructor.")
+        #expect(parse(#"{"error":"x","reason":"instructor"}"#)?.retryAfter == 30)
+        #expect(parse(#"{"error":"x","reason":"not_fairplay"}"#)?.retryAfter == 30)
+        #expect(parse(#"{"error":"Not open yet.","reason":"not_open"}"#)?.retryAfter == 15)
+        #expect(parse(#"{"error":"x","reason":"other"}"#) == nil)
+        #expect(parse(#"{"error":5,"reason":"instructor"}"#) == nil)
+        #expect(parse(#"{"error":"x"}"#) == nil)
+        #expect(parse(#"{"error":"x","reason":"instructor"}"#, status: 409) == nil)
+        #expect(parse(#"{"error":"x","reason":"instructor"}"#, status: 200) == nil)
+        #expect(parse(#"{"error":"a\u0000b\nc\u001bd","reason":"not_open"}"#)?.text == "abcd")
+        #expect(parse(#"{"error":"\#(String(repeating: "a", count: 500))","reason":"not_open"}"#)?.text.count == 200)
+        let big = #"{"error":"x","reason":"instructor","pad":"\#(String(repeating: "p", count: 5000))"}"#
+        #expect(parse(big) == nil)
+        #expect(ProtectedBrowserController.ojRefusal(status: 403, data: nil) == nil)
+    }
+
+    @Test func theVersionLabelNamesTheBuildAndNothingElse() {
+        #expect(Config.versionLabelText(version: "0.8.0", dev: false) == "FairPlay 0.8.0 · Mac")
+        #expect(Config.versionLabelText(version: "0.8.0", dev: true) == "FairPlay 0.8.0 · Mac · dev")
+    }
+
+    @Test func aRefusalPacesTheRetryAndNeverAdvancesTheBackoff() {
+        var schedule = NativeRenewSchedule(random: { 0.5 })
+        #expect(schedule.next(after: .refused(after: 30), pace: .renew) == 30)
+        #expect(schedule.failures == 0)
+    }
+
     @Test func relaunchedWithAClaimStartsWithAnUncleanRecover() async throws {
         let binding = NativeLockState.Binding(session: UUID().uuidString, device: "d", user: "7", contest: "exam")
         let saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date(),

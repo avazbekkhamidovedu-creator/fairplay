@@ -11,7 +11,12 @@ import Foundation
 ///   defaults write ai.proctora.student ServerURL http://192.168.1.20:8000
 ///   defaults write ai.proctora.student SafetyUnlockMinutes -int 0
 enum Config {
-    static let version = "0.8.0"
+    static let version = "0.8.1"
+
+    /// Same wording as the web UI's appVersionLabel; version only.
+    static func versionLabelText(version: String = Config.version, dev: Bool = Config.isDevBuild) -> String {
+        "FairPlay \(version) · Mac" + (dev ? " · dev" : "")
+    }
 
     #if FAIRPLAY_ISOLATED_TEST && !FAIRPLAY_DEV
     #error("FAIRPLAY_ISOLATED_TEST is permitted only in development builds")

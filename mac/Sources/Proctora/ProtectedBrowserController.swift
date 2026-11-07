@@ -147,6 +147,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         container.addSubview(root)
         overlay = root
+        VersionLabel.add(to: root)
 
         if customSetup { showFixtureSetup(in: root, container: container); return }
         selection = .dkuOJ
@@ -324,6 +325,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         alert.messageText = "Before you begin"
         if !problems.isEmpty {
             alert.informativeText = "Your Mac was not locked. Fix this, then press Continue again:\n\n" + problems.joined(separator: "\n")
+                + "\n\n" + Config.versionLabelText()
             alert.addButton(withTitle: "Back")
             alert.runModal()
             return
@@ -331,11 +333,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         alert.informativeText = "Device checks passed. Remote access checks passed."
             + (apps.isEmpty ? "\nNo apps need closing." : "\n\nApps to close:\n" + apps.joined(separator: "\n"))
             + "\n\nSave your work first. Closing apps may lose unsaved changes."
-            + "\n\n" + Self.beginText
+            + "\n\n" + Self.beginText + "\n\n" + Config.versionLabelText()
         alert.addButton(withTitle: apps.isEmpty ? "Lock and open" : "Quit all and continue")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if apps.isEmpty { startPressed(); return }
+        if apps.isEmpty && LockdownController.shared.appsToClose().isEmpty { startPressed(); return }
         startButton?.isEnabled = false
         LockdownController.shared.quitAppsBeforeLock { [weak self] remaining in
             guard let self else { return }
@@ -521,6 +523,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         container.addSubview(root)
         overlay = root
+        VersionLabel.add(to: root)
         selection = .dkuOJ
         recoveringLock = true
         nativeExam = NativeExamSession(restoring: state.contest, binding: state.binding)
@@ -1061,6 +1064,29 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         return message.contains("Mac code belongs to another")
     }
 
+    struct OJRefusal: Equatable {
+        let text: String
+        let retryAfter: TimeInterval
+    }
+
+    /// The OJ's unsigned 403 on claim/recover. Shown to the student only; it never changes lock state.
+    static func ojRefusal(status: Int?, data: Data?) -> OJRefusal? {
+        guard status == 403, let data, data.count <= 4096,
+              let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let reason = body["reason"] as? String,
+              let raw = body["error"] as? String else { return nil }
+        let retry: TimeInterval
+        switch reason {
+        case "instructor", "not_fairplay": retry = 30
+        case "not_open": retry = 15
+        default: return nil
+        }
+        let text = String(String.UnicodeScalarView(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
+            .prefix(200))).trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
+        return OJRefusal(text: text, retryAfter: retry)
+    }
+
     static func nativeRequest(endpoint: URL, origin: URL, nonce: String, unclean: Bool, lockId: String? = nil, cookies: [HTTPCookie]) -> URLRequest {
         let matching = matchingCookies(cookies, origin: origin, endpoint: endpoint)
         var request = URLRequest(url: endpoint)
@@ -1119,6 +1145,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                           self.nativeExam.accept(context) else {
                         if sendsLock, Self.isLockConflict(status: status, data: data) {
                             self.notice?.stringValue = Self.lockConflictText
+                            return
+                        }
+                        if sendsLock, error == nil, let shown = Self.ojRefusal(status: status, data: data) {
+                            self.notice?.stringValue = shown.text
+                            self.scheduleNext(.refused(after: shown.retryAfter))
                             return
                         }
                         if (path.hasPrefix("claim/") || path.hasSuffix("/renew")), error == nil, let status, [400,401,403,404,409].contains(status),
