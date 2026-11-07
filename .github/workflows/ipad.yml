@@ -66,7 +66,7 @@ jobs:
         run: |
           V="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' ios/FairPlay/Config.swift | head -1)"
           TAG="v$(tr -d ' \n' < RELEASE_VERSION)"
-          [[ "$V" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad version $V / $TAG"; exit 1; }
+          [[ "$V" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$TAG" =~ ^v[0-9]+(\.[0-9]+){2,3}$ ]] || { echo "::error::bad version $V / $TAG"; exit 1; }
           echo "APP_VERSION=$V" >> "$GITHUB_ENV"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
       - name: Release settings (watched test build)

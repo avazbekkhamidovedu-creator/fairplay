@@ -1064,6 +1064,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         return message.contains("Mac code belongs to another")
     }
 
+    static let claimConflictText = "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry, or ask your instructor to move you to this computer."
+    private var claimWasConflict = false
+
     struct OJRefusal: Equatable {
         let text: String
         let retryAfter: TimeInterval
@@ -1077,7 +1080,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
               let raw = body["error"] as? String else { return nil }
         let retry: TimeInterval
         switch reason {
-        case "instructor", "not_fairplay": retry = 30
+        case "instructor", "not_fairplay", "other_device", "handed_in", "on_hold": retry = 30
         case "not_open": retry = 15
         default: return nil
         }
@@ -1139,6 +1142,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                         self.diagnostic(line, url: endpoint)
                     }
                     let hadBinding = self.nativeExam.binding != nil
+                    if path.hasPrefix("claim/") { self.claimWasConflict = status == 409 }
                     let envelope = data.flatMap { $0.count <= 24000 ? (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] : nil }
                     guard error == nil, status == 200, let envelope,
                           let context = NativeDeviceContext.verify(envelope, publicKey: key, nonce: nonce, device: device),
@@ -1170,7 +1174,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                             return
                         }
                         // A denial cannot disprove an earlier committed claim with a lost response.
-                        self.notice?.stringValue = "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
+                        self.notice?.stringValue = path.hasPrefix("recover/") && self.claimWasConflict
+                            ? Self.claimConflictText
+                            : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
                         self.scheduleNext(refusal)
                         return
                     }

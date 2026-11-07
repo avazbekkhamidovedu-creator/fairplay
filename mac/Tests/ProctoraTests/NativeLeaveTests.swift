@@ -220,6 +220,10 @@ import CryptoKit
         #expect(parse(#"{"error":"x","reason":"instructor"}"#)?.retryAfter == 30)
         #expect(parse(#"{"error":"x","reason":"not_fairplay"}"#)?.retryAfter == 30)
         #expect(parse(#"{"error":"Not open yet.","reason":"not_open"}"#)?.retryAfter == 15)
+        for reason in ["other_device", "handed_in", "on_hold"] {
+            #expect(parse(#"{"error":"Moved.","reason":"\#(reason)"}"#) == .init(text: "Moved.", retryAfter: 30))
+            #expect(parse(#"{"error":"Moved.","reason":"\#(reason)"}"#, status: 409) == nil)
+        }
         #expect(parse(#"{"error":"x","reason":"other"}"#) == nil)
         #expect(parse(#"{"error":5,"reason":"instructor"}"#) == nil)
         #expect(parse(#"{"error":"x"}"#) == nil)

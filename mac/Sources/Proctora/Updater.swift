@@ -6,7 +6,7 @@ import Security
 ///
 /// Check: a few seconds after launch and then every 6 hours, GET the latest release of the
 /// public download repo (GitHub API). An update is offered only when
-///  - the tag is vX.Y.Z and newer than Config.version,
+///  - the tag is vX.Y.Z or vX.Y.Z.W and newer than Config.version,
 ///  - it has exactly one asset "FairPlay-Mac.zip" whose download URL is
 ///    https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip,
 ///  - GitHub gives that asset a "sha256:<64 hex>" digest (no digest: no update, never an
@@ -157,16 +157,16 @@ final class Updater {
 
     // MARK: - Parsing and decisions (pure, tested)
 
-    /// "v0.5.4" / "0.5.4" -> "0.5.4"; nil unless it is exactly three dot-separated numbers.
+    /// "v0.5.4" / "0.5.4" -> "0.5.4"; nil unless it is three or four dot-separated numbers.
     static func version(fromTag tag: String) -> String? {
         let v = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
         return isPlainVersion(v) ? v : nil
     }
 
-    /// ^\d+\.\d+\.\d+$ with ASCII digits (at most 9 per part).
+    /// ^\d+(\.\d+){2,3}$ with ASCII digits (at most 9 per part).
     static func isPlainVersion(_ s: String) -> Bool {
         let parts = s.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { return false }
+        guard (3...4).contains(parts.count) else { return false }
         return parts.allSatisfy { p in
             !p.isEmpty && p.count <= 9 && p.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
         }

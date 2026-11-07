@@ -61,7 +61,7 @@ private func releaseJSON(tag: String = "v0.5.4",
     }
 
     @Test func badTagsAreRefused() {
-        for tag in ["latest", "v1.2", "v1.2.3.4", "v1.2.3-beta", "v01.2.x", "vv1.2.3", "v1..3", "v١.٢.٣", ""] {
+        for tag in ["latest", "v1.2", "v1.2.3.4.5", "v1.2.3.", "v1.2.3.x", "v1.2.3-beta", "v01.2.x", "vv1.2.3", "v1..3", "v١.٢.٣", ""] {
             #expect(Updater.parseRelease(json: releaseJSON(tag: tag)) == nil, "tag \(tag)")
         }
     }
@@ -112,6 +112,17 @@ private func releaseJSON(tag: String = "v0.5.4",
         #expect(Updater.isNewer("1.0.0", than: "0.99.99"))
         #expect(!Updater.isNewer("0.5.3", than: "0.5.3"))
         #expect(!Updater.isNewer("0.5.2", than: "0.5.3"))
+    }
+
+    @Test func fourPartVersionsOrderCorrectly() {
+        #expect(Updater.isNewer("0.8.1.1", than: "0.8.1"))
+        #expect(Updater.isNewer("0.8.1.1", than: "0.8.0"))
+        #expect(Updater.isNewer("0.8.2", than: "0.8.1.1"))
+        #expect(Updater.isNewer("0.8.1.10", than: "0.8.1.9"))
+        #expect(!Updater.isNewer("0.8.1.1", than: "0.8.1.1"))
+        #expect(!Updater.isNewer("0.8.1", than: "0.8.1.1"))
+        #expect(Updater.version(fromTag: "v0.8.1.1") == "0.8.1.1")
+        #expect(Updater.parseRelease(json: releaseJSON(tag: "v0.8.1.1"))?.version == "0.8.1.1")
     }
 
     @Test func plainVersions() {

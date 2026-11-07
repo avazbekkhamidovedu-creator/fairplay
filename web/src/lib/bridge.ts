@@ -317,11 +317,11 @@ function stateOf(d: NativeState): NativeState {
   return out;
 }
 
-/** The state's `update` field (it crosses a trust boundary): {version: "X.Y.Z"} or null. */
+/** The state's `update` field (it crosses a trust boundary): {version: "X.Y.Z" or "X.Y.Z.W"} or null. */
 export function parseUpdate(v: unknown): AppUpdate | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const version = (v as { version?: unknown }).version;
-  if (typeof version !== "string" || version.length > 32 || !/^\d+\.\d+\.\d+$/.test(version)) return null;
+  if (typeof version !== "string" || version.length > 32 || !/^\d+\.\d+\.\d+(\.\d+)?$/.test(version)) return null;
   return { version };
 }
 

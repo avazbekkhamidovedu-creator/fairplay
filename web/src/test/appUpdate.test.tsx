@@ -54,6 +54,7 @@ afterEach(() => {
 describe("state.update parsing", () => {
   it("accepts only {version: X.Y.Z}", () => {
     expect(bridge.parseUpdate({ version: "0.5.4" })).toEqual({ version: "0.5.4" });
+    expect(bridge.parseUpdate({ version: "0.8.1.1" })).toEqual({ version: "0.8.1.1" });
     expect(bridge.parseUpdate({ version: "10.0.12", extra: "x" })).toEqual({ version: "10.0.12" });
     for (const bad of [null, undefined, "0.5.4", 5, [], {}, { version: 5 }, { version: "0.5" }, { version: "v0.5.4" },
       { version: "0.5.4-beta" }, { version: "0.5.4\n" }, { version: "<b>1.2.3</b>" }, { version: "1".repeat(40) + ".0.0" }]) {
