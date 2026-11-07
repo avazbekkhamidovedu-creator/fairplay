@@ -14,6 +14,9 @@ struct NativeDeviceContext: Decodable, Equatable {
     let state: String
     let lease_until: Int
     var sites: [String]? = nil
+    var resources: [String]? = nil
+    /// This student's own deadline (unix seconds, extra time included); absent on an older OJ.
+    var deadline: Int? = nil
     var hold: Bool? = nil
 
     struct Binding: Equatable {
@@ -54,7 +57,9 @@ struct NativeDeviceContext: Decodable, Equatable {
               !value.user.isEmpty, value.user.count <= 128, !value.contest.isEmpty, value.contest.count <= 128,
               value.participation.count <= 128,
               (value.sites ?? []).count <= 32, (value.sites ?? []).allSatisfy({ $0.utf8.count <= 2048 }),
+              (value.resources ?? []).count <= 64, (value.resources ?? []).allSatisfy({ $0.utf8.count <= 2048 }),
               ["active", "finishing", "completed", "released", "rejected"].contains(value.state),
+              (value.deadline ?? 0) >= 0, (value.deadline ?? 0) <= value.expires + 3_153_600_000,
               value.lease_until >= 0, value.lease_until <= value.expires else { return nil }
         return value
     }

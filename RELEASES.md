@@ -1,11 +1,10 @@
-## What's new in 0.8.2
+## What's new in 0.8.3
 
-- DKU OJ now opens inside FairPlay on Mac and Windows: sign in to DKU OJ in the locked app and take the exam there.
-- If an exam cannot be started, FairPlay now shows DKU OJ's own reason (for example "already handed in" or "ask your instructor to reopen") instead of a generic error.
-- Leave an exam with your instructor's code, or your instructor can use **Unlock and reopen** on the DKU OJ help page.
-- After a restart, the DKU OJ page reloads by itself. If the university network is not reachable, FairPlay offers Cisco Secure Client / AnyConnect so you can connect the VPN without leaving the app.
-- Reload the page with Cmd+R (Mac) or Ctrl+R / F5 (Windows), like in a browser.
-- The app version is shown in the top-left corner.
+- Open-book exams: an instructor can list allowed websites (and a Duke Box folder). Students open them in separate tabs; the exam itself stays on DKU OJ. AI assistants, chat, translators and code or file sharing sites are always blocked. Nothing changes unless the instructor lists sites.
+- When the exam time is over, FairPlay unlocks the computer by itself, using each student's own deadline, so a student with extra time stays locked until their time ends. If the connection to DKU OJ is lost, FairPlay still unlocks after the deadline.
+- Fewer start problems: a leftover session from an earlier exam, or signing in again on the same computer, no longer needs the instructor to step in.
+- Instructors: **Unlock and reopen** is now one step on the DKU OJ help page, and a reopen never shortens a student's time.
+- DKU OJ opens inside FairPlay on Mac and Windows, with the app version shown in the top-left corner and DKU OJ's own reason shown when an exam cannot be started.
 
 ## Download FairPlay
 

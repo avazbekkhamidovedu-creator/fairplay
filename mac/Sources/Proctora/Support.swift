@@ -220,6 +220,7 @@ final class EventLog {
         case canvasUploadUnsupported
         case canvasSsoPopup(String)
         case boxOpened(String)
+        case deadlineUnlock
         case deviceKeyUnavailable(String)
 
         /// (type, detail) as sent to the server.
@@ -229,6 +230,7 @@ final class EventLog {
             case .lockEnded: return ("lock_ended", "")
             case .tapUnavailable: return ("tap_unavailable", "accessibility not granted")
             case .safetyUnlock: return ("safety_unlock", "dev safety timer")
+            case .deadlineUnlock: return ("deadline_unlock", "exam time is over")
             case .secureInputOn: return ("secure_input_on", "another app holds secure input")
             case .blockedShortcut(let s): return ("blocked_shortcut", s)
             case .otherAppForeground(let s): return ("other_app_foreground", s)

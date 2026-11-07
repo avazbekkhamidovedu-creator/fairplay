@@ -218,7 +218,7 @@ def test_site_policy_matching(monkeypatch):
     assert d("chat.openai.com") and d("*.openai.com") and d("deepseek.com") and d("chat.deepseek.com")
     assert d("*.google.com") and d("gemini.google.com") and d("*.github.com") and d("github.com")
     assert d("drive.google.com") and d("web.telegram.org") and d("wx.qq.com")
-    assert not d("google.com") and not d("docs.python.org") and not d("docs.github.com")
+    assert d("google.com") and d("www.google.com") and not d("scholar.google.com") and not d("docs.python.org") and not d("docs.github.com")
     assert not d("notopenai.com") and not d("*.python.org")
     monkeypatch.setenv(site_policy.ENV_ALLOWLIST, "docs.python.org,*.cppreference.com")
     kept, blocked = site_policy.filter_sites(["docs.python.org", "python.org", "*.cppreference.com",

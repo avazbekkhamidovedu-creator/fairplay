@@ -7,8 +7,16 @@ struct ProtectedBrowserPolicy {
     let origins: Set<String>
     private let referenceRules: [ExternalExamController.SiteRule]
     private let baseOrigins: Set<String>
+    private let resourceOrigins: Set<String>
+    private let resourceSuffixes: Set<String>
+    /// The signed sites and resources stop working at this time unless a newer signed context extends it.
+    var sitesExpire: Date?
+    var clock: () -> Date = Date.init
+    private var sitesLive: Bool { sitesExpire.map { clock() < $0 } ?? true }
+    /// The signed sites that passed validation, in order (the picker lists these).
+    let acceptedSites: [String]
 
-    init?(start: String, additionalOrigins: String, forbiddenOrigin: URL, allowHTTP: Bool = false, referenceSites: [String] = []) {
+    init?(start: String, additionalOrigins: String, forbiddenOrigin: URL, allowHTTP: Bool = false, referenceSites: [String] = [], resourceOrigins resources: [String] = []) {
         guard start.utf8.count <= 2048, additionalOrigins.utf8.count <= 8192,
               let url = Self.normalizedURL(start),
               let first = Self.origin(url), first != Self.origin(forbiddenOrigin),
@@ -37,16 +45,38 @@ struct ProtectedBrowserPolicy {
         guard !allowed.contains(Self.origin(forbiddenOrigin) ?? "") else { return nil }
         baseOrigins = allowed
         var references: [ExternalExamController.SiteRule] = []
+        var accepted: [String] = []
         guard referenceSites.count <= 32 else { return nil }
         for raw in referenceSites {
             guard raw.utf8.count <= 2048, let link = Self.normalizedURL(raw),
                   let origin = Self.origin(link), origin != Self.origin(forbiddenOrigin),
                   link.scheme == "https" || (allowHTTP && link.scheme == "http"),
-                  let rule = ExternalExamController.SiteRule(link.absoluteString) else { return nil }
+                  !SiteDenyList.isDenied(host: link.host ?? ""),
+                  let rule = ExternalExamController.SiteRule(link.absoluteString) else { continue }
             allowed.insert(origin)
             references.append(rule)
+            accepted.append(link.absoluteString)
         }
         referenceRules = references
+        acceptedSites = accepted
+        // Subresource-only origins (CDNs, asset hosts): never a page of their own.
+        var assets: Set<String> = []
+        var suffixes: Set<String> = []
+        guard resources.count <= 64 else { return nil }
+        for raw in (accepted.isEmpty ? [] : resources) {
+            if raw.contains("*") {
+                if let suffix = Self.resourceSuffix(raw) { suffixes.insert(suffix) }
+                continue
+            }
+            guard raw.utf8.count <= 2048, let link = Self.normalizedURL(raw), let origin = Self.origin(link),
+                  link.path.isEmpty || link.path == "/", link.query == nil, link.fragment == nil,
+                  origin != Self.origin(forbiddenOrigin),
+                  link.scheme == "https" || (allowHTTP && link.scheme == "http"),
+                  !SiteDenyList.isDenied(host: link.host ?? "") else { continue }
+            assets.insert(origin)
+        }
+        resourceOrigins = assets
+        resourceSuffixes = suffixes
         startURL = url
         origins = allowed
     }
@@ -90,16 +120,72 @@ struct ProtectedBrowserPolicy {
         guard let url else { return false }
         if !mainFrame && ["about:blank", "about:srcdoc"].contains(url.absoluteString.lowercased()) { return true }
         guard let origin = Self.origin(url) else { return false }
-        guard origins.contains(origin) else { return false }
         if baseOrigins.contains(origin) { return true }
+        guard sitesLive else { return false }
+        if !mainFrame, resourceOrigins.contains(origin) || matchesResourceSuffix(url) { return true }
+        guard origins.contains(origin) else { return false }
         return referenceRules.contains { $0.matches(host: url.host?.lowercased() ?? "", path: url.path) }
+    }
+
+    /// Registry-controlled suffixes a wildcard may never sit on ("https://*.com").
+    private static let publicSuffixes: Set<String> = [
+        "com", "org", "net", "edu", "gov", "mil", "int", "io", "co", "ai", "app", "dev", "cn", "uk", "us", "de", "jp",
+        "co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "edu.cn", "org.cn", "net.cn", "gov.cn", "ac.cn",
+        "com.au", "edu.au", "co.jp", "ac.jp", "co.in", "com.hk", "edu.hk", "com.tw", "edu.tw", "github.io", "cloudfront.net",
+        "amazonaws.com", "herokuapp.com", "azurewebsites.net", "appspot.com", "blogspot.com", "web.app", "firebaseapp.com",
+        "s3.amazonaws.com", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "wordpress.com", "githubusercontent.com",
+        "gitlab.io", "onrender.com", "fly.dev", "replit.dev", "r2.dev", "hf.space", "notion.site", "glitch.me", "repl.co"
+    ]
+
+    /// "https://*.suffix" -> "suffix": one leading wildcard label, a suffix of at least two labels that is
+    /// not a public suffix, no port, path, query or fragment, and not covering a denied host.
+    static func resourceSuffix(_ raw: String) -> String? {
+        let prefix = "https://*."
+        guard raw.utf8.count <= 253 + prefix.utf8.count, raw.hasPrefix(prefix) else { return nil }
+        let suffix = String(raw.dropFirst(prefix.count))
+        guard !suffix.isEmpty, !suffix.contains(where: { "/:?#*@%[]".contains($0) }), !suffix.hasSuffix("."),
+              suffix == suffix.lowercased(), !publicSuffixes.contains(suffix),
+              let url = URL(string: "https://" + suffix), origin(url) == "https://" + suffix,
+              suffix.split(separator: ".").count >= 2, !SiteDenyList.isDenied(host: "probe." + suffix) else { return nil }
+        return suffix
+    }
+
+    private func matchesResourceSuffix(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", url.port == nil || url.port == 443,
+              let host = url.host?.lowercased(), !SiteDenyList.isDenied(host: host) else { return false }
+        return resourceSuffixes.contains { host.hasSuffix("." + $0) }
+    }
+
+    /// The first tab stays inside DKU OJ and its login hosts; allowed sites open in their own tabs.
+    func allowsMainTab(_ url: URL?) -> Bool {
+        guard let url, allows(url, mainFrame: true), let origin = Self.origin(url) else { return false }
+        return baseOrigins.contains(origin)
+    }
+
+    /// True for an allowed site that must open in a separate tab instead of the main one.
+    func opensInOwnTab(_ url: URL?) -> Bool {
+        guard let url, allows(url, mainFrame: true) else { return false }
+        return !allowsMainTab(url)
     }
 
     /// WebKit content blocker covers resource requests too, not just page navigations.
     /// No wildcard domains or port expansion. Inline/page-generated content remains site-controlled.
     var contentRules: String {
         var rules: [[String: Any]] = [["trigger": ["url-filter": ".*"], "action": ["type": "block"]]]
-        for origin in origins.sorted() {
+        // Wildcard resource hosts first; denied hosts under them are blocked again; exact origins last.
+        for suffix in resourceSuffixes.sorted() {
+            let escaped = suffix.replacingOccurrences(of: ".", with: "\\.")
+            for tail in ["/", ":443/"] {
+                rules.append(["trigger": ["url-filter": "^https://[a-z0-9.-]+\\." + escaped + tail],
+                              "action": ["type": "ignore-previous-rules"]])
+            }
+            for denied in SiteDenyList.deniedDomains(under: suffix) {
+                let d = denied.replacingOccurrences(of: ".", with: "\\.")
+                rules.append(["trigger": ["url-filter": "^https?://" + d + "[:/]"], "action": ["type": "block"]])
+                rules.append(["trigger": ["url-filter": "^https?://[a-z0-9.-]+\\." + d + "[:/]"], "action": ["type": "block"]])
+            }
+        }
+        for origin in (origins.union(resourceOrigins)).sorted() {
             // WebKit's content-blocker regex grammar does not support alternation.
             // Network URLs are canonicalized with '/' after the authority. Keep the
             // default and explicit 443 forms separate; never allow a generic ':'.

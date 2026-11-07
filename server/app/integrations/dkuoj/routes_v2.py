@@ -511,6 +511,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     from ...services import upload_days
     from ...site_companions import companions
     from ...box_profiles import checked_link, without_box_hosts
+    from .lock_sites import build_lock_sites
     websites, refused = filter_sites(list(e.websites or []))
     box_link, box_error = checked_link(e.box_link)
     if box_link:
@@ -529,6 +530,8 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "closes_at": iso(exam_closes_at(e)), "open_to": open_to,
             "settings": {"calculator": e.calculator or "off", "open_book": bool(e.open_book),
                          "websites": websites,
+                         "lock_sites": build_lock_sites(websites, clean_website_links(e.website_links or [], websites),
+                                                        box_link),
                          "box_link": box_link, "box_link_error": box_error,
                          # 2026-10-24: start pages, sites opened so a service works (Duke Box:
                          # sign-in, scripts, previews; app.site_companions), early uploads

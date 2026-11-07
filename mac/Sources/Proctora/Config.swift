@@ -11,7 +11,7 @@ import Foundation
 ///   defaults write ai.proctora.student ServerURL http://192.168.1.20:8000
 ///   defaults write ai.proctora.student SafetyUnlockMinutes -int 0
 enum Config {
-    static let version = "0.8.2"
+    static let version = "0.8.3"
 
     /// Same wording as the web UI's appVersionLabel; version only.
     static func versionLabelText(version: String = Config.version, dev: Bool = Config.isDevBuild) -> String {

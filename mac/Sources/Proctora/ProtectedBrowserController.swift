@@ -7,6 +7,12 @@ private final class ProtectedUniversityWebView: WKWebView {
         super.willOpenMenu(menu, with: event)
     }
     override func quickLook(with event: NSEvent) {}
+    /// Save, Save As, Print and Open stay with the page: a PDF from an allowed site is read-only here.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command), ["s", "p", "o"].contains(event.charactersIgnoringModifiers?.lowercased() ?? "") { return true }
+        return super.performKeyEquivalent(with: event)
+    }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { [] }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { [] }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { false }
@@ -33,6 +39,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var contextInFlight = false
     private var activeExamBinding: String?
     private var approvedSites: [String] = []
+    private var approvedResources: [String] = []
+    private var failsafe = DeadlineFailsafe()
+    private var failsafeCancel: (() -> Void)?
+    private var pickerSites: [String] = []
     private var sitePicker: NSPopUpButton?
     private var nativeProvisioned = false
     private var retainedWebsiteStore: WKWebsiteDataStore?
@@ -680,7 +690,51 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         reloadButton?.isEnabled = browser != nil && reloadTarget != nil && lockIsOwned
     }
 
+    private func dropExpiredSites() {
+        if let expiry = policyExpires, expiry < effects.now(), !approvedSites.isEmpty || !approvedResources.isEmpty {
+            installReferenceSites([])
+        }
+    }
+
+    /// Exam text must not be pasteable into an allowed site: leaving the exam (first) tab clears it once.
+    static func clearsClipboard(from current: WKWebView?, to target: WKWebView, examTab: WKWebView?) -> Bool {
+        guard let current, let examTab else { return false }
+        return current === examTab && target !== examTab
+    }
+
+    private func noteDeadline(_ context: NativeDeviceContext) {
+        failsafe.accept(context, at: effects.monotonic())
+        armFailsafe()
+    }
+
+    private func armFailsafe(minimum: TimeInterval = 1) {
+        failsafeCancel?(); failsafeCancel = nil
+        guard lockIsOwned, let wait = failsafe.secondsUntilDue(at: effects.monotonic()) else { return }
+        failsafeCancel = effects.schedule(max(wait, 0) + minimum) { [weak self] in
+            self?.failsafeCancel = nil
+            self?.checkFailsafe()
+        }
+    }
+
+    /// Once due, ask the OJ again until a VERIFIED answer comes back: only that may release (or, if it
+    /// moved the deadline, postpones). Errors and unverifiable replies just retry; a hard bound ends it.
+    private func checkFailsafe() {
+        guard lockIsOwned else { return }
+        if nativeRequestInFlight || contextInFlight { armFailsafe(minimum: 5); return }
+        switch failsafe.decide(at: effects.monotonic()) {
+        case .wait: armFailsafe()
+        case .probe:
+            refreshExamContext()
+            armFailsafe(minimum: DeadlineFailsafe.probeRetry)
+        case .release:
+            diagnostic("deadline-failsafe-unlock", url: nil)
+            EventLog.shared.record(.deadlineUnlock)
+            close(release: true, deadlineOver: true)
+        }
+    }
+
     private func refreshExamContext() {
+        dropExpiredSites()
         if recoverUncleanPending, let contest = nativeExam.contest {
             if !requestNative("recover/" + contest) { scheduleNext(.other) }
             return
@@ -698,7 +752,6 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             scheduleNext(.other)
             return
         }
-        if let expiry = policyExpires, expiry < effects.now(), !approvedSites.isEmpty { installReferenceSites([]) }
         contextInFlight = true
         let nonce = UUID().uuidString
         let script = "const r = await fetch('/api/fairplay/browser-context?nonce=' + nonce, {credentials:'same-origin',cache:'no-store'}); if (!r.ok) return null; return await r.json();"
@@ -726,7 +779,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             // A different account/exam invalidates the preceding reference policy.
             activeExamBinding = context.binding
             policyExpires = NativeRenewSchedule.policyExpiry(signedExpires: context.expires, receivedAt: effects.now())
-            if context.sites != approvedSites { installReferenceSites(context.sites) }
+            policy?.sitesExpire = policyExpires
+            if context.sites != approvedSites || (context.resources ?? []) != approvedResources {
+                installReferenceSites(context.sites, resources: context.resources ?? [])
+            }
         } else {
             activeExamBinding = nil
             if !approvedSites.isEmpty { installReferenceSites([]) }
@@ -734,12 +790,14 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         updateNavigation()
     }
 
-    private func installReferenceSites(_ sites: [String]) {
+    private func installReferenceSites(_ sites: [String], resources: [String] = []) {
         guard let current = policy,
-              let updated = ProtectedBrowserPolicy(start: current.startURL.absoluteString,
+              var updated = ProtectedBrowserPolicy(start: current.startURL.absoluteString,
                   additionalOrigins: selection.additionalOrigins, forbiddenOrigin: Config.serverURL,
-                  allowHTTP: current.startURL.scheme == "http", referenceSites: sites),
+                  allowHTTP: current.startURL.scheme == "http", referenceSites: sites, resourceOrigins: resources),
               let page = orderedTabs.first else { return }
+        updated.sitesExpire = sites.isEmpty ? nil : policyExpires
+        updated.clock = { [weak self] in self?.effects.now() ?? Date() }
         let revision = UUID(); policyRevision = revision
         let identifier = "fairplay.protected-browser." + revision.uuidString
         WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: updated.contentRules) { [weak self, weak page] rules, error in
@@ -755,10 +813,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 self.ruleIdentifier = identifier
                 self.policy = updated
                 self.approvedSites = sites
+                self.approvedResources = resources
+                self.pickerSites = updated.acceptedSites
                 self.sitePicker?.removeAllItems()
                 self.sitePicker?.addItem(withTitle: "Allowed websites")
-                for raw in sites { self.sitePicker?.addItem(withTitle: ProtectedBrowserPolicy.normalizedURL(raw)?.host ?? raw) }
-                self.sitePicker?.isHidden = sites.isEmpty
+                for raw in updated.acceptedSites { self.sitePicker?.addItem(withTitle: ProtectedBrowserPolicy.normalizedURL(raw)?.host ?? raw) }
+                self.sitePicker?.isHidden = updated.acceptedSites.isEmpty
                 // Close revoked resource tabs, preserving the university page and its drafts.
                 let revoked = self.orderedTabs.dropFirst().filter { updated.allows($0.url, mainFrame: true) == false }
                 for tab in revoked {
@@ -777,12 +837,17 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     @objc private func openReference(_ sender: NSPopUpButton) {
         let index = sender.indexOfSelectedItem - 1
-        guard lockIsOwned, approvedSites.indices.contains(index), orderedTabs.count < 8,
-              let root = orderedTabs.first, let current = browser,
-              let url = ProtectedBrowserPolicy.normalizedURL(approvedSites[index]), policy?.allows(url, mainFrame: true) == true else { return }
+        guard pickerSites.indices.contains(index), let url = ProtectedBrowserPolicy.normalizedURL(pickerSites[index]) else { return }
+        openReferenceTab(url)
+    }
+
+    private func openReferenceTab(_ url: URL) {
+        guard lockIsOwned, orderedTabs.count < 8, let root = orderedTabs.first, let current = browser,
+              policy?.allows(url, mainFrame: true) == true else { return }
         let child = ProtectedUniversityWebView(frame: current.frame, configuration: root.configuration)
         child.autoresizingMask = [.width, .height]; child.navigationDelegate = self; child.uiDelegate = self
         child.allowsLinkPreview = false
+        if Self.clearsClipboard(from: current, to: child, examTab: root) { NSPasteboard.general.clearContents() }
         current.isHidden = true; parents.append(current); orderedTabs.append(child); browser = child
         overlay?.addSubview(child, positioned: .below, relativeTo: current)
         navigationState = ProtectedBrowserNavigation(startURL: url)
@@ -891,6 +956,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard lockIsOwned, orderedTabs.indices.contains(sender.tag), let current = browser else { return }
         let target = orderedTabs[sender.tag]
         guard target !== current else { return }
+        if Self.clearsClipboard(from: current, to: target, examTab: orderedTabs.first) { NSPasteboard.general.clearContents() }
         dialogs.cancel()
         current.isHidden = true
         parents.removeAll { $0 === target }
@@ -1196,12 +1262,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                         self.close(release: true); return
                     }
                     let entered = path.hasPrefix("claim/") || path.hasPrefix("recover/")
+                    self.noteDeadline(context)
                     if self.nativeExam.onHold { self.applyHold(true); self.scheduleNext(.success); return }
                     self.applyHold(false)
                     self.activeExamBinding = context.session
                     self.policyExpires = NativeRenewSchedule.policyExpiry(signedExpires: TimeInterval(context.expires), receivedAt: self.effects.now())
+                    self.policy?.sitesExpire = self.policyExpires
                     let sites = context.state == "active" ? (context.sites ?? []) : []
-                    if sites != self.approvedSites { self.installReferenceSites(sites) }
+                    let assets = context.state == "active" ? (context.resources ?? []) : []
+                    if sites != self.approvedSites || assets != self.approvedResources { self.installReferenceSites(sites, resources: assets) }
                     if joining, context.state == "active", let page {
                         let script = "const f=document.createElement('form'); f.method='POST'; f.action='/contest/'+exam+'/join'; const c=document.createElement('input'); c.type='hidden'; c.name='csrfmiddlewaretoken'; c.value=csrf; f.appendChild(c); document.body.appendChild(f); f.submit();"
                         page.callAsyncJavaScript(script, arguments: ["exam": context.contest, "csrf": matching.first(where: { $0.name == "csrftoken" })?.value ?? ""], in: nil, in: .defaultClient) { _ in }
@@ -1315,7 +1384,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func discardBrowser() {
         renewCancel?(); renewCancel = nil
-        contextInFlight = false; approvedSites = []; sitePicker = nil
+        contextInFlight = false; approvedSites = []; approvedResources = []; pickerSites = []; sitePicker = nil
         policyRevision = UUID(); policyExpires = nil
         draftTimer?.invalidate(); draftTimer = nil
         draftScope = nil; draftFields = nil; pendingDraft = nil
@@ -1339,12 +1408,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         dialogs.cancel()
     }
 
-    private func close(release: Bool) {
-        if release, !nativeExam.permitsUnlock {
+    private func close(release: Bool, deadlineOver: Bool = false) {
+        if release, !deadlineOver, !nativeExam.permitsUnlock {
             notice?.stringValue = "DKU OJ must confirm the end of this exam before unlocking."
             return
         }
         nativeGeneration = UUID(); nativeRequestInFlight = false
+        failsafeCancel?(); failsafeCancel = nil; failsafe.clear()
         nativeExam = NativeExamSession()
         activeExamBinding = nil
         retainedWebsiteStore = nil
@@ -1417,6 +1487,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let trustedPopupRequest = action.targetFrame == nil && webView === browser
             && policy?.allows(webView.url, mainFrame: true) == true
             && action.request.url?.absoluteString == "about:blank"
+        let mainTabNeedsOwnTab = webView === orderedTabs.first && action.targetFrame?.isMainFrame == true
+            && policy?.opensInOwnTab(action.request.url) == true
+        if mainTabNeedsOwnTab, lockIsOwned, !action.shouldPerformDownload, let url = action.request.url {
+            decisionHandler(.cancel)
+            openReferenceTab(url)
+            return
+        }
         guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
               (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
             if webView === browser, lockIsOwned {
@@ -1550,6 +1627,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         child.uiDelegate = self
         child.allowsBackForwardNavigationGestures = false
         child.allowsLinkPreview = false
+        if Self.clearsClipboard(from: webView, to: child, examTab: orderedTabs.first) { NSPasteboard.general.clearContents() }
         webView.isHidden = true
         parents.append(webView)
         orderedTabs.append(child)

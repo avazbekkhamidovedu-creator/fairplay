@@ -47,7 +47,8 @@ final class ExternalExamController {
             // Audit 2026-10-13: whole path segments only: "/forms/abc" allows "/forms/abc"
             // and "/forms/abc/..." but not "/forms/abcdef".
             let path = p.isEmpty ? "/" : p
-            if pathPrefix.hasSuffix("/") { return path.hasPrefix(pathPrefix) }
+            // URL.path drops a trailing slash, so "/3/" itself arrives as "/3".
+            if pathPrefix.hasSuffix("/") { return path.hasPrefix(pathPrefix) || path == String(pathPrefix.dropLast()) }
             return path == pathPrefix || path.hasPrefix(pathPrefix + "/")
         }
     }
