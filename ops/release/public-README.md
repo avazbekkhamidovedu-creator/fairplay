@@ -2,12 +2,14 @@
 
 Secure exam app for universities. This repository hosts the app downloads.
 
-## What's new in 0.8.0
+## What's new in 0.8.2
 
 - DKU OJ now opens inside FairPlay on Mac and Windows: sign in to DKU OJ in the locked app and take the exam there.
-- Leave an exam with your instructor's code, or your instructor can unlock you from the DKU OJ page.
+- If an exam cannot be started, FairPlay now shows DKU OJ's own reason (for example "already handed in" or "ask your instructor to reopen") instead of a generic error.
+- Leave an exam with your instructor's code, or your instructor can use **Unlock and reopen** on the DKU OJ help page.
 - After a restart, the DKU OJ page reloads by itself. If the university network is not reachable, FairPlay offers Cisco Secure Client / AnyConnect so you can connect the VPN without leaving the app.
 - Reload the page with Cmd+R (Mac) or Ctrl+R / F5 (Windows), like in a browser.
+- The app version is shown in the top-left corner.
 
 ## Download FairPlay
 
