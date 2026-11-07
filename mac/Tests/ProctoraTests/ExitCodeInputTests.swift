@@ -26,6 +26,9 @@ import Foundation
         #expect(!ExitCodeInput.canSubmit("1234", allowShort: false))
         #expect(!ExitCodeInput.canSubmit("", allowShort: true))
         #expect(ExitCodeInput.canSubmit("0000", allowShort: true))
+        #expect(!ExitCodeInput.canSubmit("0", allowShort: true))
+        #expect(!ExitCodeInput.canSubmit("00000", allowShort: true))
+        #expect(!ExitCodeInput.canSubmit("abcd", allowShort: true))
     }
 
     @Test func retryAfterFromBody() {

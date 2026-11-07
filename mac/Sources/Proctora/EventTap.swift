@@ -34,6 +34,14 @@ final class EventTap {
     static var userHotkeys: Set<Hotkey> = []
     /// Audit M-09: VoiceOver on -> its Ctrl-Opt chords pass.
     static var voiceOverOn = false
+    /// True only while the protected browser holds the lock: Cmd-R and Cmd-Shift-R reach the app menu.
+    static var reloadShortcutAllowed = false
+
+    static func isReloadShortcut(key: Int, flags: CGEventFlags) -> Bool {
+        let held = flags.rawValue & modifierMask
+        return key == kVK_ANSI_R && (held == CGEventFlags.maskCommand.rawValue
+            || held == CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue)
+    }
 
     struct Hotkey: Hashable {
         let keyCode: Int
@@ -137,7 +145,7 @@ final class EventTap {
             }
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             if EventTap.isEmergencyCombo(event, type: type) {
-                if type == .keyDown && !isRepeat {
+                if type == .keyDown && !isRepeat && EventTap.postsEmergencyExit(isDev: Config.isDevBuild) {
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: .proctoraEmergencyExit, object: nil)
                     }
@@ -338,7 +346,10 @@ final class EventTap {
         return (Int(ns.subtype.rawValue), ns.data1)
     }
 
-    /// Ctrl-Opt-Cmd-E: invigilator emergency exit (asks for the invigilator code).
+    /// Release builds swallow Ctrl-Opt-Cmd-E and do nothing; only dev builds still act on it.
+    static func postsEmergencyExit(isDev: Bool) -> Bool { isDev }
+
+    /// Ctrl-Opt-Cmd-E: swallowed while locked (dev builds: invigilator exit prompt).
     static func isEmergencyCombo(_ event: CGEvent, type: CGEventType) -> Bool {
         guard type == .keyDown || type == .keyUp else { return false }
         let f = event.flags
@@ -359,7 +370,7 @@ final class EventTap {
         let opt = flags.contains(.maskAlternate)
         let fn = flags.contains(.maskSecondaryFn)
 
-        if cmd { return true }
+        if cmd { return !(reloadShortcutAllowed && isReloadShortcut(key: key, flags: flags)) }
         // Audit M-03: any shortcut the user enabled in System Settings (rebound Spotlight,
         // Mission Control, Shortcuts.app automations ...), whatever key it is on.
         let mods = flags.rawValue & modifierMask & ~CGEventFlags.maskSecondaryFn.rawValue

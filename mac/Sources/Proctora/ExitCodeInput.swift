@@ -21,7 +21,7 @@ enum ExitCodeInput {
     /// Exit stays disabled until the field holds a full code. Dev builds also accept a
     /// shorter one so the fixed test code can be typed.
     static func canSubmit(_ typed: String, allowShort: Bool) -> Bool {
-        normalized(typed) != nil || (allowShort && !typed.isEmpty)
+        normalized(typed) != nil || (allowShort && typed.count == 4 && typed == digitsOnly(typed))
     }
 
     /// The 429 body carries the seconds left as "retry_after", either at the top or under

@@ -20,6 +20,7 @@ import httpx
 
 TOKEN = "fairplay-shared-token-0123456789abcdef"
 PUBLIC = "https://oj.example.edu"
+INSTALLATION_ID = "7c1d2a54-3b9e-4f60-8a1d-5e2b9c0f4d37"
 TICKET_TTL_S = 60
 
 
@@ -82,6 +83,11 @@ class FakeDkuojLogin:
         if isinstance(out, (dict, list)):
             out = json.dumps(out).encode()
             hdrs = {**hdrs, "content-type": "application/json"}
+        if path.startswith("/api/fairplay/v1/"):
+            from app.integrations.dkuoj import signing
+            hdrs = {**hdrs, **signing.sign_headers(
+                TOKEN, signing.OJ_TO_FP, f"RESPONSE {method} {status}", raw_target,
+                out if isinstance(out, bytes) else str(out).encode(), acting_user=headers.get("x-fp-nonce"))}
         elif isinstance(out, str):
             out = out.encode()
             hdrs = {"content-type": "text/html; charset=utf-8", **hdrs}
@@ -111,6 +117,11 @@ class FakeDkuojLogin:
             return 302, {"location": f"/fairplay/app-login/done#ticket={t}&state={state}"}, b""
         if path == "/fairplay/app-login/done" and method == "GET":
             return 200, {}, "<html>You can close this window.</html>"
+        if path.startswith("/api/fairplay/v1/") and query.get("installation_id") != [INSTALLATION_ID]:
+            return 409, {}, {"detail": "wrong installation"}
+        if path == "/api/fairplay/v1/installation" and method == "GET":
+            return 200, {}, {"protocol": 1, "installation_id": INSTALLATION_ID,
+                             "request_nonce": headers.get("x-fp-nonce")}
         if path == "/api/fairplay/v1/app-login/redeem" and method == "POST":
             return self.redeem(method, raw_target, headers, body)
         m = re.fullmatch(r"/api/fairplay/v1/students/([^/]+)/classes", path)

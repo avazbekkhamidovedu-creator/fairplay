@@ -61,7 +61,7 @@ final class ProtectedBrowserDialogs {
         sheet.alertStyle = .informational
         sheet.addButton(withTitle: "OK")
         if kind != .alert { sheet.addButton(withTitle: "Cancel") }
-        sheet.addButton(withTitle: "Leave and unlock")
+        sheet.addButton(withTitle: "Leave")
         var field: NSTextField?
         if kind == .prompt {
             let input = NSTextField(string: String((defaultText ?? "").prefix(8192)))

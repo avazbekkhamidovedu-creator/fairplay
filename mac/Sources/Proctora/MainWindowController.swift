@@ -73,13 +73,30 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     private lazy var deviceTest = DeviceTestSession(clock: { ProcessInfo.processInfo.systemUptime }, effects: self)
     private var deviceTestTimer: Timer?
     private var deviceTestTapOn = false
+    private var releasedDeviceTestVisible = false
     private let homework = HomeworkLoginCoordinator()
     private let box = BoxCoordinator()
-    private lazy var protectedBrowser = ProtectedBrowserController(busy: { [weak self] in
+    private lazy var protectedBrowser: ProtectedBrowserController = ProtectedBrowserController(busy: { [weak self] in
         guard let self else { return true }
         return LockdownController.shared.isLocked || AppSession.shared.exam != nil
             || self.external.isActive || self.deviceTest.isRunning
-    }, didClose: { [weak self] in self?.takeFocus() })
+    }, didClose: { [weak self] in
+        self?.webView.isHidden = false
+        self?.takeFocus()
+        DispatchQueue.main.async { [weak self] in self?.showProtectedBrowser() }
+    }, testDevice: { [weak self] in
+        guard let self else { return }
+        guard !LockdownController.shared.isLocked, AppSession.shared.exam == nil,
+              !self.deviceTest.isRunning else { return }
+        self.releasedDeviceTestVisible = true
+        self.protectedBrowser.setReleasedPracticeVisible(true)
+        self.webView.isHidden = false
+        self.webView.load(URLRequest(url: Config.serverURL.appendingPathComponent("student/device-test").appending(queryItems: [URLQueryItem(name: "nativeEntry", value: "1")])))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, self.releasedDeviceTestVisible, !self.deviceTest.isRunning else { return }
+            self.restoreReleasedDeviceTest()
+        }
+    }, stopDeviceTest: { [weak self] in self?.deviceTest.end(.leave) })
 
     /// Opt-in native mode; the existing student/exam pages and codes are unchanged.
     func showProtectedBrowser() {
@@ -89,7 +106,95 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         homework.dismiss()
         if let panel = openPanel, let window { window.endSheet(panel, returnCode: .cancel) }
         webView.stopLoading()
+        webView.isHidden = true
         protectedBrowser.show(in: content)
+    }
+
+    // MARK: - Native lock relaunch (NativeLock.swift)
+
+    private var recoveredState: NativeLockState?
+    private var recoveryTimer: Timer?
+
+    /// The last run ended while the native lock was saved: lock first, then open the browser
+    /// with the saved claim. While the keyboard tap cannot start, a full-screen block stays up
+    /// and the saved state is kept; the lock is retried until it works.
+    func startRecovering(_ state: NativeLockState) {
+        showWindow(nil)
+        takeFocus()
+        recoveredState = state
+        attemptNativeRecovery()
+    }
+
+    /// The saved lock ended (dev safety unlock): stop trying to take it again.
+    func cancelNativeRecovery() {
+        recoveryTimer?.invalidate(); recoveryTimer = nil
+        recoveredState = nil
+    }
+
+    private func attemptNativeRecovery() {
+        guard let state = recoveredState, let content = window?.contentView else { return }
+        if LockdownController.shared.acquireNativeLock(recovering: true) {
+            recoveryTimer?.invalidate(); recoveryTimer = nil
+            recoveredState = nil
+            hideBlocking()
+            webView.stopLoading()
+            webView.isHidden = true
+            protectedBrowser.resumeNativeLock(state, in: content)
+            return
+        }
+        enterLockedMode()
+        let union = NSScreen.screens.reduce(NSRect.zero) { $0.union($1.frame) }
+        window?.setFrame(union.isEmpty ? (NSScreen.main?.frame ?? .zero) : union, display: true)
+        showBlocking(reason: "FairPlay could not lock this Mac again.\nAllow FairPlay in System Settings > Privacy & Security > Accessibility. This Mac stays locked until then.\nAsk your instructor for an exit code.", quitAction: nil)
+        if recoveryTimer == nil {
+            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.attemptNativeRecovery() }
+            RunLoop.main.add(timer, forMode: .common)
+            recoveryTimer = timer
+        }
+    }
+
+    /// The Leave sheet for the native lock: the browser's own when it is open, else the one on the
+    /// full-screen block that a relaunch shows while the lock cannot start.
+    func presentNativeLeave() {
+        if protectedBrowser.isOpen { protectedBrowser.requestLeave(); return }
+        guard recoveredState != nil || LockdownController.shared.nativeLockActive else { return }
+        let setup = NativeLockSetup.live
+        setup.background { [weak self] in
+            let lock = setup.store.load()
+            let code = lock.map { NativeExit.display($0.lockId) } ?? ""
+            let development = lock.flatMap { setup.developmentCode(lockId: $0.lockId) }
+            setup.onMain {
+                guard let self else { return }
+                let prompt = NativeLeavePrompt(lockCode: code, developmentCode: development, submit: { [weak self] typed in
+                    let result = NativeExit.attempt(typed: typed, store: setup.store, now: Date())
+                    if result == .accepted { self?.finishLeaveWithoutBrowser(setup) }
+                    return result
+                }, submitAsync: { [weak self] typed, done in
+                    NativeExit.attemptInBackground(typed: typed, store: setup.store, now: Date(), monotonic: NativeExit.systemMonotonic()) { result in
+                        if result == .accepted { self?.finishLeaveWithoutBrowser(setup) }
+                        done(result)
+                    }
+                })
+                NativeLeaveSheet.present(prompt, in: self.window)
+            }
+        }
+    }
+
+    private func finishLeaveWithoutBrowser(_ setup: NativeLockSetup) {
+        recoveryTimer?.invalidate(); recoveryTimer = nil
+        recoveredState = nil
+        LockdownController.shared.releaseNativeLock()
+        setup.clear()
+        webView.isHidden = false
+        takeFocus()
+        showProtectedBrowser()
+    }
+
+    func openUniversityExam(_ key: String) {
+        guard AppSession.isSafeToken(key, min: 1, max: 128), !LockdownController.shared.isLocked,
+              AppSession.shared.exam == nil else { return }
+        showProtectedBrowser()
+        protectedBrowser.selectDKUExam(key)
     }
 
     private static let normalStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -99,7 +204,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                              styleMask: MainWindowController.normalStyle, backing: .buffered, defer: false)
         win.title = "FairPlay"
         win.minSize = NSSize(width: 900, height: 600)
-        win.sharingType = .none                 // excluded from screenshots / screen recording (verify on macOS 15+)
+        #if FAIRPLAY_ISOLATED_TEST
+        // Explicit, temporary local inspection only; never compiled into release builds.
+        win.sharingType = UserDefaults.standard.bool(forKey: "DevCaptureTest") ? .readOnly : .none
+        #else
+        win.sharingType = .none
+        #endif
         win.isReleasedWhenClosed = false
         win.collectionBehavior = [.fullScreenNone]
         win.center()
@@ -324,17 +434,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func start() {
         showWindow(nil)
         takeFocus()
-        guard Config.serverIsAcceptable else {
-            // Release builds never talk to a plain-http server (audit #11).
-            loadOwnHTML("""
-            <!doctype html><meta charset="utf-8"><body style="font:16px -apple-system;padding:40px">
-            \(BrandMark.svg(size: 44))
-            <h1>This copy of FairPlay is not set up</h1>
-            <p>It has no secure (https) exam server. Ask your school for the correct FairPlay app.</p>
-            """)
-            return
-        }
-        webView.load(URLRequest(url: MainWindowController.launchURL()))
+        showProtectedBrowser()
         if !EventTap.isTrusted { showPermission() }
     }
 
@@ -347,6 +447,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
               let url = ExamLaunch.loginURL(server: Config.serverURL, exam: exam) else { return }
         takeFocus()
         webView.load(URLRequest(url: url))
+    }
+
+    func reloadProtectedBrowser(hard: Bool) -> Bool {
+        protectedBrowser.reloadFromKeyboard(hard: hard)
     }
 
     func reload() {
@@ -387,7 +491,13 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
         // The old FairPlay page remains underneath the native overlay. It cannot start,
         // promote or release a session while the separate browser owns the UI.
-        guard !protectedBrowser.isOpen else { return }
+        if protectedBrowser.isOpen || LockdownController.shared.nativeLockActive {
+            let native = LockdownController.shared.nativeLockActive
+            guard let body = message.body as? [String: Any], let action = body["action"] as? String,
+                  native ? ["hello", "log"].contains(action)
+                         : (releasedDeviceTestVisible && ["hello", "deviceTestStart", "deviceTestLeave", "log"].contains(action))
+            else { return }
+        }
         // Dev trace lines from any page (exam page or website exam). Never drive anything.
         if let body = message.body as? [String: Any], body["action"] as? String == "log" {
             let host: String = message.frameInfo.securityOrigin.host
@@ -422,6 +532,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         case "hello":
             sendState()
         case "deviceTestStart":
+            if releasedDeviceTestVisible && deviceTest.isRunning {
+                send(DeviceTestSession.message(state: "started", reason: nil, remaining: deviceTest.remaining))
+                return
+            }
             let lock = LockdownController.shared
             deviceTest.start(seconds: body["seconds"],
                              context: .init(examActive: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil,
@@ -499,7 +613,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             // attached, and then with no server check (there is no attempt).
             let lock = LockdownController.shared
             switch PreLockState.onPreUnlock(locked: lock.isLocked, preLocked: lock.isPreLock,
-                                            hasExam: AppSession.shared.exam != nil) {
+                                            hasExam: AppSession.shared.exam != nil,
+                                            nativeLock: lock.nativeLockActive) {
             case .unlock:
                 lock.endPreLock()            // onUnlocked sends "unlocked"
                 sendState()
@@ -748,8 +863,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if protectedBrowser.isOpen { decisionHandler(.cancel); return }
+        if protectedBrowser.isOpen && !releasedDeviceTestVisible { decisionHandler(.cancel); return }
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
+        if releasedDeviceTestVisible, navigationAction.targetFrame?.isMainFrame != false,
+           (!isServerURL(url) || !["/student/device-test", "/student/login"].contains(url.path)) {
+            decisionHandler(.cancel); return
+        }
         // 2026-10-23: the bundled files are never a page or a frame (only subresources).
         if url.scheme?.lowercased() == AssetPack.scheme {
             DebugLog.log("web", "navigation BLOCKED (asset file as a page): \(url.path)")
@@ -1044,6 +1163,13 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         applyFileAccess()
         external.canvasPageLoaded(webView)
         external.externalDonePageLoaded(webView.url)
+        if releasedDeviceTestVisible, !deviceTest.isRunning,
+           let url = webView.url, isServerURL(url), url.path == "/student/device-test" {
+            let lock = LockdownController.shared
+            deviceTest.start(seconds: 60, context: .init(
+                examActive: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil,
+                fromExamPage: true, websiteExam: external.isActive))
+        }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -1058,6 +1184,11 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
         if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }   // interrupted by policy
+        if releasedDeviceTestVisible {
+            deviceTest.end(.error)
+            restoreReleasedDeviceTest()
+            return
+        }
         deviceTest.end(.error)
         var retry = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Config.startURL
         if let canvasStart = external.canvasStartURL {
@@ -1351,7 +1482,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         stack.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(stack)
         content.addSubview(v)   // topmost
-        let eb = NSButton(title: "Invigilator exit", target: self, action: #selector(exitButtonPressed))
+        let eb = NSButton(title: LockdownController.shared.nativeLockActive ? "Leave" : "Invigilator exit", target: self, action: #selector(exitButtonPressed))
         eb.bezelStyle = .rounded
         eb.controlSize = .small
         eb.setAccessibilityLabel("Invigilator exit")
@@ -1415,7 +1546,19 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         exitLockedMode()
     }
 
-    func deviceTestNotify(_ message: [String: Any]) { send(message) }
+    func deviceTestNotify(_ message: [String: Any]) {
+        send(message)
+        if releasedDeviceTestVisible {
+            if message["state"] as? String == "ended" { restoreReleasedDeviceTest() }
+        } else { protectedBrowser.deviceTestChanged(message) }
+    }
+
+    private func restoreReleasedDeviceTest() {
+        guard releasedDeviceTestVisible else { return }
+        releasedDeviceTestVisible = false
+        webView.isHidden = true
+        protectedBrowser.setReleasedPracticeVisible(false)
+    }
 
     /// Emergency exit or safety unlock while a website exam is open: leave it without submitting.
     func closeBox() { box.close() }
@@ -1444,6 +1587,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     /// tell the page, and fall back to the student home if the page does not move on.
     private func finishVerifiedExit() {
         let attemptId = AppSession.shared.exam?.attemptId
+        if deviceTest.isRunning { deviceTest.end(.leave) }
         LockdownController.shared.unlock()
         AppSession.shared.clearExam()   // after unlock: its last beat (locked=0) still needs the session
         exitBusy = false
@@ -1461,20 +1605,17 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func promptEmergencyExit() {
-        DebugLog.log("exit", "Ctrl-Opt-Cmd-E pressed (locked=\(LockdownController.shared.isLocked))")
-        if deviceTest.isRunning {
+        DebugLog.log("exit", "exit prompt requested (locked=\(LockdownController.shared.isLocked))")
+        guard !LockdownController.shared.nativeLockActive else { presentNativeLeave(); return }
+        switch PreLockState.emergencyExitAction(locked: LockdownController.shared.isLocked,
+                                               deviceTestRunning: deviceTest.isRunning) {
+        case .leaveUnlockedPractice:
             deviceTest.end(.leave)
             return
-        }
-        // 2026-10-23: the pre-exam lock has no attempt to protect: the shortcut just unlocks
-        // (no code, no server, no exit event).
-        if PreLockState.emergencyExitUnlocksAtOnce(locked: LockdownController.shared.isLocked,
-                                                   preLocked: LockdownController.shared.isPreLock,
-                                                   hasExam: AppSession.shared.exam != nil) {
-            DebugLog.log("exit", "pre-exam lock: unlocked by the shortcut (no exam attached)")
-            LockdownController.shared.endPreLock()   // onUnlocked sends "unlocked"
-            sendState()
+        case .ignore:
             return
+        case .requireCode:
+            break
         }
         guard LockdownController.shared.isLocked, let win = window, win.attachedSheet == nil, exitPanel == nil else { return }
         let model = ExitPromptModel()
@@ -1557,12 +1698,13 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     /// Offline exit: show the Mac code, check the invigilator's answer locally.
     func promptOfflineExit(reason: String?) {
+        guard !LockdownController.shared.nativeLockActive else { return }
         guard LockdownController.shared.isLocked, let win = window, win.attachedSheet == nil else { return }
         guard OfflineExit.isAvailable else {
             DebugLog.log("exit", "offline exit not available: no offline key for this exam")
             notice((reason.map { $0 + "\n\n" } ?? "")
                    + "Offline exit is not available: this Mac never reached the exam server for this exam. "
-                   + "If you must end the exam here, restart the Mac. Answers are saved on it.")
+                   + "Ask your instructor for an exit code.")
             return
         }
         let alert = NSAlert()
@@ -1599,7 +1741,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                 DispatchQueue.main.async { self?.promptOfflineExit(reason: "Wrong code, try again.") }
             case .tooMany:
                 EventLog.shared.record(.offlineExitRejected)
-                DispatchQueue.main.async { self?.notice("Too many wrong codes. Wait \(Int(OfflineExit.waitAfterWrong / 60)) minutes, then press Ctrl-Opt-Cmd-E.") }
+                DispatchQueue.main.async { self?.notice("Too many wrong codes. Wait \(Int(OfflineExit.waitAfterWrong / 60)) minutes, then try again.") }
             case .unavailable:
                 DispatchQueue.main.async { self?.promptOfflineExit(reason: nil) }   // shows why
             }

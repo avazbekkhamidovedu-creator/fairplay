@@ -43,6 +43,7 @@ def settings_for(tmp_path, static_dir, **kw):
 def oj_env(monkeypatch):
     monkeypatch.setenv("DKUOJ_URL", "https://oj.test")
     monkeypatch.setenv("DKUOJ_TOKEN", fk.TOKEN)
+    monkeypatch.setenv("DKUOJ_INSTALLATION_ID", fk.INSTALLATION_ID)
     monkeypatch.setenv("FAIRPLAY_CLASS_LOGIN", "1")
     monkeypatch.setenv("DKUOJ_PUBLIC_URL", fk.PUBLIC)
     monkeypatch.setattr(ojsync, "BACKGROUND", False)
@@ -61,9 +62,22 @@ def fake(oj_env):
     ojclient.set_sleep(None)
 
 
+def bind_installation(c):
+    import json
+    from app.db import get_database
+    from app.integrations.dkuoj.isolation import BINDING, canonical_url
+
+    async def go():
+        async with get_database().sessionmaker() as s:
+            await ojsync.set_state(s, BINDING, json.dumps(
+                {"installation_id": fk.INSTALLATION_ID, "url": canonical_url("https://oj.test")}))
+    c.portal.call(go)
+
+
 @pytest.fixture
 def hw(tmp_path, static_dir, fake):
     with TestClient(create_app(settings_for(tmp_path, static_dir))) as c:
+        bind_installation(c)
         yield c
 
 

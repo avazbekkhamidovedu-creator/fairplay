@@ -87,6 +87,19 @@ import Carbon.HIToolbox
         return e
     }
 
+    @Test func reloadShortcutPassesOnlyWhileTheBrowserAllowsIt() {
+        defer { EventTap.reloadShortcutAllowed = false }
+        EventTap.reloadShortcutAllowed = false
+        #expect(EventTap.shouldSwallow(key(kVK_ANSI_R, .maskCommand), type: .keyDown))
+        EventTap.reloadShortcutAllowed = true
+        #expect(!EventTap.shouldSwallow(key(kVK_ANSI_R, .maskCommand), type: .keyDown))
+        #expect(!EventTap.shouldSwallow(key(kVK_ANSI_R, [.maskCommand, .maskShift]), type: .keyDown))
+        #expect(EventTap.shouldSwallow(key(kVK_ANSI_R, [.maskCommand, .maskAlternate]), type: .keyDown))
+        #expect(EventTap.shouldSwallow(key(kVK_ANSI_R, [.maskCommand, .maskControl]), type: .keyDown))
+        #expect(EventTap.shouldSwallow(key(kVK_ANSI_T, .maskCommand), type: .keyDown))
+        #expect(EventTap.shouldSwallow(key(kVK_Tab, .maskCommand), type: .keyDown))
+    }
+
     @Test func typingPasses() {
         #expect(!EventTap.shouldSwallow(key(kVK_ANSI_A), type: .keyDown))
         #expect(!EventTap.shouldSwallow(key(kVK_ANSI_A, .maskShift), type: .keyDown))

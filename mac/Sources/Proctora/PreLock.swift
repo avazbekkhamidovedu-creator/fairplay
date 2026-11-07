@@ -42,7 +42,9 @@ enum PreLockState {
     /// `lockInFlight`: a lock was asked for and has not answered yet; `preLockInFlight`: that
     /// lock is a pre-exam lock with no exam (the Mac locks at once: both always false there).
     static func onPreUnlock(locked: Bool, preLocked: Bool, hasExam: Bool,
-                            lockInFlight: Bool = false, preLockInFlight: Bool = false) -> OnPreUnlock {
+                            lockInFlight: Bool = false, preLockInFlight: Bool = false,
+                            nativeLock: Bool = false) -> OnPreUnlock {
+        guard !nativeLock else { return .refuse }
         guard locked else {
             guard lockInFlight else { return .notLocked }
             return preLockInFlight && !hasExam ? .cancelPending : .refuse
@@ -62,10 +64,12 @@ enum PreLockState {
         locked && preLocked ? .promote : .lock
     }
 
-    /// The invigilator shortcut during the pre-exam lock simply unlocks (no code, no
-    /// server): there is no attempt to protect.
-    static func emergencyExitUnlocksAtOnce(locked: Bool, preLocked: Bool, hasExam: Bool) -> Bool {
-        locked && preLocked && !hasExam
+    enum EmergencyExitAction { case requireCode, leaveUnlockedPractice, ignore }
+
+    /// A locked device always needs verified authorization, even before admission.
+    static func emergencyExitAction(locked: Bool, deviceTestRunning: Bool) -> EmergencyExitAction {
+        if locked { return .requireCode }
+        return deviceTestRunning ? .leaveUnlockedPractice : .ignore
     }
 
     /// "preflight" while the pre-exam lock is on: problems FairPlay's own lock causes or

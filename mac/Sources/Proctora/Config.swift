@@ -11,7 +11,20 @@ import Foundation
 ///   defaults write ai.proctora.student ServerURL http://192.168.1.20:8000
 ///   defaults write ai.proctora.student SafetyUnlockMinutes -int 0
 enum Config {
-    static let version = "0.7.9"
+    static let version = "0.8.0"
+
+    #if FAIRPLAY_ISOLATED_TEST && !FAIRPLAY_DEV
+    #error("FAIRPLAY_ISOLATED_TEST is permitted only in development builds")
+    #endif
+    #if FAIRPLAY_ISOLATED_TEST && FAIRPLAY_DEV
+    static let isIsolatedTestProfile = true
+    #else
+    static let isIsolatedTestProfile = false
+    #endif
+    static let supportFolderName = isIsolatedTestProfile ? "FairPlay-PR4-Isolated" : "FairPlay"
+    static let deviceKeyNamespace = isIsolatedTestProfile ? "ai.proctora.student.pr4-isolated.mac" : "ai.proctora.student.mac"
+    static let rememberKeyService = isIsolatedTestProfile ? "FairPlay.pr4-isolated.homeworkRemember" : "FairPlay.homeworkRemember"
+
 
     #if FAIRPLAY_DEV
     static let isDevBuild = true
@@ -28,6 +41,22 @@ enum Config {
         return dict
     }()
 
+    /// Public verification key; the private signing key stays on the university server.
+    static var universityPolicyPublicKey: Data? {
+        (built["UniversityPolicyPublicKey"] as? String).flatMap { Data(base64Encoded: $0) }
+            ?? NativeBrowserProfile.bundled.flatMap { Data(base64Encoded: $0.policyKey) }
+    }
+
+    /// Off unless build.sh was run with FAIRPLAY_REQUIRE_DP_KEYCHAIN=1.
+    static var requiresDataProtectionKeychain: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "RequireDataProtectionKeychain") as? Bool) == true
+    }
+
+    /// X25519 public key (32 bytes) the per-lock exit key is sealed to; set by build.sh.
+    static var nativeExitPublicKey: Data? {
+        (built["NativeExitPublicKey"] as? String).flatMap { Data(base64Encoded: $0) }.flatMap { $0.count == 32 ? $0 : nil }
+    }
+
     static var appKey: String { (built["AppKey"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? BuildConfig.appKey }
     static var pins: [String] { (built["Pins"] as? [String]) ?? BuildConfig.pins }
     static var extraRootPEM: String? { (built["ExtraRootPEM"] as? String).flatMap { $0.isEmpty ? nil : $0 } }
@@ -35,6 +64,9 @@ enum Config {
 
     /// Read once at launch; never changes while the app runs.
     static let serverURL: URL = {
+        #if FAIRPLAY_ISOLATED_TEST && FAIRPLAY_DEV
+        return URL(string: "http://127.0.0.1:18080")!
+        #else
         var raw = (built["ServerURL"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? BuildConfig.serverURL
         #if FAIRPLAY_DEV
         if let env = ProcessInfo.processInfo.environment["PROCTORA_SERVER"], !env.isEmpty {
@@ -45,6 +77,7 @@ enum Config {
         #endif
         let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         return URL(string: trimmed) ?? URL(string: "https://server-not-configured.invalid")!
+        #endif
     }()
 
     static var startURL: URL { serverURL.appendingPathComponent("student/login") }

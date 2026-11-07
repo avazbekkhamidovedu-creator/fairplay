@@ -42,6 +42,10 @@ private func make() -> (DeviceTestSession, FakeEffects, Clock) {
         #expect(DeviceTestSession.clamp(90) == 90)
         #expect(DeviceTestSession.clamp(600) == 90)
         #expect(DeviceTestSession.clamp(Double.infinity) == 60)
+        #expect(DeviceTestSession.clamp(45.5) == 46)
+        #expect(DeviceTestSession.clamp(45.4) == 45)
+        #expect(DeviceTestSession.clamp(1e30) == 90)
+        #expect(DeviceTestSession.clamp(-1e30) == 10)
     }
 
     @Test func startReportsClampedRemaining() {

@@ -127,7 +127,7 @@ final class MemoryRememberStore: RememberStore {
 }
 
 final class KeychainRememberStore: RememberStore {
-    private let service = "FairPlay.homeworkRemember"
+    private let service = Config.rememberKeyService
     private let account = "token"
 
     private var base: [String: Any] {

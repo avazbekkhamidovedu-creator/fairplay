@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "alphabet": "ABCDEFGHJKMNPQRSTUVWXYZ23456789",
+  "code_message_prefix": "fairplay-native-exit|v1|",
+  "seal_info": "fairplay-native-exit-seal|v1",
+  "k_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "codes": [
+    {
+      "lock_id": "K7QM3XPA",
+      "display": "K7QM-3XPA",
+      "code": "183993"
+    },
+    {
+      "lock_id": "AAAAAAAA",
+      "display": "AAAA-AAAA",
+      "code": "945528"
+    },
+    {
+      "lock_id": "23456789",
+      "display": "2345-6789",
+      "code": "006420"
+    },
+    {
+      "lock_id": "ZUWBYEGN",
+      "display": "ZUWB-YEGN",
+      "code": "024024"
+    },
+    {
+      "lock_id": "XQDSKHUA",
+      "display": "XQDS-KHUA",
+      "code": "024576"
+    },
+    {
+      "lock_id": "PBCNRWAG",
+      "display": "PBCN-RWAG",
+      "code": "099165"
+    },
+    {
+      "lock_id": "WPDKJCBU",
+      "display": "WPDK-JCBU",
+      "code": "008626"
+    }
+  ],
+  "sealed": {
+    "note": "TEST ONLY key pair, published in this repo, not a secret",
+    "server_private_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "server_public_hex": "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13",
+    "ephemeral_private_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "k_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "lock_id": "K7QM3XPA",
+    "blob_base64": "D6poTtKIZ7l/Smot7l34zpdOdrcBjj8iocTPJnhXDyCgoaKjpKWmp6ipqqtA1ecwzD+zh2tE6RpHTh5RmMVLDYvonlAB+CFa7cyhS1Rtsyup8hVLyY3SQ4uwxGM=",
+    "code": "183993"
+  },
+  "negative": {
+    "wrong_lock_id": "K7QM3XPB",
+    "flipped_byte_index": 50,
+    "flipped_blob_base64": "D6poTtKIZ7l/Smot7l34zpdOdrcBjj8iocTPJnhXDyCgoaKjpKWmp6ipqqtA1ecwzD+yh2tE6RpHTh5RmMVLDYvonlAB+CFa7cyhS1Rtsyup8hVLyY3SQ4uwxGM="
+  }
+}

@@ -42,6 +42,7 @@ enum Allowlist {
     /// one drops the connection to the exam server).
     static let alwaysPrefixes: [String] = [
         "com.cisco.anyconnect", "com.cisco.secureclient", "com.cisco.Cisco-AnyConnect",
+        "com.cisco.Cisco-AnyConnect-Secure-Mobility-Client",
         "com.paloaltonetworks.GlobalProtect", "com.fortinet", "net.openvpn", "com.wireguard"
     ]
 
@@ -275,7 +276,7 @@ final class EventLog {
     private init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let folder = dir.appendingPathComponent("FairPlay", isDirectory: true)
+        let folder = dir.appendingPathComponent(Config.supportFolderName, isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         url = folder.appendingPathComponent("events.log")
     }

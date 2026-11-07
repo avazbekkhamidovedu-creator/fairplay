@@ -5,6 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY static ./static
+COPY tools/native_exit_vector.py ./tools/native_exit_vector.py
 # Audit S-17: never run as root. data/ (SQLite, uploads, scans) belongs to this user.
 RUN useradd --system --uid 10001 --home /app fairplay && mkdir -p /app/data && chown -R fairplay /app/data
 USER fairplay

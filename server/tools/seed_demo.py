@@ -133,6 +133,8 @@ async def seed(settings, args) -> list[dict]:
             item = {
                 "key": KEY, "name": TITLE, "course": {"id": 1, "name": "Demo course"},
                 "classes": [{"id": 1, "name": "Demo section A"}],
+                "audience": {"mode": "classes", "confirmed": True, "class_ids": [1], "organization_ids": [],
+                             "selected_only": False},
                 "start_time": iso(start), "end_time": iso(start + timedelta(hours=3)),
                 "time_limit_seconds": 5400, "results_hidden": True, "package_version": PACKAGE_VERSION,
                 "removed": False, "updated_at": iso(now),

@@ -28,8 +28,29 @@ function startRemaining(state: unknown): number {
 }
 
 export default function DeviceTestPage() {
+  const location = useLocation();
   if (!bridge.isNative()) return <Navigate to="/student/login" replace />;
+  const entry = new URLSearchParams(location.search).get("nativeEntry") === "1";
+  if (!entry && !bridge.deviceTestConfirmed()) return <NoPreview />;
   return <DeviceTest />;
+}
+
+function NoPreview() {
+  const navigate = useNavigate();
+  function back() {
+    bridge.deviceTestLeave();
+    navigate("/student/login", { replace: true });
+  }
+  return (
+    <div className="stu" data-testid="device-test-missing">
+      <main className="stu-alert warn" role="alert">
+        <p>The device test is not running. Start it again from the sign-in screen.</p>
+        <button type="button" className="stu-btn primary" onClick={back}>
+          Back to sign in
+        </button>
+      </main>
+    </div>
+  );
 }
 
 function DeviceTest() {
@@ -40,10 +61,12 @@ function DeviceTest() {
   const [navOpen, setNavOpen] = useState(false);
   const [answers, setAnswers] = useState<AnswerMap>({});
   const left = useRef(false);
+  const nativeStarted = useRef(false);
 
   function leaveToLogin() {
     if (left.current) return;
     left.current = true;
+    bridge.setDeviceTestConfirmed(false);
     navigate("/student/login", { replace: true });
   }
 
@@ -58,12 +81,21 @@ function DeviceTest() {
   );
 
   useEffect(() => {
+    if (new URLSearchParams(location.search).get("nativeEntry") !== "1" || nativeStarted.current) return;
+    nativeStarted.current = true;
+    bridge.deviceTestStart(START_SECONDS);
+  }, [location.search]);
+
+  useEffect(() => {
     const id = window.setInterval(() => setRemaining((r) => Math.max(0, r - 1)), 1000);
     return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
-    if (remaining <= 0) leaveToLogin();
+    if (remaining <= 0 && !left.current) {
+      bridge.deviceTestLeave();
+      leaveToLogin();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remaining]);
 

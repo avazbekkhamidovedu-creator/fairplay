@@ -42,7 +42,7 @@ final class AppSession {
     private init() {
         let evidence = AppSession.legacyEvidence()
         binding = DeviceBinding.resolve(legacyId: AppSession.loadDeviceId(), evidence: { evidence },
-                                        store: KeychainDeviceKeyStore(namespace: "ai.proctora.student.mac"))
+                                        store: KeychainDeviceKeyStore(namespace: Config.deviceKeyNamespace))
         deviceId = binding.deviceId
     }
 
@@ -51,7 +51,7 @@ final class AppSession {
     private static func legacyEvidence() -> LegacyEvidence {
         let fm = FileManager.default
         if let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let folder = base.appendingPathComponent("FairPlay", isDirectory: true)
+            let folder = base.appendingPathComponent(Config.supportFolderName, isDirectory: true)
             if let items = try? fm.contentsOfDirectory(atPath: folder.path), !items.isEmpty { return .present }
         }
         if let id = Bundle.main.bundleIdentifier,
@@ -75,6 +75,7 @@ final class AppSession {
     /// the device over. Falls back to a random id kept in Application Support only when
     /// IOKit gives no UUID.
     private static func loadDeviceId() -> String {
+        if Config.isIsolatedTestProfile { return loadFileDeviceId() }
         if let hw = SystemChecks.hardwareUUID() {
             return hardwareDeviceId(uuid: hw, key: Config.appKey)
         }
@@ -91,7 +92,7 @@ final class AppSession {
     private static func loadFileDeviceId() -> String {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        let folder = base.appendingPathComponent("FairPlay", isDirectory: true)
+        let folder = base.appendingPathComponent(Config.supportFolderName, isDirectory: true)
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("device-id")
         if let s = try? String(contentsOf: url, encoding: .utf8) {

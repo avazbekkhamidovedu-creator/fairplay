@@ -103,7 +103,7 @@ final class Updater {
 
     func check() {
         guard !Config.isDevBuild, !checking, !installing else { return }
-        guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked, examBound: false,
+        guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked || LockdownController.shared.nativeLockActive, examBound: false,
                                    devicePreview: Updater.devicePreview) else {
             DebugLog.log("update", "check skipped while locked or in a device test")
             schedule(after: Updater.retryAfterFailure)
@@ -271,7 +271,7 @@ final class Updater {
         }
         DebugLog.log("update", "install requested")
         guard !Config.isDevBuild else { fail(.download); return }
-        guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked, examBound: AppSession.shared.exam != nil,
+        guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked || LockdownController.shared.nativeLockActive, examBound: AppSession.shared.exam != nil,
                                    devicePreview: Updater.devicePreview) else { fail(.locked); return }
         guard !installing else {
             DebugLog.log("update", "install already running")

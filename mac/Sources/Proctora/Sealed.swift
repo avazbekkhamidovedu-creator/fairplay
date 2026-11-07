@@ -19,7 +19,7 @@ enum Sealed {
     static var folder: URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        return base.appendingPathComponent("FairPlay/sealed", isDirectory: true)
+        return base.appendingPathComponent(Config.supportFolderName, isDirectory: true).appendingPathComponent("sealed", isDirectory: true)
     }
 
     static func hex(_ bytes: some Sequence<UInt8>) -> String { bytes.map { String(format: "%02x", $0) }.joined() }

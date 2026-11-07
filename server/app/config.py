@@ -180,6 +180,9 @@ class Settings:
     # Audit S-08: without Redis every worker has its own memory store (exam-cache
     # invalidation, nonces, lockouts, beat replay guard all break with >1 process). A real
     # server needs REDIS_URL, or must say it runs one process (FAIRPLAY_SINGLE_PROCESS=1).
+    native_browser_enrollment: bool = field(default_factory=lambda: _flag("FAIRPLAY_NATIVE_BROWSER_ENROLLMENT", False))
+    native_browser_ca: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_NATIVE_BROWSER_CA", ""))
+    native_browser_ca_key: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_NATIVE_BROWSER_CA_KEY", ""), repr=False)
     single_process: bool = field(default_factory=lambda: _flag("FAIRPLAY_SINGLE_PROCESS", False))
     workers: int = field(default_factory=lambda: _int("WEB_CONCURRENCY", 1))
     # Audit S-17: Postgres max_connections and how many API containers share it (0 = unchecked).

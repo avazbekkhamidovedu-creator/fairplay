@@ -15,7 +15,7 @@ enum Watchdog {
     private static var folder: URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        return base.appendingPathComponent("FairPlay", isDirectory: true)
+        return base.appendingPathComponent(Config.supportFolderName, isDirectory: true)
     }
 
     /// Exists exactly while the app is locked: "<attempt>\n<token>\n<session>" (may be empty lines),
@@ -30,13 +30,23 @@ enum Watchdog {
     static let preLockLine = "prelock"
     static let preLockArgument = "--prelock"
 
+    /// The native OJ lock (NativeLock.swift): neither the marker nor any file decides. If the app
+    /// dies the watchdog reopens it with `--relock`, unless the app said "released" over the pipe
+    /// it handed down as the watchdog's standard input (a descriptor the student has no way to write to).
+    private static var nativeLock = false
+    private static var releasePipe: Pipe?
+    static let releaseByte: UInt8 = 0x52
+    static let nativeArgument = "--native"
+    static let relockArgument = "--relock"
+
     // MARK: - In the app
 
-    static func lockStarted(preLock: Bool = false) {
+    static func lockStarted(preLock: Bool = false, native: Bool = false) {
         signal(SIGTERM, SIG_IGN)
         signal(SIGHUP, SIG_IGN)
         signal(SIGINT, SIG_IGN)
         Watchdog.preLock = preLock
+        Watchdog.nativeLock = native
         writeMarker(AppSession.shared.exam)
         spawn()
     }
@@ -62,12 +72,22 @@ enum Watchdog {
 
     static func lockEnded() {
         preLock = false
+        if nativeLock { signalReleased() }
+        nativeLock = false
         try? FileManager.default.removeItem(at: markerURL)
         signal(SIGTERM, SIG_DFL)
         signal(SIGHUP, SIG_DFL)
         signal(SIGINT, SIG_DFL)
         // The watchdog sees the marker gone and exits by itself.
         child = nil
+    }
+
+    /// Tells a native watchdog that the lock ended on purpose, then drops the pipe.
+    static func signalReleased() {
+        guard let pipe = releasePipe else { return }
+        try? pipe.fileHandleForWriting.write(contentsOf: Data([releaseByte]))
+        try? pipe.fileHandleForWriting.close()
+        releasePipe = nil
     }
 
     /// Called when the exam session becomes known/changes while locked.
@@ -123,7 +143,7 @@ enum Watchdog {
     /// again and false is returned once so the lock can report it.
     @discardableResult
     static func ensureRunning() -> Bool {
-        guard FileManager.default.fileExists(atPath: markerURL.path) else { return true }
+        guard shouldKeepWatchdog(native: nativeLock, markerExists: FileManager.default.fileExists(atPath: markerURL.path)) else { return true }
         if let c = child, c.isRunning { return true }
         let hadOne = child != nil
         spawn()
@@ -136,15 +156,19 @@ enum Watchdog {
         Bundle.main.url(forAuxiliaryExecutable: "FairPlayGuard") ?? Bundle.main.executableURL
     }
 
+    /// A native lock keeps its watchdog alive whatever happens to the marker file.
+    static func shouldKeepWatchdog(native: Bool, markerExists: Bool) -> Bool { native || markerExists }
+
     /// The watchdog's arguments (pure, for the tests).
-    static func arguments(parent: pid_t, preLock: Bool) -> [String] {
-        ["--watchdog", String(parent)] + (preLock ? [preLockArgument] : [])
+    static func arguments(parent: pid_t, preLock: Bool, native: Bool = false) -> [String] {
+        ["--watchdog", String(parent)] + (native ? [nativeArgument] : preLock ? [preLockArgument] : [])
     }
 
     /// `--watchdog <pid> [--prelock]` (main.swift), or nil when this is not a watchdog launch.
-    static func parseArguments(_ args: [String]) -> (parent: pid_t, preLock: Bool)? {
+    static func parseArguments(_ args: [String]) -> (parent: pid_t, preLock: Bool, native: Bool)? {
         guard args.count >= 3, args[1] == "--watchdog", let pid = Int32(args[2]) else { return nil }
-        return (pid, args.dropFirst(3).contains(preLockArgument))
+        let rest = args.dropFirst(3)
+        return (pid, rest.contains(preLockArgument), rest.contains(nativeArgument))
     }
 
     private static func spawn() {
@@ -152,7 +176,13 @@ enum Watchdog {
         guard let exe = guardExecutable else { return }
         let p = Process()
         p.executableURL = exe
-        p.arguments = arguments(parent: ProcessInfo.processInfo.processIdentifier, preLock: preLock)
+        p.arguments = arguments(parent: ProcessInfo.processInfo.processIdentifier, preLock: preLock, native: nativeLock)
+        if nativeLock {
+            signal(SIGPIPE, SIG_IGN)
+            let pipe = Pipe()
+            p.standardInput = pipe
+            releasePipe = pipe
+        }
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run(); child = p; DebugLog.log("lock", "watchdog started pid \(p.processIdentifier)") }
@@ -172,16 +202,59 @@ enum Watchdog {
         case reportAndReopen
     }
 
-    static func onParentGone(preLockMode: Bool, markerText: String?) -> ParentGone {
+    static func onParentGone(preLockMode: Bool, markerText: String?, nativeMode: Bool = false) -> ParentGone {
+        guard !nativeMode else { return .reportAndReopen }
         guard preLockMode else { return .reportAndReopen }
         return .silent(removeMarker: markerText.map(markerIsPreLock) ?? false)
     }
 
-    /// Entry point for `--watchdog <pid> [--prelock]`; never returns.
-    static func run(parent: pid_t, preLock preLockMode: Bool = false) -> Never {
+    enum NativeStep: Equatable { case keepWatching, relock, exit }
+
+    /// The native watchdog's whole decision (pure, for the tests). Only the app's own "released"
+    /// message ends the watch for good; an app that is gone without it is always locked again.
+    static func nativeStep(parentAlive: Bool, released: Bool) -> NativeStep {
+        if released { return .exit }
+        return parentAlive ? .keepWatching : .relock
+    }
+
+    /// What the watchdog read from its standard input so far.
+    static func readReleased(_ bytes: [UInt8]) -> Bool { bytes.contains(releaseByte) }
+
+    private static func runNative(parent: pid_t) -> Never {
+        _ = fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK)
+        var released = false
+        var inputClosed = false
+        func drain() {
+            var buf = [UInt8](repeating: 0, count: 16)
+            while true {
+                let n = read(0, &buf, buf.count)
+                if n > 0 { if readReleased(Array(buf[0..<n])) { released = true } }
+                else if n == 0 { inputClosed = true; return }
+                else { return }
+            }
+        }
+        while true {
+            sleep(1)
+            drain()
+            let alive = !(kill(parent, 0) != 0 && errno == ESRCH) && !inputClosed
+            if !alive { usleep(200_000); drain() }
+            switch nativeStep(parentAlive: alive, released: released) {
+            case .keepWatching: continue
+            case .exit: exit(0)
+            case .relock:
+                try? FileManager.default.removeItem(at: markerURL)
+                reopen(relock: true)
+                exit(0)
+            }
+        }
+    }
+
+    /// Entry point for `--watchdog <pid> [--prelock|--native]`; never returns.
+    static func run(parent: pid_t, preLock preLockMode: Bool = false, native: Bool = false) -> Never {
         signal(SIGTERM, SIG_IGN)
         signal(SIGHUP, SIG_IGN)
         signal(SIGINT, SIG_IGN)
+        if native { runNative(parent: parent) }
         while true {
             sleep(1)
             let markerExists = FileManager.default.fileExists(atPath: markerURL.path)
@@ -229,11 +302,12 @@ enum Watchdog {
 
     /// Audit M-17: reopen straight into the attempt (the page resumes it and locks again)
     /// instead of the login page.
-    private static func reopen() {
+    private static func reopen(relock: Bool = false) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         var args = [Bundle.main.bundleURL.path]
-        if let aid = resumeAttemptId { args += ["--args", "--resume-attempt", aid] }
+        if relock { args += ["--args", relockArgument] }
+        else if let aid = resumeAttemptId { args += ["--args", "--resume-attempt", aid] }
         p.arguments = args
         try? p.run()
     }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { deviceTestLeave, deviceTestStart, onDeviceTest } from "../../lib/bridge";
+import { deviceTestLeave, deviceTestStart, onDeviceTest, setDeviceTestConfirmed } from "../../lib/bridge";
 
 const FOCUSABLE = "button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
@@ -20,15 +20,16 @@ export function TryExamScreenDialog({ onClose }: { onClose: () => void }) {
     const finish = (remaining?: number) => {
       stop.current?.();
       stop.current = null;
+      setDeviceTestConfirmed(true);
       navigate("/student/device-test", { state: { remaining } });
     };
     const off = onDeviceTest((m) => {
       if (m.state === "started") finish(m.remaining);
-      else {
+      else if (m.reason === "refused" || m.reason === "error") {
         stop.current?.();
         stop.current = null;
         setTrying(false);
-        if (m.reason === "refused" || m.reason === "error") setRefused(true);
+        setRefused(true);
       }
     });
     stop.current = () => {

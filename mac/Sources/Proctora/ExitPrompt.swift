@@ -20,7 +20,7 @@ struct ExitPromptView: View {
         VStack(spacing: 14) {
             Text("Invigilator exit")
                 .font(.system(size: 17, weight: .semibold))
-            Text("Ask your invigilator or instructor for the exit code.")
+            Text(Config.isDevBuild ? "Development test: enter exactly 0000, then choose Exit exam. Instructor codes have 6 digits." : "Ask your invigilator or instructor for the 6-digit exit code, then choose Exit exam.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -34,12 +34,12 @@ struct ExitPromptView: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.04)))
                 .overlay(RoundedRectangle(cornerRadius: 8)
                     .stroke(model.error == nil ? Color.black.opacity(0.12) : Color.red.opacity(0.7), lineWidth: 1))
-                .accessibilityLabel("Invigilator exit code, 6 digits")
+                .accessibilityLabel(Config.isDevBuild ? "Exit code: 4 digits for development test or 6 digits from instructor" : "Invigilator exit code, 6 digits")
                 .onChange(of: model.code) { new in
                     let clean = ExitCodeInput.digitsOnly(new)
                     if clean != new { model.code = clean; return }
                     if model.error != nil && !clean.isEmpty { model.error = nil; model.offerOffline = false }
-                    if clean.count == ExitCodeInput.length { submit() }
+                    // Submit only on the explicit button or Return, never mid-typing.
                 }
             VStack(spacing: 2) {
                 if let error = model.error {

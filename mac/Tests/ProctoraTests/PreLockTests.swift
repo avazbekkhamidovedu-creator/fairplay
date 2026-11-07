@@ -47,11 +47,14 @@ import Foundation
         #expect(PreLockState.onExamLock(locked: true, preLocked: false) == .lock)   // lock() keeps the exam lock
     }
 
-    @Test func emergencyShortcut() {
-        #expect(PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: true, hasExam: false))
-        #expect(!PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: true, hasExam: true))
-        #expect(!PreLockState.emergencyExitUnlocksAtOnce(locked: true, preLocked: false, hasExam: false))
-        #expect(!PreLockState.emergencyExitUnlocksAtOnce(locked: false, preLocked: false, hasExam: false))
+    @Test func emergencyShortcutAlwaysRequiresCodeWhileLocked() {
+        // Includes the pre-exam browser and the device test: neither may bypass
+        // authorization just because no exam attempt has been attached yet.
+        for practice in [false, true] {
+            #expect(PreLockState.emergencyExitAction(locked: true, deviceTestRunning: practice) == .requireCode)
+        }
+        #expect(PreLockState.emergencyExitAction(locked: false, deviceTestRunning: true) == .leaveUnlockedPractice)
+        #expect(PreLockState.emergencyExitAction(locked: false, deviceTestRunning: false) == .ignore)
     }
 
     @Test func preflightLeavesOutWhatTheLockItselfDoes() {

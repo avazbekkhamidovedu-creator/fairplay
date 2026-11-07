@@ -27,9 +27,10 @@ function dialog() {
   );
 }
 
-function page(state?: unknown) {
+function page(state?: unknown, search = "", confirmed = true) {
+  bridge.setDeviceTestConfirmed(confirmed);
   return render(
-    <MemoryRouter initialEntries={[{ pathname: "/student/device-test", state }]}>
+    <MemoryRouter initialEntries={[{ pathname: "/student/device-test", search, state }]}>
       <Routes>
         <Route path="/student/device-test" element={<DeviceTestPage />} />
         <Route path="/student/login" element={<p>Login screen</p>} />
@@ -121,6 +122,18 @@ describe("device test pop-up", () => {
     expect(screen.queryByText("Preview page")).toBeNull();
   });
 
+  it("ignores an ended from an earlier test and still opens the page on started", async () => {
+    send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
+    dialog();
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
+    send({ type: "deviceTest", state: "ended", reason: "timeout", remaining: 0 });
+    expect(screen.queryByText("The test can't start right now.")).toBeNull();
+    expect(screen.getByRole("button", { name: BUTTON })).toBeDisabled();
+    send({ type: "deviceTest", state: "started", remaining: 60 });
+    expect(screen.getByText("Preview page")).toBeInTheDocument();
+  });
+
   it("shows one line and stays when refused", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
@@ -133,6 +146,13 @@ describe("device test pop-up", () => {
 });
 
 describe("device test page", () => {
+  it("native entry starts the existing preview once after the question page mounts", () => {
+    page(undefined, "?nativeEntry=1");
+    expect(post.mock.calls.filter(([message]) => message.action === "deviceTestStart")).toEqual([
+      [{ action: "deviceTestStart", seconds: 60 }],
+    ]);
+    expect(screen.getByRole("button", { name: "Leave" })).toBeInTheDocument();
+  });
   it("renders four sample questions and the banner with the app's remaining time", async () => {
     page({ remaining: 58 });
     expect(screen.getByText("Preview: nothing here is saved or graded")).toBeInTheDocument();
@@ -173,6 +193,16 @@ describe("device test page", () => {
     vi.useFakeTimers();
     page({ remaining: 2 });
     await act(async () => void vi.advanceTimersByTime(2100));
+    expect(screen.getByText("Login screen")).toBeInTheDocument();
+    expect(post).toHaveBeenCalledWith({ action: "deviceTestLeave" });
+  });
+
+  it("shows a block screen instead of a countdown on a direct visit or refresh", async () => {
+    page({ remaining: 60 }, "", false);
+    expect(screen.getByTestId("device-test-missing")).toBeInTheDocument();
+    expect(screen.queryByTestId("device-test-countdown")).toBeNull();
+    expect(post).not.toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
+    await userEvent.click(screen.getByRole("button", { name: "Back to sign in" }));
     expect(screen.getByText("Login screen")).toBeInTheDocument();
   });
 

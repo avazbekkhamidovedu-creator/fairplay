@@ -35,6 +35,11 @@ final class LockdownController {
     private(set) var isLocked = false
     /// 2026-10-23: locked before the start code, no exam attached yet (PreLock.swift).
     private(set) var isPreLock = false
+    /// The native OJ lock (NativeLock.swift): same OS-level effects, but it ends only through
+    /// releaseNativeLock(). True from the moment it is asked for until it is released, so a
+    /// relaunch whose keyboard tap could not start still counts as locked.
+    private var native = NativeLockMode()
+    var nativeLockActive: Bool { native.active }
     private var observers: [NSObjectProtocol] = []
     private var focusTimer: Timer?
     private var pasteboardTimer: Timer?
@@ -67,6 +72,12 @@ final class LockdownController {
         AppSession.shared.checksProvider = { [weak self] in self?.lastSummary ?? "" }
     }
 
+    static let kioskOptions: NSApplication.PresentationOptions = [
+        .hideDock, .hideMenuBar, .disableAppleMenu,
+        .disableProcessSwitching, .disableForceQuit,
+        .disableSessionTermination, .disableHideApplication
+    ]
+
     /// Returns false (and stays unlocked) when Accessibility is not granted.
     @discardableResult
     func lock() -> Bool {
@@ -92,11 +103,7 @@ final class LockdownController {
         EventLog.shared.record(.lockStarted)
         if IsSecureEventInputEnabled() { EventLog.shared.record(.secureInputOn) }
 
-        NSApp.presentationOptions = [
-            .hideDock, .hideMenuBar, .disableAppleMenu,
-            .disableProcessSwitching, .disableForceQuit,
-            .disableSessionTermination, .disableHideApplication
-        ]
+        NSApp.presentationOptions = Self.kioskOptions
 
         surface?.enterLockedMode()
         // The student may have switched to another app during "Close them and start"
@@ -107,30 +114,44 @@ final class LockdownController {
         installWorkspaceWatchers()
         installFocusGuard()
         clearAndGuardPasteboard()
-        Watchdog.lockStarted(preLock: isPreLock)
+        Watchdog.lockStarted(preLock: isPreLock, native: nativeLockActive)
         runChecks(atLock: true)
         installCheckTimer()
         AppSession.shared.beat()
 
-        let minutes = Config.safetyUnlockMinutes   // always 0 in release builds
-        if minutes > 0 {
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, self.isLocked else { return }
-                EventLog.shared.record(.safetyUnlock)
-                self.unlock()
-            }
-            safetyWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + minutes * 60, execute: work)
-        }
+        armSafetyUnlock()
         return true
+    }
+
+    /// Dev builds only (minutes is always 0 in release builds).
+    private func armSafetyUnlock() {
+        let minutes = Config.safetyUnlockMinutes
+        guard minutes > 0 else { return }
+        safetyWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isLocked || self.nativeLockActive else { return }
+            EventLog.shared.record(.safetyUnlock)
+            if self.nativeLockActive {
+                guard Config.isDevBuild else { return }
+                self.releaseNativeLock(); NativeLockSetup.live.clear()
+            }
+            else { self.unlock() }
+        }
+        safetyWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + minutes * 60, execute: work)
     }
 
     func unlock() {
         guard isLocked else { return }
+        guard native.allowsUnlock else {
+            DebugLog.log("lock", "unlock refused: the native lock ends only with a valid code or a signed receipt")
+            return
+        }
         DebugLog.log("lock", "unlocking")
         isLocked = false
         Allowlist.setTeacherAllowed(nil)      // the next exam brings its own list
         safetyWork?.cancel(); safetyWork = nil
+        vpnBudget.close(now: Date()); vpnBudget = VPNWindowBudget()
         EventTap.shared.stop()
         NSApp.presentationOptions = []
         observers.forEach {
@@ -164,6 +185,7 @@ final class LockdownController {
     /// when Accessibility is not granted, like lock().
     @discardableResult
     func preLock() -> Bool {
+        guard !nativeLockActive else { return false }
         guard !isLocked else { return true }
         surface?.endDeviceTest(.leave)
         EventLog.shared.setForwarding(false)
@@ -195,12 +217,54 @@ final class LockdownController {
         AppSession.shared.beat()
     }
 
+    // MARK: - Native OJ lock (NativeLock.swift)
+
+    /// The same lock as an exam's with no exam attached and nothing forwarded to the server.
+    /// `recovering`: a relaunch with a saved lock; when the keyboard tap cannot start the lock
+    /// is still considered held (the caller shows a full-screen block and retries).
+    @discardableResult
+    func acquireNativeLock(recovering: Bool = false) -> Bool {
+        if isLocked { return native.active }
+        surface?.endDeviceTest(.leave)
+        EventLog.shared.setForwarding(false)
+        native.begin()
+        vpnBudget = VPNWindowBudget(used: NativeLockSetup.live.savedVPNUsed())
+        let locked = lock()
+        let ok = native.acquired(locked, recovering: recovering)
+        if !locked && ok {
+            NSApp.presentationOptions = Self.kioskOptions
+            Watchdog.lockStarted(preLock: false, native: true)
+            armSafetyUnlock()
+        }
+        if ok && locked { DebugLog.log("lock", "native lock on") }
+        else if ok { DebugLog.log("lock", "native lock held without the keyboard tap (relaunch): kiosk options and watchdog on") }
+        else if !native.active { EventLog.shared.setForwarding(true) }
+        return ok
+    }
+
+    func releaseNativeLock() {
+        guard native.active else { return }
+        DebugLog.log("lock", "native lock released")
+        native.beginRelease()
+        if isLocked {
+            unlock()
+        } else {
+            Watchdog.lockEnded()
+            NSApp.presentationOptions = []
+            surface?.hideBlocking()
+            surface?.exitLockedMode()
+            onUnlocked?()
+        }
+        native.endRelease()
+        EventLog.shared.setForwarding(true)
+    }
+
     /// "Not ready? Leave and unlock" (or the invigilator shortcut) during the pre-exam
     /// lock: the normal unlock with no server check, since there is no attempt. False, and
     /// nothing changes, when an exam is attached or this is not the pre-exam lock.
     @discardableResult
     func endPreLock() -> Bool {
-        guard PreLockState.onPreUnlock(locked: isLocked, preLocked: isPreLock,
+        guard !nativeLockActive, PreLockState.onPreUnlock(locked: isLocked, preLocked: isPreLock,
                                        hasExam: AppSession.shared.exam != nil) == .unlock else { return false }
         DebugLog.log("lock", "pre-exam lock ended (no exam was attached)")
         unlock()
@@ -223,6 +287,34 @@ final class LockdownController {
         surface?.takeFocus()
     }
 
+    /// While the native lock waits for the student to connect the VPN, the Cisco client may stay in front.
+    /// One window at a time, 15 minutes in total per lock. Ends on a page load, at unlock or on timeout.
+    private var vpnBudget = VPNWindowBudget()
+
+    var vpnYieldOpen: Bool { vpnBudget.openUntil != nil }
+    var vpnWindowAvailable: Bool { nativeLockActive && vpnBudget.canOpen(now: Date()) }
+
+    func yieldFrontToVPN(for seconds: TimeInterval) -> Bool {
+        guard nativeLockActive, vpnBudget.request(now: Date(), grace: seconds) != nil else { return false }
+        EventTap.reloadShortcutAllowed = false
+        NativeLockSetup.live.persistVPNUsed(vpnBudget.committed)
+        EventLog.shared.record(.otherAppForeground("vpn window opened (\(Int(vpnBudget.used))s of \(Int(VPNLauncher.totalCap))s used)"))
+        return true
+    }
+
+    func endVPNYield() {
+        guard vpnBudget.openUntil != nil else { return }
+        vpnBudget.close(now: Date())
+        NativeLockSetup.live.persistVPNUsed(vpnBudget.used)
+        bringToFront()
+    }
+
+    private func vpnMayHoldFront(_ front: NSRunningApplication) -> Bool {
+        guard nativeLockActive, vpnBudget.isOpen(now: Date()) else { return false }
+        return VPNLauncher.mayHoldFront(bundleId: front.bundleIdentifier, bundleURL: front.bundleURL,
+                                        signedByCisco: { VPNLauncher.isCiscoSigned(pid: front.processIdentifier) })
+    }
+
     /// 2026-10-24: another app is in front while locked (pre-exam or exam lock). Since
     /// macOS 14 activation is cooperative: a background app asking to activate (the call in
     /// bringToFront) is usually IGNORED while the student uses the app in front, so the
@@ -235,6 +327,7 @@ final class LockdownController {
     /// (Allowlist.mayStayVisible) are never hidden, only asked to give the front back. What
     /// we hid is remembered and shown again at unlock (hiddenByUs).
     private func reclaimFront(from front: NSRunningApplication?) {
+        if let front, vpnMayHoldFront(front) { return }
         if let front, front.processIdentifier != ProcessInfo.processInfo.processIdentifier,
            !Allowlist.isSystemDialog(front), !front.isHidden, !front.isTerminated {
             let pid = front.processIdentifier
@@ -460,7 +553,7 @@ final class LockdownController {
         } else {
             let quit: (() -> Void)? = problems["proc"] == nil ? nil : { [weak self] in self?.quitBlockedNow() }
             let text = problems.keys.sorted().compactMap { problems[$0] }.joined(separator: "\n\n")
-                + "\n\nStuck? Invigilator: Ctrl-Opt-Cmd-E"
+                + "\n\nStuck? Ask your instructor for an exit code."
             surface?.showBlocking(reason: text, quitAction: quit)
         }
         surface?.coverAllScreens()
@@ -590,9 +683,7 @@ final class LockdownController {
         var services = Set(f.deniedProcs.filter { $0.uid != getuid() }.map { LockdownController.friendlyName($0.name) })
         // Review 2026-10-14: these services start only when someone connects, so a running
         // process isn't there to find. Their port listening means the setting is on.
-        for (port, name) in SystemChecks.sharingPorts where SystemChecks.localPortOpen(port) {
-            services.insert(name)
-        }
+        services.formUnion(SystemChecks.listeningSharingServices())
         for name in services.sorted() {
             out.append(("blocked_apps", "Turn off \(name) in System Settings > General > Sharing."))
         }

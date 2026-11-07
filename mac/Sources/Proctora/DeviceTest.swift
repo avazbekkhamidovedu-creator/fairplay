@@ -33,7 +33,7 @@ final class DeviceTestSession {
         guard let n = raw as? NSNumber, !(raw is Bool) else { return defaultSeconds }
         let d = n.doubleValue
         guard d.isFinite else { return defaultSeconds }
-        return min(allowedSeconds.upperBound, max(allowedSeconds.lowerBound, Int(d.rounded(.down))))
+        return Int(min(Double(allowedSeconds.upperBound), max(Double(allowedSeconds.lowerBound), d.rounded())))
     }
 
     private let clock: () -> TimeInterval

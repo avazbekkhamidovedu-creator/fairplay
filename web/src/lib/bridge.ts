@@ -359,6 +359,17 @@ export function deviceTestStart(seconds: number): boolean {
   return true;
 }
 
+let previewConfirmed = false;
+
+/** The app answered "started" in this page load. A reload forgets it, so the preview route can tell. */
+export function setDeviceTestConfirmed(v: boolean): void {
+  previewConfirmed = v;
+}
+
+export function deviceTestConfirmed(): boolean {
+  return previewConfirmed;
+}
+
 export function deviceTestLeave(): boolean {
   if (!isNative()) return false;
   post({ action: "deviceTestLeave" });
@@ -907,5 +918,6 @@ export function _resetBridgeForTests(): void {
   locked = false;
   nativeState = null;
   sealedTokenSent = false;
+  previewConfirmed = false;
   listeners.clear();
 }

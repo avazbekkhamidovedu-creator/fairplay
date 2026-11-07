@@ -1,14 +1,15 @@
 import AppKit
 
-// `--watchdog <pid> [--prelock]`: the helper copy started while locked (Watchdog.swift).
+// `--watchdog <pid> [--prelock|--native]`: the helper copy started while locked (Watchdog.swift).
 if let watchdog = Watchdog.parseArguments(CommandLine.arguments) {
-    Watchdog.run(parent: watchdog.parent, preLock: watchdog.preLock)
+    Watchdog.run(parent: watchdog.parent, preLock: watchdog.preLock, native: watchdog.native)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var main: MainWindowController?
     private var pendingExam: String?
     private var recoveringExam = false
+    private var relockingNative = false
 
     func application(_ application: NSApplication, open urls: [URL]) {
         _ = receiveLaunch(urls)
@@ -23,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func receiveLaunch(_ urls: [URL]) -> Bool {
-        guard !recoveringExam, urls.count == 1, let url = urls.first else { return false }
+        guard !recoveringExam, !relockingNative, urls.count == 1, let url = urls.first else { return false }
         let exam: String?
         if url.isFileURL {
             guard (url.host == nil || url.host == "" || url.host == "localhost"),
@@ -35,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exam = ExamLaunch.parseFile(data)
         } else { exam = ExamLaunch.parse(url) }
         guard let exam else { return false }
-        if let main { main.openExamLaunch(exam) }
+        if let main { main.openUniversityExam(exam) }
         else { pendingExam = exam }
         return true
     }
@@ -51,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lock.surface = wc
         lock.onUnlocked = { [weak self, weak wc] in
             self?.recoveringExam = false
+            self?.relockingNative = false
+            wc?.cancelNativeRecovery()
             wc?.endExternalIfActive()
             wc?.send(["type": "unlocked"])
         }
@@ -61,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             wc?.handleServerStatus(status)
         }
         NotificationCenter.default.addObserver(forName: .proctoraEmergencyExit, object: nil, queue: .main) { [weak wc] _ in
+            guard EventTap.postsEmergencyExit(isDev: Config.isDevBuild) else { return }
             wc?.promptEmergencyExit()
         }
         recoveringExam = Watchdog.cleanUpAtLaunch()
@@ -72,8 +76,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Net.onUpgradeRequired = { [weak wc] minimum in wc?.showUpdateRequired(minimum: minimum) }
-        wc.start()
-        if !recoveringExam, let pendingExam { wc.openExamLaunch(pendingExam) }
+        if case .relock(let saved) = NativeRelaunch.decide(store: NativeLockSetup.live.store,
+                                          relockRequested: CommandLine.arguments.contains(Watchdog.relockArgument)) {
+            relockingNative = true
+            DebugLog.log("app", "saved native lock found: locking again before anything is shown")
+            wc.startRecovering(saved)
+        } else {
+            wc.start()
+            if !recoveringExam, let pendingExam { wc.openUniversityExam(pendingExam) }
+        }
         pendingExam = nil
         NSApp.activate(ignoringOtherApps: true)
         // 2026-10-22: release builds look for a newer FairPlay now and every 6 hours.
@@ -89,8 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ------------------------------------------------------------
         FairPlay \(Config.version) (\(Config.isDevBuild ? "dev" : "release") build)  server: \(Config.serverURL.absoluteString)
         Safety auto-unlock: \(Config.safetyUnlockMinutes > 0 ? "\(Int(Config.safetyUnlockMinutes)) min" : "off")
-        Invigilator exit while locked: Ctrl-Opt-Cmd-E, code from the teacher's live room
-        No server / error: "Offline code..." in that dialog\(Config.isDevBuild ? " (dev builds also accept 0000)" : "")
+        Exit while locked: ask your instructor for an exit code
         TLS pins: \(Pinning.enabled ? "\(Config.pins.count)" : "none")   device: \(AppSession.shared.deviceId)
         Log: \(EventLog.shared.logPath)
         ------------------------------------------------------------
@@ -99,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         main?.endDeviceTest(.leave)
-        let locked = LockdownController.shared.isLocked
+        let locked = LockdownController.shared.isLocked || LockdownController.shared.nativeLockActive
         if !locked { main?.closeBox() }
         DebugLog.log("app", locked ? "quit requested while locked: refused" : "quitting")
         return locked ? .terminateCancel : .terminateNow
@@ -115,7 +125,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main?.takeFocus(); return true
     }
 
+    @objc func hardReloadPage(_ sender: Any?) {
+        guard main?.reloadProtectedBrowser(hard: true) == true else { return }
+        DebugLog.log("app", "View > Hard Reload (protected browser)")
+    }
+
     @objc func reloadPage(_ sender: Any?) {
+        if main?.reloadProtectedBrowser(hard: false) == true {
+            DebugLog.log("app", "View > Reload (protected browser)")
+            return
+        }
         // Audit M-18: a reload during the exam drops page state; not while locked.
         guard !LockdownController.shared.isLocked else {
             DebugLog.log("app", "View > Reload ignored while locked")
@@ -158,6 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let reload = NSMenuItem(title: "Reload", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         reload.target = self
         view.addItem(reload)
+        let hardReload = NSMenuItem(title: "Hard Reload", action: #selector(hardReloadPage(_:)), keyEquivalent: "R")
+        hardReload.target = self
+        view.addItem(hardReload)
         let browser = NSMenuItem(title: "Protected Browser…", action: #selector(openProtectedBrowser(_:)), keyEquivalent: "")
         browser.target = self
         view.addItem(browser)

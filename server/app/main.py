@@ -132,6 +132,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # this order, and the exam's per-student traffic (heartbeat, app beat, saves) is ~95%
     # of all requests during an exam. Its paths overlap no other router's
     # (tests/test_perf_0_6_2.py checks), so the order changes nothing else.
+    from .native_browser_enrollment import router as native_browser_enrollment_router
+    app.include_router(native_browser_enrollment_router)
     app.include_router(student_router)
     from .code_runner import student_router as code_student_router, teacher_router as code_teacher_router
     app.include_router(code_student_router)      # external code runner: student run

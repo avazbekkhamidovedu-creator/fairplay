@@ -19,6 +19,9 @@ permissions:
 
 env:
   FAIRPLAY_BUILD: release
+  FAIRPLAY_NATIVE_BROWSER_PROFILE: ${{ github.workspace }}/config/native-browser-profile.json
+  # Public X25519 key the server opens exit escrow with: repository variable (not secret), base64 of 32 bytes.
+  FAIRPLAY_NATIVE_EXIT_PUBLIC_KEY: ${{ vars.FAIRPLAY_NATIVE_EXIT_PUBLIC_KEY }}
   FAIRPLAY_SERVER: https://dku.speakupai.uz
   # SHA-256 of the root CAs the server certificate (Let's Encrypt) chains to:
   # ISRG Root X1, ISRG Root X2, GTS Root R1, GTS Root R3, GTS Root R4.
@@ -123,6 +126,10 @@ jobs:
           if [ ${#FAIRPLAY_APP_KEY} -lt 32 ]; then
             echo "::error::Set the repository secret FAIRPLAY_APP_KEY (same value as the server)"; exit 1
           fi
+          if [[ ! "$FAIRPLAY_NATIVE_EXIT_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+            echo "::error::Set the repository variable FAIRPLAY_NATIVE_EXIT_PUBLIC_KEY (base64 of the server's 32-byte exit public key)"; exit 1
+          fi
+          [ -s "$FAIRPLAY_NATIVE_BROWSER_PROFILE" ] || { echo "::error::config/native-browser-profile.json is not committed"; exit 1; }
           xcodebuild -version
           bash mac/build.sh
           lipo -info mac/FairPlay.app/Contents/MacOS/Proctora

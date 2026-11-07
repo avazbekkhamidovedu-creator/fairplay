@@ -236,6 +236,10 @@ enum SystemChecks {
         (22, "Remote Login (SSH)"), (5900, "Screen Sharing"), (3283, "Remote Management"),
     ]
 
+    static func listeningSharingServices(isOpen: (UInt16) -> Bool = { localPortOpen($0) }) -> [String] {
+        sharingPorts.filter { isOpen($0.0) }.map { $0.1 }
+    }
+
     /// True when something accepts TCP connections on 127.0.0.1:<port> (200 ms limit).
     static func localPortOpen(_ port: UInt16, timeoutMs: Int32 = 200) -> Bool {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
