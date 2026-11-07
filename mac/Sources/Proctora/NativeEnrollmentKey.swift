@@ -109,6 +109,36 @@ struct NativeEnrollmentKey: DeviceKeyBacking {
         guard let certificateKey = SecCertificateCopyKey(certificate),
               let raw = SecKeyCopyExternalRepresentation(certificateKey, nil) as Data?,
               raw.count == 65, publicKeyDER.suffix(65) == raw else { return nil }
-        return SecIdentityCreate(nil, certificate, privateKey)
+        return Self.makeIdentity(certificate: certificate, privateKey: privateKey)
+    }
+
+    /// SecIdentityCreate is only declared in the newest SDK headers, but the symbol
+    /// has shipped since macOS 10.12, so resolve it at runtime. Without it, fall
+    /// back to storing the certificate beside the key and letting the Keychain pair them.
+    private static func makeIdentity(certificate: SecCertificate, privateKey: SecKey) -> SecIdentity? {
+        typealias Create = @convention(c) (CFAllocator?, SecCertificate, SecKey) -> Unmanaged<SecIdentity>?
+        if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "SecIdentityCreate") {
+            return unsafeBitCast(symbol, to: Create.self)(nil, certificate, privateKey)?.takeRetainedValue()
+        }
+        let add: [String: Any] = [kSecClass as String: kSecClassCertificate,
+                                  kSecValueRef as String: certificate,
+                                  kSecUseDataProtectionKeychain as String: true]
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess || status == errSecDuplicateItem else { return nil }
+        let query: [String: Any] = [kSecClass as String: kSecClassIdentity,
+                                    kSecMatchItemList as String: [certificate],
+                                    kSecUseDataProtectionKeychain as String: true,
+                                    kSecReturnRef as String: true,
+                                    kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let result,
+              CFGetTypeID(result) == SecIdentityGetTypeID() else { return nil }
+        let identity = result as! SecIdentity
+        var key: SecKey?
+        guard SecIdentityCopyPrivateKey(identity, &key) == errSecSuccess, let key,
+              let a = SecKeyCopyPublicKey(key).flatMap({ SecKeyCopyExternalRepresentation($0, nil) as Data? }),
+              a == SecKeyCopyPublicKey(privateKey).flatMap({ SecKeyCopyExternalRepresentation($0, nil) as Data? })
+        else { return nil }
+        return identity
     }
 }
