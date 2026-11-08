@@ -16,7 +16,7 @@ if ! gh release view "$TAG" -R "$R" >/dev/null 2>&1; then
       exit 1; }
   fi
 fi
-if [ "$(gh release view "$TAG" -R "$R" --json isDraft --jq .isDraft)" != true ]; then
+if [ "$(gh release view "$TAG" -R "$R" --json isDraft --jq .isDraft)" != true ] && [ "${REPLACE_PUBLISHED:-}" != yes ]; then
   echo "::error::Refusing to replace assets on a published release: $R $TAG"
   exit 1
 fi

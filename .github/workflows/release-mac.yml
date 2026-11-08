@@ -13,6 +13,11 @@ on:
     # Changing RELEASE_VERSION on a branch releases v<that version> (the tag is created here).
     paths: ["RELEASE_VERSION"]
   workflow_dispatch:
+    inputs:
+      replace_published:
+        description: "Replace the files of an already published release with this build (same version)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -164,9 +169,10 @@ jobs:
       # avazbekkhamidovedu-creator/fairplay-download. Needs the secret DOWNLOAD_TOKEN
       # (fine-grained, Contents read/write on that repository).
       - name: Publish to fairplay-download
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.replace_published
         env:
           GH_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
+          REPLACE_PUBLISHED: ${{ inputs.replace_published && 'yes' || '' }}
         run: |
           if [ -z "$GH_TOKEN" ]; then echo "::error::DOWNLOAD_TOKEN not set: students can't download this version"; exit 1; fi
           sed 's#avazbekkhamidovedu-creator/fairplay/releases#avazbekkhamidovedu-creator/fairplay-download/releases#g' RELEASES.md > notes.md
