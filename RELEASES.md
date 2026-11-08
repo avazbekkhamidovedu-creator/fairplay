@@ -1,4 +1,4 @@
-## What's new in 0.8.6
+## What's new in 0.8.5
 
 - Instructors can unlock a student with one button and one confirmation on the DKU OJ help page, with no codes or typing. The student's computer is released within about 25 seconds and the app returns to its first screen.
 - DKU OJ pages are always shown exactly as DKU OJ sends them: no false "could not be loaded" notice and no VPN prompt. The app works the same with the university VPN on or off, and reloads once when the VPN connects or drops.
