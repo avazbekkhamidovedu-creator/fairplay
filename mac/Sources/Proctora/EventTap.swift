@@ -36,6 +36,9 @@ final class EventTap {
     static var voiceOverOn = false
     /// True only while the protected browser holds the lock: Cmd-R and Cmd-Shift-R reach the app menu.
     static var reloadShortcutAllowed = false
+    /// True only while the protected browser is the active app and its web view has the keyboard focus:
+    /// Undo, Redo, Select All and Find then reach the page. Set on the main thread, read on the tap thread.
+    static var editShortcutsAllowed = false
 
     static func isReloadShortcut(key: Int, flags: CGEventFlags) -> Bool {
         let held = flags.rawValue & modifierMask
@@ -361,6 +364,20 @@ final class EventTap {
         return key == kVK_ANSI_E && f.contains(.maskCommand) && f.contains(.maskControl) && f.contains(.maskAlternate)
     }
 
+    /// A chord with Cmd that may pass: Reload while the browser holds the lock, and Cmd-Z, Shift-Cmd-Z, Cmd-A and
+    /// Cmd-F while the browser has the focus. Cut, copy, paste and every other Cmd chord stay blocked.
+    static func commandChordAllowed(key: Int, flags: CGEventFlags, reloadAllowed: Bool, editAllowed: Bool) -> Bool {
+        if reloadAllowed && isReloadShortcut(key: key, flags: flags) { return true }
+        guard editAllowed else { return false }
+        let held = flags.rawValue & modifierMask
+        let cmd = CGEventFlags.maskCommand.rawValue, shift = CGEventFlags.maskShift.rawValue
+        switch key {
+        case kVK_ANSI_Z: return held == cmd || held == cmd | shift
+        case kVK_ANSI_A, kVK_ANSI_F: return held == cmd
+        default: return false
+        }
+    }
+
     static func shouldSwallow(_ event: CGEvent, type: CGEventType) -> Bool {
         let key = Int(event.getIntegerValueField(.keyboardEventKeycode))
         if type == .flagsChanged {
@@ -374,7 +391,7 @@ final class EventTap {
         let opt = flags.contains(.maskAlternate)
         let fn = flags.contains(.maskSecondaryFn)
 
-        if cmd { return !(reloadShortcutAllowed && isReloadShortcut(key: key, flags: flags)) }
+        if cmd { return !commandChordAllowed(key: key, flags: flags, reloadAllowed: reloadShortcutAllowed, editAllowed: editShortcutsAllowed) }
         // Audit M-03: any shortcut the user enabled in System Settings (rebound Spotlight,
         // Mission Control, Shortcuts.app automations ...), whatever key it is on.
         let mods = flags.rawValue & modifierMask & ~CGEventFlags.maskSecondaryFn.rawValue

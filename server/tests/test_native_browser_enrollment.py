@@ -73,3 +73,28 @@ def test_enrollment_is_off_without_explicit_configuration(enrollment):
     client,csr,*_=enrollment
     client.app.state.settings.native_browser_enrollment=False
     assert client.post('/api/native-browser/enrollment/challenge',json={'csr_sha256':hashlib.sha256(csr).hexdigest()}).status_code==404
+
+
+def test_certificate_lifetime_defaults_to_thirty_days_and_follows_the_setting(enrollment):
+    client,csr,key,ca,key_pem=enrollment
+    def issued():
+        r=client.post('/api/native-browser/enrollment/certificate',json=payload(client,csr))
+        return x509.load_der_x509_certificate(base64.b64decode(r.json()['certificate']))
+    cert=issued()
+    assert cert.not_valid_after_utc-cert.not_valid_before_utc==timedelta(days=30,minutes=1)
+    client.app.state.settings.native_browser_cert_days=10
+    cert=issued()
+    assert cert.not_valid_after_utc-cert.not_valid_before_utc==timedelta(days=10,minutes=1)
+
+
+def test_challenge_ip_limit_is_a_setting_and_school_nets_get_a_higher_one(enrollment):
+    client,csr,*_=enrollment
+    s=client.app.state.settings
+    s.native_browser_enroll_ip_limit=2
+    s.in_school_net=lambda ip: False
+    body={'csr_sha256':hashlib.sha256(csr).hexdigest()}
+    url='/api/native-browser/enrollment/challenge'
+    assert [client.post(url,json=body).status_code for _ in range(3)]==[200,200,429]
+    s.in_school_net=lambda ip: True
+    s.native_browser_enroll_school_ip_limit=6
+    assert [client.post(url,json=body).status_code for _ in range(4)]==[200,200,200,429]

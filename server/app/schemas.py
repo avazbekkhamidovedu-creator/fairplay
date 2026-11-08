@@ -193,7 +193,7 @@ def normalize_websites(v: list[str] | None) -> list[str]:
 MAX_WEBSITE_LINKS = 20
 MAX_LINK_CHARS = 2000
 MAX_LINK_TITLE = 80
-LINK_PATH_RE = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@%/?#\[\]-]*$")
+LINK_PATH_RE = re.compile(r"^[A-Za-z0-9._~!$&()*+,;=:@%/?#\[\]-]*$")
 
 
 def _link_title(raw: str) -> str | None:

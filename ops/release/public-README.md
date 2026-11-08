@@ -2,16 +2,16 @@
 
 Secure exam app for universities. This repository hosts the app downloads.
 
-## What's new in 0.8.4
+## What's new in 0.8.6
 
-- DKU OJ opens inside FairPlay on Mac and Windows, and DKU OJ pages are always shown exactly as DKU OJ sends them: no false "could not be loaded" notice and no VPN prompt, and DKU OJ's own reason is shown when an exam cannot be started.
-- Open-book exams: an instructor can list allowed websites (and a Duke Box folder). Students open them in separate tabs; the exam itself stays on DKU OJ. AI assistants, chat, translators and code or file sharing sites are always blocked, and the rules are the same on Mac, Windows and the server. Nothing changes unless the instructor lists sites.
-- When the exam time is over, FairPlay unlocks the computer by itself, using each student's own deadline. It also unlocks if the connection to DKU OJ is lost, and while a hand-in is still being collected.
-- Fewer start problems: a leftover session from an earlier exam, or signing in again on the same computer, no longer needs the instructor to step in. Instructors can use **Unlock and reopen** in one step, and a reopen never shortens a student's time.
-- More reliable recovery: if the app is reopened while the computer is locked and permission is missing, the lock protections still start; a failed browser start on Windows keeps the saved lock; a start request whose reply was lost can be recovered after a restart.
-- Instructors can unlock a student with one button and one confirmation on the DKU OJ help page, with no codes or typing. The student's computer is released within about 25 seconds and the app returns to its first screen. A leftover exam attachment no longer changes what the student sees on DKU OJ pages.
-- The app works the same with the university VPN on or off: it follows the system proxy, reloads once when the VPN connects or drops, never asks for the VPN when one is connected, and treats a certificate problem as a certificate problem.
-- The Windows toolbar matches the Mac, the app version is shown in the corner, and the Mac "Test my device" screen no longer crowds its button.
+- Instructors can unlock a student with one button and one confirmation on the DKU OJ help page, with no codes or typing. The student's computer is released within about 25 seconds and the app returns to its first screen.
+- DKU OJ pages are always shown exactly as DKU OJ sends them: no false "could not be loaded" notice and no VPN prompt. The app works the same with the university VPN on or off, and reloads once when the VPN connects or drops.
+- The device certificate now renews by itself before it expires, so a long exam or one started near expiry keeps its connection.
+- Math and icons from the OJ's own CDN files render in locked exams, and undo, redo, select all and find work in the code editor on the Mac.
+- When the exam time is over, FairPlay unlocks the computer by itself using each student's own deadline, collects the answers in the background, and warns the instructor if a saved answer could not be submitted.
+- Fewer start problems: a leftover session, signing in again on the same computer, or a refused exam no longer needs the instructor to step in, and the Windows toolbar matches the Mac.
+- Open-book exams (allowed websites and a Duke Box folder) open in separate tabs only, with the same rules on Mac, Windows and the server. Nothing changes unless the instructor lists sites.
+- The server handles a whole class registering at once, with 30-day certificates and campus-network limits.
 
 ## Download FairPlay
 

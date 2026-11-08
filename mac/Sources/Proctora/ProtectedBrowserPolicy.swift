@@ -9,6 +9,7 @@ struct ProtectedBrowserPolicy {
     private let baseOrigins: Set<String>
     private let resourceOrigins: Set<String>
     private let resourceSuffixes: Set<String>
+    private let assetOrigins: Set<String>
     /// The signed sites and resources stop working at this time unless a newer signed context extends it.
     var sitesExpire: Date?
     var clock: () -> Date = Date.init
@@ -16,7 +17,7 @@ struct ProtectedBrowserPolicy {
     /// The signed sites that passed validation, in order (the picker lists these).
     let acceptedSites: [String]
 
-    init?(start: String, additionalOrigins: String, forbiddenOrigin: URL, allowHTTP: Bool = false, referenceSites: [String] = [], resourceOrigins resources: [String] = []) {
+    init?(start: String, additionalOrigins: String, forbiddenOrigin: URL, allowHTTP: Bool = false, referenceSites: [String] = [], resourceOrigins resources: [String] = [], assetOrigins assets: [String] = []) {
         guard start.utf8.count <= 2048, additionalOrigins.utf8.count <= 8192,
               let url = Self.normalizedURL(start),
               let first = Self.origin(url), first != Self.origin(forbiddenOrigin),
@@ -60,6 +61,7 @@ struct ProtectedBrowserPolicy {
         referenceRules = references
         acceptedSites = accepted
         // Subresource-only origins (CDNs, asset hosts): never a page of their own.
+        let assetList = assets
         var assets: Set<String> = []
         var suffixes: Set<String> = []
         guard resources.count <= 64 else { return nil }
@@ -77,6 +79,12 @@ struct ProtectedBrowserPolicy {
         }
         resourceOrigins = assets
         resourceSuffixes = suffixes
+        // The OJ's own subresource hosts: always allowed for non-main-frame loads, with or without sites.
+        var cdns: Set<String> = []
+        for raw in assetList.prefix(16) {
+            if let origin = Self.assetOrigin(raw), origin != Self.origin(forbiddenOrigin) { cdns.insert(origin) }
+        }
+        assetOrigins = cdns
         startURL = url
         origins = allowed
     }
@@ -121,10 +129,12 @@ struct ProtectedBrowserPolicy {
         if !mainFrame && ["about:blank", "about:srcdoc"].contains(url.absoluteString.lowercased()) { return true }
         guard let origin = Self.origin(url) else { return false }
         if baseOrigins.contains(origin) { return true }
+        if !mainFrame, assetOrigins.contains(origin), !SiteDenyList.isDenied(host: url.host ?? "") { return true }
         guard sitesLive else { return false }
         if !mainFrame, resourceOrigins.contains(origin) || matchesResourceSuffix(url) { return true }
         guard origins.contains(origin) else { return false }
-        return referenceRules.contains { $0.matches(host: url.host?.lowercased() ?? "", path: url.path) }
+        let encodedPath = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
+        return referenceRules.contains { $0.matches(host: url.host?.lowercased() ?? "", encodedPath: encodedPath) }
     }
 
     /// Registry-controlled suffixes a wildcard may never sit on ("https://*.com").
@@ -168,6 +178,15 @@ struct ProtectedBrowserPolicy {
         return suffix
     }
 
+    /// "https://host[:port]" exactly: lowercase, no userinfo, path, query, fragment or wildcard, not a denied host.
+    static func assetOrigin(_ raw: String) -> String? {
+        guard raw.utf8.count <= 300, raw == raw.lowercased(), raw.hasPrefix("https://"), !raw.contains("*"),
+              let url = URL(string: raw), url.path.isEmpty, url.query == nil, url.fragment == nil, url.user == nil,
+              let origin = origin(url), origin == raw || origin + ":443" == raw,
+              !SiteDenyList.isDenied(host: url.host ?? "") else { return nil }
+        return origin
+    }
+
     private func matchesResourceSuffix(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == "https", url.port == nil || url.port == 443,
               let host = url.host?.lowercased(), !SiteDenyList.isDenied(host: host) else { return false }
@@ -203,7 +222,7 @@ struct ProtectedBrowserPolicy {
                 rules.append(["trigger": ["url-filter": "^https?://[a-z0-9.-]+\\." + d + "[:/]"], "action": ["type": "block"]])
             }
         }
-        for origin in (origins.union(resourceOrigins)).sorted() {
+        for origin in (origins.union(resourceOrigins).union(assetOrigins)).sorted() {
             // WebKit's content-blocker regex grammar does not support alternation.
             // Network URLs are canonicalized with '/' after the authority. Keep the
             // default and explicit 443 forms separate; never allow a generic ':'.

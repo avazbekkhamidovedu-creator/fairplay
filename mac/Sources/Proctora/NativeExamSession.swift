@@ -30,8 +30,9 @@ struct NativeExamSession {
             guard value.state != "rejected" else { return false }
             guard value.binding == binding else { return false }
         } else {
-            // Only a live claim can establish an unknown binding; a terminal state needs the saved one.
-            guard value.state == "active" else { return false }
+            // Only a live claim (active, or finishing after a lost reply) can establish an unknown binding;
+            // a terminal state needs the saved one.
+            guard value.state == "active" || value.state == "finishing" else { return false }
             binding = value.binding
         }
         context = value

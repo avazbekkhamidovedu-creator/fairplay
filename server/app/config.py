@@ -183,6 +183,11 @@ class Settings:
     native_browser_enrollment: bool = field(default_factory=lambda: _flag("FAIRPLAY_NATIVE_BROWSER_ENROLLMENT", False))
     native_browser_ca: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_NATIVE_BROWSER_CA", ""))
     native_browser_ca_key: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_NATIVE_BROWSER_CA_KEY", ""), repr=False)
+    native_browser_cert_days: int = field(default_factory=lambda: _int("FAIRPLAY_NATIVE_BROWSER_CERT_DAYS", 30))
+    # Per-IP enrollment challenges per minute; networks in FAIRPLAY_LOGIN_SCHOOL_NETS get the higher
+    # school limit because a whole class reaches the server from one NAT address.
+    native_browser_enroll_ip_limit: int = field(default_factory=lambda: _int("FAIRPLAY_NATIVE_BROWSER_ENROLL_IP_LIMIT", 300))
+    native_browser_enroll_school_ip_limit: int = field(default_factory=lambda: _int("FAIRPLAY_NATIVE_BROWSER_ENROLL_SCHOOL_IP_LIMIT", 3000))
     single_process: bool = field(default_factory=lambda: _flag("FAIRPLAY_SINGLE_PROCESS", False))
     workers: int = field(default_factory=lambda: _int("WEB_CONCURRENCY", 1))
     # Audit S-17: Postgres max_connections and how many API containers share it (0 = unchecked).

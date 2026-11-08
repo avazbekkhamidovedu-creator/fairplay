@@ -8,6 +8,7 @@ final class NativeBrowserIdentity: NSObject, URLSessionDelegate, URLSessionTaskD
     let origin: URL
     private(set) var identity: SecIdentity?
     private(set) var fingerprint: String?
+    private(set) var certificateExpiry: Date?
     private let ownsLock: () -> Bool
     private var testAnchor: SecCertificate?
 
@@ -46,6 +47,7 @@ final class NativeBrowserIdentity: NSObject, URLSessionDelegate, URLSessionTaskD
         var certificate: SecCertificate?
         if let selected, SecIdentityCopyCertificate(selected, &certificate) == errSecSuccess, let certificate {
             fingerprint = Self.fingerprint(certificate)
+            certificateExpiry = CertificateRenewal.notAfter(certificate)
         } else { fingerprint = nil }
         super.init()
     }
@@ -57,6 +59,19 @@ final class NativeBrowserIdentity: NSObject, URLSessionDelegate, URLSessionTaskD
         guard SecIdentityCopyCertificate(selected, &cert) == errSecSuccess, let cert,
               let digest = Self.fingerprint(cert) else { throw DeviceKeyError("Native identity unavailable") }
         identity = selected; fingerprint = digest
+        certificateExpiry = CertificateRenewal.notAfter(cert)
+    }
+
+    /// Issues the certificate again with the same key when less than `threshold` of it is left; the
+    /// fingerprint must not change (it identifies the device to the OJ).
+    func renewIfNeeded(threshold: TimeInterval, now: Date = Date()) async throws {
+        guard let profile = NativeBrowserProfile.bundled, origin == profile.gatewayURL, let before = fingerprint else { return }
+        let selected = try await NativeBrowserProvisioning.prepare(profile: profile, renewBefore: threshold, now: now)
+        var cert: SecCertificate?
+        guard SecIdentityCopyCertificate(selected, &cert) == errSecSuccess, let cert,
+              Self.fingerprint(cert) == before else { throw DeviceKeyError("Renewed identity does not match") }
+        identity = selected
+        certificateExpiry = CertificateRenewal.notAfter(cert)
     }
     static func fingerprint(_ cert: SecCertificate) -> String? {
         guard let key = SecCertificateCopyKey(cert),

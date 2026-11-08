@@ -66,6 +66,8 @@ ISSUES_PER_LOCK = 3
 LOCKS_PER_DEVICE_HOUR = 20
 LOCKS_PER_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_IP_HOUR", 2000)
 LOCKS_PER_HOUR_ALL = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_HOUR_ALL", 20000)
+LOCKS_PER_SCHOOL_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_SCHOOL_IP_HOUR", 5000)
+LOCKS_IP_SHARE_PERCENT = min(env_cap("FAIRPLAY_NATIVE_EXIT_IP_SHARE_PERCENT", 50), 100)
 ISSUES_PER_STUDENT_HOUR = 20
 ISSUES_PER_EXAM_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_ISSUES_PER_EXAM_HOUR", 300)
 MAX_BODY = 4096
@@ -143,7 +145,49 @@ def _v2_reply(stored: str) -> JSONResponse:
                          "verifier_signature": sig}, status_code=201, headers=NO_STORE)
 
 
-async def _register_server_secret(body: "LockIn", session: AsyncSession) -> JSONResponse:
+_inflight: dict[tuple[str, str], asyncio.Task] = {}
+_gate: dict = {}
+_waiting = 0
+WAITING_PER_CORE = 3
+
+
+def _cores() -> int:
+    return os.cpu_count() or 1
+
+
+def _semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    if _gate.get("loop") is not loop or _gate.get("cores") != _cores():
+        _gate.update(loop=loop, cores=_cores(), sem=asyncio.Semaphore(_cores()))
+    return _gate["sem"]
+
+
+def _build_verifier(lock_id: str, device: str, priv: bytes, signer: Ed25519PrivateKey) -> tuple[bytes, str]:
+    secret = os.urandom(32)
+    public = X25519PrivateKey.from_private_bytes(priv).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    blob = base64.b64decode(seal(secret, lock_id, public))
+    salt, hash_ = _make_verifier(derive_code(secret, lock_id), lock_id)
+    created = int(time.time())
+    sig = base64.b64encode(signer.sign(verifier_message_v2(lock_id, device, created, salt, V2_ITERATIONS, hash_))).decode("ascii")
+    return blob, "|".join(["v2", str(created), salt, str(V2_ITERATIONS), hash_, sig])
+
+
+async def _compute(lock_id: str, device: str, priv: bytes, signer: Ed25519PrivateKey, admit) -> tuple[bytes, str]:
+    global _waiting
+    await admit()
+    _waiting += 1
+    try:
+        sem = _semaphore()
+        await sem.acquire()
+    finally:
+        _waiting -= 1
+    try:
+        return await asyncio.to_thread(_build_verifier, lock_id, device, priv, signer)
+    finally:
+        sem.release()
+
+
+async def _register_server_secret(body: "LockIn", request: Request, session: AsyncSession) -> JSONResponse:
     if body.blob is not None or any(v is not None for v in (body.verifier_salt, body.verifier_iterations, body.verifier_hash)):
         raise HTTPException(422, "Bad request", headers=NO_STORE)
     priv, signer = _private_key(), _signing_key()
@@ -159,13 +203,21 @@ async def _register_server_secret(body: "LockIn", session: AsyncSession) -> JSON
     found = await existing()
     if found is not None:
         return found
-    secret = os.urandom(32)
-    public = X25519PrivateKey.from_private_bytes(priv).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    blob = base64.b64decode(seal(secret, body.lock_id, public))
-    salt, hash_ = await asyncio.to_thread(_make_verifier, derive_code(secret, body.lock_id), body.lock_id)
-    created = int(time.time())
-    sig = base64.b64encode(signer.sign(verifier_message_v2(body.lock_id, body.device, created, salt, V2_ITERATIONS, hash_))).decode("ascii")
-    stored = "|".join(["v2", str(created), salt, str(V2_ITERATIONS), hash_, sig])
+    key = (body.lock_id, body.device)
+    task = _inflight.get(key)
+    if task is None:
+        if _waiting >= WAITING_PER_CORE * _cores():
+            raise HTTPException(503, "Busy. Try again shortly.", headers={**NO_STORE, "Retry-After": "2"})
+        task = asyncio.ensure_future(_compute(body.lock_id, body.device, priv, signer,
+                                              lambda: _limit_registrations(request, body)))
+        _inflight[key] = task
+
+        def done(t: asyncio.Task) -> None:
+            _inflight.pop(key, None)
+            if not t.cancelled():
+                t.exception()
+        task.add_done_callback(done)
+    blob, stored = await asyncio.shield(task)
     session.add(NativeExitLock(lock_id=body.lock_id, device=body.device, blob=blob, created_at=utcnow(), verifier=stored))
     try:
         await session.commit()
@@ -185,13 +237,15 @@ def lock_message(lock_id: str, device: str) -> str:
 async def _limit_registrations(request: Request, body: "LockIn") -> None:
     store = get_store()
     ip = client_ip(request)
+    school = request.app.state.settings.in_school_net(ip)
+    ip_cap = min(LOCKS_PER_SCHOOL_IP_HOUR if school else LOCKS_PER_IP_HOUR,
+                 max(1, LOCKS_PER_HOUR_ALL * LOCKS_IP_SHARE_PERCENT // 100))
+    if await store.incr(f"nexit:dev:{body.device}", HOUR_S) > LOCKS_PER_DEVICE_HOUR \
+            or await store.incr(f"nexit:ip:{ip}", HOUR_S) > ip_cap:
+        raise HTTPException(429, "Too many locks from this computer. Try again later.",
+                            headers={**NO_STORE, "Retry-After": "3600"})
     if await store.incr("nexit:all", HOUR_S) > LOCKS_PER_HOUR_ALL:
         raise HTTPException(429, "Too many locks right now. Try again later.",
-                            headers={**NO_STORE, "Retry-After": "3600"})
-    if await store.incr(f"nexit:dev:{body.device}", HOUR_S) > LOCKS_PER_DEVICE_HOUR \
-            or (not request.app.state.settings.in_school_net(ip)
-                and await store.incr(f"nexit:ip:{ip}", HOUR_S) > LOCKS_PER_IP_HOUR):
-        raise HTTPException(429, "Too many locks from this computer. Try again later.",
                             headers={**NO_STORE, "Retry-After": "3600"})
 
 
@@ -206,8 +260,7 @@ async def register_lock(body: LockIn, request: Request, session: AsyncSession = 
     if not LOCK_ID_RE.match(body.lock_id) or not DEVICE_RE.match(body.device):
         raise HTTPException(422, "Bad lock_id or device", headers=NO_STORE)
     if body.server_secret:
-        await _limit_registrations(request, body)
-        return await _register_server_secret(body, session)
+        return await _register_server_secret(body, request, session)
     if body.blob is None:
         raise HTTPException(422, "Bad blob", headers=NO_STORE)
     try:
@@ -225,7 +278,9 @@ async def register_lock(body: LockIn, request: Request, session: AsyncSession = 
     if any(v is not None for v in (body.verifier_salt, body.verifier_iterations, body.verifier_hash)):
         raise HTTPException(422, "Bad request", headers=NO_STORE)
     stored = None
-    await _limit_registrations(request, body)
+    prior = (await session.execute(select(NativeExitLock.device).where(NativeExitLock.lock_id == body.lock_id))).scalar_one_or_none()
+    if prior != body.device:
+        await _limit_registrations(request, body)
     session.add(NativeExitLock(lock_id=body.lock_id, device=body.device, blob=raw, created_at=utcnow(), verifier=stored))
     try:
         await session.commit()

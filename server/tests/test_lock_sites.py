@@ -111,3 +111,16 @@ def test_box_exceptions_still_pass():
 def test_new_denied_hosts_never_reach_lock_sites():
     out = build_lock_sites(["www.google.com", "translate.google.com", "reddit.com", "deepl.com", "docs.python.org"])
     assert out["pages"] == ["https://docs.python.org/"]
+
+
+def test_resources_never_take_the_last_page_slot():
+    from app.integrations.dkuoj import lock_sites as ls
+    lines = [f"site{i}.example.org" for i in range(5)]
+    out = build_lock_sites(lines, None, BOX)
+    assert out["pages"] and len(out["resources"]) <= 31
+    assert len(out["pages"]) + len(out["resources"]) <= 32
+
+
+def test_a_link_with_a_quote_is_refused_like_the_oj_does():
+    out = build_lock_sites(["Docs https://docs.python.org/it's", "w3.org"])
+    assert out["pages"] == ["https://w3.org/"]

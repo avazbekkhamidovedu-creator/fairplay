@@ -284,3 +284,78 @@ import WebKit
         #expect(g.decide(at: last) == .release)
     }
 }
+
+@Suite struct EditShortcutAndAssetTests {
+    private let forbidden = URL(string: "https://fairplay.example.edu")!
+    private func chord(_ key: Int, _ flags: CGEventFlags, edit: Bool, reload: Bool = false) -> Bool {
+        EventTap.commandChordAllowed(key: key, flags: flags, reloadAllowed: reload, editAllowed: edit)
+    }
+
+    @Test func editChordsPassOnlyWhenThePageHasTheFocus() {
+        let cmd: CGEventFlags = .maskCommand, cmdShift: CGEventFlags = [.maskCommand, .maskShift]
+        #expect(chord(6, cmd, edit: true) && chord(6, cmdShift, edit: true))      // Z, Shift-Z
+        #expect(chord(0, cmd, edit: true) && chord(3, cmd, edit: true))           // A, F
+        #expect(!chord(6, cmd, edit: false) && !chord(0, cmd, edit: false) && !chord(3, cmd, edit: false))
+        #expect(!chord(0, cmdShift, edit: true) && !chord(3, cmdShift, edit: true))
+        #expect(!chord(6, [.maskCommand, .maskAlternate], edit: true) && !chord(6, [.maskCommand, .maskControl], edit: true))
+    }
+
+    @Test func everyOtherCommandChordStaysBlocked() {
+        // C, V, X, Q, W, H, M, Tab, Space, comma, grave, T, N, P, S
+        for key in [8, 9, 7, 12, 13, 4, 46, 48, 49, 43, 50, 17, 45, 35, 1] {
+            #expect(!chord(key, .maskCommand, edit: true), "key \(key)")
+            #expect(!chord(key, [.maskCommand, .maskShift], edit: true), "key \(key)")
+        }
+        #expect(chord(15, .maskCommand, edit: false, reload: true))   // Reload still follows its own flag
+        #expect(!chord(15, .maskCommand, edit: true, reload: false))
+    }
+
+    private func policy(_ assets: [String], sites: [String] = []) -> ProtectedBrowserPolicy {
+        ProtectedBrowserPolicy(start: "https://oj.example.edu", additionalOrigins: "", forbiddenOrigin: forbidden,
+                               referenceSites: sites, assetOrigins: assets)!
+    }
+    private func url(_ s: String) -> URL { URL(string: s)! }
+
+    @Test func aClosedBookContextAllowsTheCDNsForSubresourcesButNeverAsAPage() {
+        let p = policy(["https://cdn.example.org", "https://fonts.example.net:8443"])
+        #expect(p.allows(url("https://cdn.example.org/a.js"), mainFrame: false))
+        #expect(p.allows(url("https://fonts.example.net:8443/f.woff"), mainFrame: false))
+        #expect(!p.allows(url("https://cdn.example.org/"), mainFrame: true))
+        #expect(!p.allowsMainTab(url("https://cdn.example.org/")) && !p.opensInOwnTab(url("https://cdn.example.org/")))
+        #expect(p.contentRules.contains("cdn\\\\.example\\\\.org"))
+    }
+
+    @Test func malformedOrDeniedAssetOriginsAreDropped() {
+        let p = policy(["https://chatgpt.com", "https://www.google.com", "http://cdn.a.org", "https://*.a.org", "https://a.org/path",
+                        "https://user@a.org", "https://CDN.a.org", "https://ok.example.org"])
+        for bad in ["https://chatgpt.com/x.js", "https://www.google.com/x.js", "http://cdn.a.org/x.js", "https://a.org/x.js", "https://cdn.a.org/x.js"] {
+            #expect(!p.allows(url(bad), mainFrame: false), "\(bad)")
+        }
+        #expect(p.allows(url("https://ok.example.org/x.js"), mainFrame: false))
+    }
+
+    @Test func noAssetsChangesNothingAndOnlySixteenAreUsed() {
+        let none = policy([])
+        #expect(!none.allows(url("https://cdn.example.org/a.js"), mainFrame: false))
+        let many = policy((0..<20).map { "https://c\($0).example.org" })
+        #expect(many.allows(url("https://c15.example.org/a.js"), mainFrame: false))
+        #expect(!many.allows(url("https://c16.example.org/a.js"), mainFrame: false))
+    }
+
+    @Test func theSignedStateCarriesAtMostSixteenAssets() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let device = String(repeating: "a", count: 64)
+        func verify(_ extra: [String: Any]) throws -> NativeDeviceContext? {
+            var payload: [String: Any] = ["v": 2, "nonce": "n", "expires": 1030, "session": UUID().uuidString, "device": device,
+                "user": "7", "contest": "exam", "participation": "1", "state": "active", "lease_until": 0]
+            payload.merge(extra) { $1 }
+            let bytes = try JSONSerialization.data(withJSONObject: payload)
+            let env: [String: Any] = ["payload": bytes.base64EncodedString(), "signature": try key.signature(for: bytes).base64EncodedString()]
+            return NativeDeviceContext.verify(env, publicKey: key.publicKey.rawRepresentation, nonce: "n", device: device, now: Date(timeIntervalSince1970: 1000))
+        }
+        #expect(try verify([:])?.assets == nil)
+        #expect(try verify(["assets": ["https://cdn.example.org"]])?.assets == ["https://cdn.example.org"])
+        #expect(try verify(["assets": (0..<16).map { "https://c\($0).org" }])?.assets?.count == 16)
+        #expect(try verify(["assets": (0..<17).map { "https://c\($0).org" }]) == nil)
+    }
+}

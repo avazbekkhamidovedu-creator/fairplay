@@ -20,6 +20,10 @@ final class ExternalExamController {
         let host: String
         let pathPrefix: String
 
+        private init(wildcard: Bool, host: String, pathPrefix: String) {
+            self.wildcard = wildcard; self.host = host; self.pathPrefix = pathPrefix
+        }
+
         init?(_ raw: String) {
             var s = raw.trimmingCharacters(in: .whitespaces)
             if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }
@@ -38,6 +42,24 @@ final class ExternalExamController {
             wildcard = wild
             self.host = host
             pathPrefix = path == "/" ? "" : path
+        }
+
+        /// "%2b" and "%2B" are the same escape; Windows' Uri writes the upper-case form.
+        static func normalizedEscapes(_ path: String) -> String {
+            var out = "", chars = Array(path), i = 0
+            while i < chars.count {
+                if chars[i] == "%", i + 2 < chars.count,
+                   chars[i + 1].isHexDigit, chars[i + 2].isHexDigit {
+                    out += "%" + String(chars[i + 1]).uppercased() + String(chars[i + 2]).uppercased(); i += 3
+                } else { out.append(chars[i]); i += 1 }
+            }
+            return out
+        }
+
+        /// Both sides percent-ENCODED (the entry text is encoded; so must the page path be), as on Windows.
+        func matches(host h: String, encodedPath p: String) -> Bool {
+            let rule = SiteRule(wildcard: wildcard, host: host, pathPrefix: Self.normalizedEscapes(pathPrefix))
+            return rule.matches(host: h, path: Self.normalizedEscapes(p))
         }
 
         func matches(host h: String, path p: String) -> Bool {

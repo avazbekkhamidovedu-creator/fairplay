@@ -15,6 +15,8 @@ struct NativeDeviceContext: Decodable, Equatable {
     let lease_until: Int
     var sites: [String]? = nil
     var resources: [String]? = nil
+    /// Origins the OJ's own pages load subresources from (script, font and style CDNs).
+    var assets: [String]? = nil
     /// This student's own deadline (unix seconds, extra time included); absent on an older OJ.
     var deadline: Int? = nil
     var hold: Bool? = nil
@@ -59,6 +61,7 @@ struct NativeDeviceContext: Decodable, Equatable {
               (value.sites ?? []).count <= 32, (value.sites ?? []).allSatisfy({ $0.utf8.count <= 2048 }),
               (value.resources ?? []).count <= 64, (value.resources ?? []).allSatisfy({ $0.utf8.count <= 2048 }),
               ["active", "finishing", "completed", "released", "rejected"].contains(value.state),
+              (value.assets ?? []).count <= 16, (value.assets ?? []).allSatisfy({ $0.utf8.count <= 300 }),
               (value.deadline ?? 0) >= 0, (value.deadline ?? 0) <= value.expires + 3_153_600_000,
               value.lease_until >= 0, value.lease_until <= value.expires else { return nil }
         return value

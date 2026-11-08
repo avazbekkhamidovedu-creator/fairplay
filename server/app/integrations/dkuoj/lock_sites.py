@@ -90,7 +90,7 @@ def build_lock_sites(websites, links=None, box_link=None) -> dict:
         for h in _box_hosts():
             add_resource(h)
     page_origins = {"https://" + (urlsplit(p).hostname or "") for p in pages}
-    resources = [r for r in resources if r not in page_origins][:MAX_LOCK_PAGES_AND_RESOURCES]
+    resources = [r for r in resources if r not in page_origins][:MAX_LOCK_PAGES_AND_RESOURCES - 1]
     pages = pages[:MAX_LOCK_PAGES_AND_RESOURCES - len(resources)]
     if not pages:
         return {"pages": [], "resources": []}

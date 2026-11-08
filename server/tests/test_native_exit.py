@@ -88,7 +88,7 @@ def test_same_lock_other_blob_or_device_is_409(synced, server_key):
     assert issue(synced).json()["code"] == vec.derive_code(K, "K7QM3XPA")
 
 
-def test_repeat_adds_no_row_and_counts_against_limits(synced, server_key):
+def test_repeat_adds_no_row_and_does_not_count_against_limits(synced, server_key):
     blob = blob_for(server_key, "K7QM3XPA")
     for _ in range(3):
         assert reg(synced, server_key, blob=blob).status_code == 201
@@ -96,7 +96,7 @@ def test_repeat_adds_no_row_and_counts_against_limits(synced, server_key):
     async def count(s):
         return (await s.execute(select(ne.func.count()).select_from(ne.NativeExitLock))).scalar_one()
     assert db(synced, count) == 1
-    assert synced.portal.call(get_store().incr, f"nexit:dev:{DEVICE}", 3600) == 4
+    assert synced.portal.call(get_store().incr, f"nexit:dev:{DEVICE}", 3600) == 2
 
 
 def test_app_route_auth_and_validation(synced, server_key):
@@ -137,6 +137,7 @@ def test_expired_rows_are_ignored_but_kept(synced, server_key):
 
 def test_global_hourly_cap_on_registrations(synced, server_key, monkeypatch):
     monkeypatch.setattr(ne, "LOCKS_PER_HOUR_ALL", 2)
+    monkeypatch.setattr(ne, "LOCKS_IP_SHARE_PERCENT", 100)
     assert reg(synced, server_key, lock_id="K7QM3XPA", device="dev-aaaaaaaa1").status_code == 201
     assert reg(synced, server_key, lock_id="K7QM3XPB", device="dev-aaaaaaaa2").status_code == 201
     assert reg(synced, server_key, lock_id="K7QM3XPC", device="dev-aaaaaaaa3").status_code == 429
@@ -341,11 +342,14 @@ def test_exam_cap_allows_all_then_refuses_next(synced, server_key, monkeypatch):
     assert got == [200] * 6 + [429]
 
 
-def test_school_net_skips_ip_cap_but_not_device_cap(synced, server_key, monkeypatch):
+def test_school_net_has_a_higher_ip_cap_and_the_device_cap_still_applies(synced, server_key, monkeypatch):
     synced.app.state.settings.login_school_nets = ["10.1.0.0/16"]
     monkeypatch.setattr(ne, "client_ip", lambda request: "10.1.2.3")
     asyncio.run(get_store().incrby("nexit:ip:10.1.2.3", ne.LOCKS_PER_IP_HOUR + 5, ne.HOUR_S))
     assert reg(synced, server_key, lock_id=lid("E", 0), device="dev-school-0001").status_code == 201
+    asyncio.run(get_store().incrby("nexit:ip:10.1.2.3", ne.LOCKS_PER_SCHOOL_IP_HOUR, ne.HOUR_S))
+    assert reg(synced, server_key, lock_id=lid("E", 5), device="dev-school-0005").status_code == 429
+    asyncio.run(get_store().incrby("nexit:ip:10.1.2.3", -ne.LOCKS_PER_SCHOOL_IP_HOUR, ne.HOUR_S))
     ids = [lid("F", i) for i in range(21)]
     assert [reg(synced, server_key, lock_id=i).status_code for i in ids] == [201] * 20 + [429]
 
@@ -473,3 +477,80 @@ def test_server_secret_keeps_the_caps_and_the_app_proof(synced, server_key, sign
     monkeypatch.setattr(ne, "LOCKS_PER_HOUR_ALL", 1)
     assert reg_s(synced).status_code == 201
     assert reg_s(synced, lock_id="K7QM3XPB").status_code == 429
+
+
+@pytest.fixture
+def counted_pbkdf2(monkeypatch):
+    import time
+    real = ne.hashlib.pbkdf2_hmac
+    calls = []
+
+    def slow(*a, **kw):
+        calls.append(a)
+        time.sleep(0.3)
+        return real(*a, **kw)
+    monkeypatch.setattr(ne.hashlib, "pbkdf2_hmac", slow)
+    return calls
+
+
+def test_concurrent_registrations_of_one_lock_hash_once(synced, server_key, signing, counted_pbkdf2):
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(4) as pool:
+        rs = list(pool.map(lambda _: reg_s(synced), range(4)))
+    assert [r.status_code for r in rs] == [201] * 4
+    assert len({r.text for r in rs}) == 1
+    assert len(counted_pbkdf2) == 1
+    assert synced.portal.call(get_store().incr, f"nexit:dev:{DEVICE}", 3600) == 2
+
+
+def test_replay_of_a_stored_lock_does_not_hash_again(synced, server_key, signing, counted_pbkdf2):
+    first = reg_s(synced).json()
+    assert len(counted_pbkdf2) == 1
+    assert reg_s(synced).json() == first
+    assert len(counted_pbkdf2) == 1
+
+
+def test_restarting_the_app_does_not_burn_the_device_cap(synced, server_key, signing):
+    for _ in range(25):
+        assert reg_s(synced).status_code == 201
+    assert reg_s(synced, lock_id="K7QM3XPB").status_code == 201
+
+
+def test_gate_answers_503_with_retry_after_when_the_queue_is_full(synced, server_key, signing, monkeypatch, counted_pbkdf2):
+    monkeypatch.setattr(ne, "_waiting", ne.WAITING_PER_CORE * ne._cores())
+    r = reg_s(synced)
+    assert r.status_code == 503 and r.headers["retry-after"] == "2" and r.headers["cache-control"] == "no-store"
+    assert counted_pbkdf2 == []
+    assert synced.portal.call(get_store().incr, f"nexit:dev:{DEVICE}", 3600) == 1
+    monkeypatch.setattr(ne, "_waiting", 0)
+    assert reg_s(synced).status_code == 201
+
+
+def test_school_net_exempts_server_secret_registrations_from_the_ip_cap(synced, server_key, signing, monkeypatch):
+    synced.app.state.settings.login_school_nets = ["10.1.0.0/16"]
+    monkeypatch.setattr(ne, "client_ip", lambda request: "10.1.2.3")
+    asyncio.run(get_store().incrby("nexit:ip:10.1.2.3", ne.LOCKS_PER_IP_HOUR + 5, ne.HOUR_S))
+    assert reg_s(synced, lock_id=lid("G", 0), device="dev-school-0003").status_code == 201
+    asyncio.run(get_store().incrby("nexit:ip:10.1.2.3", ne.LOCKS_PER_SCHOOL_IP_HOUR, ne.HOUR_S))
+    assert reg_s(synced, lock_id=lid("G", 1), device="dev-school-0004").status_code == 429
+
+
+def test_one_ip_cannot_use_more_than_its_share_of_the_global_cap(synced, server_key, signing, monkeypatch):
+    synced.app.state.settings.login_school_nets = ["10.1.0.0/16"]
+    monkeypatch.setattr(ne, "client_ip", lambda request: "10.1.2.3")
+    monkeypatch.setattr(ne, "LOCKS_PER_HOUR_ALL", 4)
+    monkeypatch.setattr(ne, "LOCKS_IP_SHARE_PERCENT", 50)
+    codes = [reg_s(synced, lock_id=lid("H", i), device=f"dev-share-{i:04d}").status_code for i in range(3)]
+    assert codes == [201, 201, 429]
+    monkeypatch.setattr(ne, "client_ip", lambda request: "10.9.9.9")
+    assert reg_s(synced, lock_id=lid("H", 9), device="dev-share-0009").status_code == 201
+
+
+def test_two_concurrent_first_requests_count_and_hash_once(synced, server_key, signing, counted_pbkdf2):
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(2) as pool:
+        rs = list(pool.map(lambda _: reg_s(synced, lock_id=lid("J", 0), device="dev-race-0001"), range(2)))
+    assert [r.status_code for r in rs] == [201, 201]
+    assert len(counted_pbkdf2) == 1
+    assert synced.portal.call(get_store().incr, "nexit:ip:testclient", 3600) == 2
+    assert synced.portal.call(get_store().incr, "nexit:all", 3600) == 2

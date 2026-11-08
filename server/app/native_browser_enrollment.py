@@ -35,7 +35,7 @@ def proof_message(nonce, digest):
     return 'native-browser-enroll-v1|' + nonce + '|' + digest
 
 
-def issue_certificate(csr_der, ca_pem, key_pem, now=None):
+def issue_certificate(csr_der, ca_pem, key_pem, now=None, days=30):
     now = now or datetime.now(timezone.utc)
     csr = x509.load_der_x509_csr(csr_der)
     public = csr.public_key()
@@ -52,7 +52,7 @@ def issue_certificate(csr_der, ca_pem, key_pem, now=None):
     cert = (x509.CertificateBuilder().subject_name(x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, 'FairPlay native device')]))
         .issuer_name(ca.subject).public_key(public).serial_number(x509.random_serial_number())
-        .not_valid_before(now-timedelta(minutes=1)).not_valid_after(min(now+timedelta(days=7), ca.not_valid_after_utc))
+        .not_valid_before(now-timedelta(minutes=1)).not_valid_after(min(now+timedelta(days=days), ca.not_valid_after_utc))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True)
         .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
@@ -75,9 +75,12 @@ def response(payload):
 
 @router.post('/challenge')
 async def challenge(body: ChallengeIn, request: Request, store=Depends(get_store)):
-    configured(request)
+    settings = configured(request)
     peer = request.client.host if request.client else 'unknown'
-    if await store.incr('native-enroll-rate:' + peer, 60) > 300:
+    in_school = getattr(settings, 'in_school_net', lambda ip: False)(peer)
+    limit = getattr(settings, 'native_browser_enroll_school_ip_limit', 3000) if in_school \
+        else getattr(settings, 'native_browser_enroll_ip_limit', 300)
+    if await store.incr('native-enroll-rate:' + peer, 60) > limit:
         raise HTTPException(429, 'Try again later')
     nonce = secrets.token_hex(32)
     if not await store.setnx('native-enroll:' + nonce, body.csr_sha256, 90):
@@ -103,7 +106,8 @@ async def certificate(body: CertificateIn, request: Request, store=Depends(get_s
         ca_path, key_path = Path(settings.native_browser_ca), Path(settings.native_browser_ca_key)
         if key_path.stat().st_mode & 0o077:
             raise ValueError('CA key permissions must exclude group and other users')
-        issued = issue_certificate(der, ca_path.read_bytes(), key_path.read_bytes())
+        issued = issue_certificate(der, ca_path.read_bytes(), key_path.read_bytes(),
+                                  days=getattr(settings, 'native_browser_cert_days', 30))
     except (OSError, ValueError, x509.ExtensionNotFound):
         raise HTTPException(503, 'Device enrollment is unavailable') from None
     return response({'certificate': base64.b64encode(issued).decode()})

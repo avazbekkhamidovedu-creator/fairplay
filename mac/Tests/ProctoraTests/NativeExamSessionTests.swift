@@ -41,7 +41,7 @@ import Testing
         var session = NativeExamSession()
         let claimed = session.beginClaim("exam")
         #expect(claimed)
-        for state in ["finishing", "completed", "released", "rejected"] {
+        for state in ["completed", "released", "rejected"] {
             let accepted = session.accept(context(state))
             #expect(!accepted, "\(state)")
         }

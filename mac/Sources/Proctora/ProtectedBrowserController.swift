@@ -40,6 +40,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var activeExamBinding: String?
     private var approvedSites: [String] = []
     private var approvedResources: [String] = []
+    private var approvedAssets: [String] = []
+    private var refusedContest: String?
     private var failsafe = DeadlineFailsafe()
     private var hostAnsweredAt: Date?
     private var failsafeCancel: (() -> Void)?
@@ -656,7 +658,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             if NetworkWatch.shouldReload(afterChangeTo: satisfied, phase: self.navigationState?.phase) { self.retryFailedLoad(force: true) }
         }
         networkWatch = watch
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.captureDraft() }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.captureDraft(); self?.refreshEditShortcuts() }
         RunLoop.main.add(timer, forMode: .common)
         draftTimer = timer
         if Config.universityPolicyPublicKey != nil, policy.startURL.host == UniversityDestination.dkuOJ.url.host {
@@ -697,7 +699,17 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         rebuildTabs()
         backButton?.isEnabled = browser?.canGoBack == true && lockIsOwned
         EventTap.reloadShortcutAllowed = isOpen && lockIsOwned && !LockdownController.shared.vpnYieldOpen
+        refreshEditShortcuts()
         reloadButton?.isEnabled = browser != nil && reloadTarget != nil && lockIsOwned
+    }
+
+    /// Undo, Redo, Select All and Find pass only while this app is active and the page has the keyboard focus.
+    private func refreshEditShortcuts() {
+        var responder: NSResponder? = overlay?.window?.firstResponder
+        var inPage = false
+        while let r = responder { if r is WKWebView { inPage = true; break }; responder = r.nextResponder }
+        EventTap.editShortcutsAllowed = isOpen && lockIsOwned && NSApp.isActive && inPage
+            && overlay?.window?.attachedSheet == nil
     }
 
     private func dropExpiredSites() {
@@ -750,10 +762,45 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
     }
 
+    private var certRenewalInFlight = false
+    private var certRenewalFailures = 0
+    private var certRenewalNotBefore: Date?
+
+    /// Every renew tick: a device certificate with under 6 hours left is issued again in the background
+    /// (same key), with backoff on failure, so a long exam never loses the device. The lock is never touched.
+    private func renewDeviceCertificateIfNeeded() {
+        let now = effects.now()
+        let remaining = nativeIdentity.certificateExpiry.map { $0.timeIntervalSince(now) }
+        guard CertificateRenewal.shouldTryNow(remaining: remaining, inFlight: certRenewalInFlight, now: now, notBefore: certRenewalNotBefore) else { return }
+        certRenewalInFlight = true
+        let identity = nativeIdentity
+        Task { [weak self] in
+            do {
+                try await identity.renewIfNeeded(threshold: CertificateRenewal.duringExam, now: now)
+                await MainActor.run { self?.certRenewalInFlight = false; self?.certRenewalFailures = 0; self?.certRenewalNotBefore = nil
+                                       self?.diagnostic("device-certificate-renewed", url: nil) }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.certRenewalInFlight = false
+                    self.certRenewalFailures += 1
+                    self.certRenewalNotBefore = self.effects.now().addingTimeInterval(CertificateRenewal.backoff(afterFailures: self.certRenewalFailures))
+                    self.diagnostic("device-certificate-renewal-failed", url: nil)
+                }
+            }
+        }
+    }
+
     private func refreshExamContext() {
+        renewDeviceCertificateIfNeeded()
         dropExpiredSites()
         if recoverUncleanPending, let contest = nativeExam.contest {
             if !requestNative("recover/" + contest) { scheduleNext(.other) }
+            return
+        }
+        if nativeExam.contest == nil, let contest = refusedContest, nativeExam.beginClaim(contest) {
+            persistNativeProgress()
+            if !requestNative("claim/" + contest, joining: true) { scheduleNext(.refused(after: 30)) }
             return
         }
         if nativeExam.requiresTerminalReceipt {
@@ -807,11 +854,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         updateNavigation()
     }
 
-    private func installReferenceSites(_ sites: [String], resources: [String] = []) {
+    private func installReferenceSites(_ sites: [String], resources: [String] = [], assets: [String]? = nil) {
+        let cdns = assets ?? approvedAssets
         guard let current = policy,
               var updated = ProtectedBrowserPolicy(start: current.startURL.absoluteString,
                   additionalOrigins: selection.additionalOrigins, forbiddenOrigin: Config.serverURL,
-                  allowHTTP: current.startURL.scheme == "http", referenceSites: sites, resourceOrigins: resources),
+                  allowHTTP: current.startURL.scheme == "http", referenceSites: sites, resourceOrigins: resources, assetOrigins: cdns),
               let page = orderedTabs.first else { return }
         updated.sitesExpire = sites.isEmpty ? nil : policyExpires
         updated.clock = { [weak self] in self?.effects.now() ?? Date() }
@@ -831,6 +879,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 self.policy = updated
                 self.approvedSites = sites
                 self.approvedResources = resources
+                self.approvedAssets = cdns
                 self.pickerSites = updated.acceptedSites
                 self.sitePicker?.removeAllItems()
                 self.sitePicker?.addItem(withTitle: "Allowed websites")
@@ -1264,10 +1313,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                           self.nativeExam.accept(context) else {
                         if sendsLock, Self.isLockConflict(status: status, data: data) {
                             self.notice?.stringValue = Self.lockConflictText
+                            self.scheduleNext(.refused(after: 30))
                             return
                         }
                         if sendsLock, error == nil, let shown = Self.ojRefusal(status: status, data: data) {
                             self.notice?.stringValue = shown.text
+                            self.claimRefused()
                             self.scheduleNext(.refused(after: shown.retryAfter))
                             return
                         }
@@ -1294,6 +1345,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                                                                 recoverAfterConflict: path.hasPrefix("recover/") && self.claimWasConflict) {
                             self.notice?.stringValue = shown
                         }
+                        if sendsLock && httpAnswer { self.claimRefused() }
                         self.scheduleNext(sendsLock && httpAnswer ? .refused(after: 30) : refusal)
                         return
                     }
@@ -1313,6 +1365,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                         self.close(release: true); return
                     }
                     let entered = path.hasPrefix("claim/") || path.hasPrefix("recover/")
+                    self.refusedContest = nil
                     self.noteDeadline(context)
                     if self.nativeExam.onHold { self.applyHold(true); self.scheduleNext(.success); return }
                     self.applyHold(false)
@@ -1321,7 +1374,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     self.policy?.sitesExpire = self.policyExpires
                     let sites = context.state == "active" ? (context.sites ?? []) : []
                     let assets = context.state == "active" ? (context.resources ?? []) : []
-                    if sites != self.approvedSites || assets != self.approvedResources { self.installReferenceSites(sites, resources: assets) }
+                    let cdns = context.assets ?? []
+                    if sites != self.approvedSites || assets != self.approvedResources || cdns != self.approvedAssets {
+                        self.installReferenceSites(sites, resources: assets, assets: cdns)
+                    }
                     if joining, context.state == "active", let page {
                         let script = "const f=document.createElement('form'); f.method='POST'; f.action='/contest/'+exam+'/join'; const c=document.createElement('input'); c.type='hidden'; c.name='csrfmiddlewaretoken'; c.value=csrf; f.appendChild(c); document.body.appendChild(f); f.submit();"
                         page.callAsyncJavaScript(script, arguments: ["exam": context.contest, "csrf": matching.first(where: { $0.name == "csrftoken" })?.value ?? ""], in: nil, in: .defaultClient) { _ in }
@@ -1369,6 +1425,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private func cancelHandIn() {
         handInCancels.forEach { $0() }
         handInCancels.removeAll()
+    }
+
+    /// A refused start (instructor, not FairPlay, not on the roster ...) with no claim ever accepted: forget the exam
+    /// key so another exam can be started, and keep asking slowly for this one until the student picks a different one.
+    private func claimRefused() {
+        guard nativeExam.binding == nil, let contest = nativeExam.contest else { return }
+        refusedContest = contest
+        nativeExam.rejectedClaim()
+        persistNativeProgress()
     }
 
     private func persistNativeProgress() {
@@ -1435,7 +1500,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func discardBrowser() {
         renewCancel?(); renewCancel = nil
-        contextInFlight = false; approvedSites = []; approvedResources = []; pickerSites = []; sitePicker = nil
+        contextInFlight = false; approvedSites = []; approvedResources = []; approvedAssets = []; pickerSites = []; sitePicker = nil
         policyRevision = UUID(); policyExpires = nil
         draftTimer?.invalidate(); draftTimer = nil
         draftScope = nil; draftFields = nil; pendingDraft = nil
@@ -1467,7 +1532,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         // A release arriving under the Leave sheet or the VPN prompt closes it with the rest of the screen.
         if let window = overlay?.window, let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
         nativeGeneration = UUID(); nativeRequestInFlight = false
-        failsafeCancel?(); failsafeCancel = nil; failsafe.clear()
+        failsafeCancel?(); failsafeCancel = nil; failsafe.clear(); refusedContest = nil
         nativeExam = NativeExamSession()
         activeExamBinding = nil
         retainedWebsiteStore = nil
@@ -1479,6 +1544,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             LockdownController.shared.endVPNYield()
             self.cancelHandIn(); self.renewSchedule.reset(); self.failureLog = RepeatedFailureLog()
             EventTap.reloadShortcutAllowed = false
+            EventTap.editShortcutsAllowed = false
             self.holdLabel = nil
             self.discardBrowser()
             self.overlay?.removeFromSuperview()
@@ -1529,6 +1595,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     notice?.stringValue = "Protected exam admission is not configured on this copy. Contact your instructor."; return
                 }
                 if nativeExam.beginClaim(components[1]) {
+                    refusedContest = nil
                     persistNativeProgress()
                     requestNative("claim/" + components[1], joining: true)
                 }
