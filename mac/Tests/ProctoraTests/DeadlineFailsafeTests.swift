@@ -61,7 +61,7 @@ import Testing
         f.accept(try context(deadline: 1_000_600), at: mono(0))
         f.accept(try context(deadline: 1_000_600, hold: true), at: mono(20))
         #expect(!f.isArmed && !f.isDue(at: mono(1e9)))
-        f.accept(try context(deadline: 1_000_600, state: "finishing"), at: mono(0))
+        f.accept(try context(deadline: 1_000_600, state: "completed"), at: mono(0))
         #expect(!f.isArmed)
     }
 

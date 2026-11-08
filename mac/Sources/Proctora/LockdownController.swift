@@ -38,7 +38,8 @@ final class LockdownController {
     /// The native OJ lock (NativeLock.swift): same OS-level effects, but it ends only through
     /// releaseNativeLock(). True from the moment it is asked for until it is released, so a
     /// relaunch whose keyboard tap could not start still counts as locked.
-    private var native = NativeLockMode()
+    private var native = NativeLockMode() { didSet { EventTap.nativeLockHeld = native.active } }
+    private var tapLessProtection = false
     var nativeLockActive: Bool { native.active }
     private var observers: [NSObjectProtocol] = []
     private var focusTimer: Timer?
@@ -231,13 +232,19 @@ final class LockdownController {
         vpnBudget = VPNWindowBudget(used: NativeLockSetup.live.savedVPNUsed())
         let locked = lock()
         let ok = native.acquired(locked, recovering: recovering)
-        if !locked && ok {
+        // A relaunch without Accessibility: `ok` stays false so the caller keeps retrying the tap, but the
+        // lock is held meanwhile (kiosk options, recovery watchdog). Only a release or the lock itself ends it.
+        if !locked && recovering && native.active {
             NSApp.presentationOptions = Self.kioskOptions
-            Watchdog.lockStarted(preLock: false, native: true)
-            armSafetyUnlock()
+            if !tapLessProtection {
+                tapLessProtection = true
+                Watchdog.lockStarted(preLock: false, native: true)
+                armSafetyUnlock()
+                DebugLog.log("lock", "native lock held without the keyboard tap (relaunch): kiosk options and watchdog on")
+            }
         }
+        if locked { tapLessProtection = false }
         if ok && locked { DebugLog.log("lock", "native lock on") }
-        else if ok { DebugLog.log("lock", "native lock held without the keyboard tap (relaunch): kiosk options and watchdog on") }
         else if !native.active { EventLog.shared.setForwarding(true) }
         return ok
     }
@@ -245,6 +252,7 @@ final class LockdownController {
     func releaseNativeLock() {
         guard native.active else { return }
         DebugLog.log("lock", "native lock released")
+        tapLessProtection = false
         native.beginRelease()
         if isLocked {
             unlock()

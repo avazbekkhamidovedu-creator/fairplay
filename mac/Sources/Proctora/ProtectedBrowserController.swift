@@ -1180,6 +1180,18 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         return text.isEmpty ? nil : text
     }
 
+    static let startNotAcceptedText = "DKU OJ did not accept this start request. Check that you are signed in with your student account and that the exam is open for you, then try again, or ask your instructor."
+
+    /// The notice for a refused or failed native call. The OJ's own text always wins; a bare HTTP refusal of
+    /// claim/recover gets one neutral sentence; renew with no text leaves the notice alone; a failure to
+    /// reach the OJ keeps the old wording.
+    static func nativeFailureNotice(sendsLock: Bool, httpAnswered: Bool, status: Int?, data: Data?, recoverAfterConflict: Bool) -> String? {
+        if let own = ojErrorText(status: status, data: data) { return own }
+        if httpAnswered { return sendsLock ? startNotAcceptedText : nil }
+        return recoverAfterConflict ? claimConflictText
+            : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
+    }
+
     static func nativeRequest(endpoint: URL, origin: URL, nonce: String, unclean: Bool, lockId: String? = nil, cookies: [HTTPCookie]) -> URLRequest {
         let matching = matchingCookies(cookies, origin: origin, endpoint: endpoint)
         var request = URLRequest(url: endpoint)
@@ -1264,16 +1276,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                             return
                         }
                         // A denial cannot disprove an earlier committed claim with a lost response.
-                        if let shown = Self.ojErrorText(status: status, data: data) {
+                        let httpAnswer = error == nil && (status ?? 0) >= 400
+                        if let shown = Self.nativeFailureNotice(sendsLock: sendsLock, httpAnswered: httpAnswer, status: status, data: data,
+                                                                recoverAfterConflict: path.hasPrefix("recover/") && self.claimWasConflict) {
                             self.notice?.stringValue = shown
-                        } else if error == nil, let status, status >= 400, !(path.hasPrefix("recover/") && self.claimWasConflict) {
-                            // The OJ answered with a page of its own: nothing of ours to add.
-                        } else {
-                            self.notice?.stringValue = path.hasPrefix("recover/") && self.claimWasConflict
-                                ? Self.claimConflictText
-                                : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
                         }
-                        self.scheduleNext(refusal)
+                        self.scheduleNext(sendsLock && httpAnswer ? .refused(after: 30) : refusal)
                         return
                     }
                     if reportsUnclean {

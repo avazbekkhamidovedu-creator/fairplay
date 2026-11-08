@@ -5,7 +5,7 @@ import sys
 
 
 def verify(release, feed, tag):
-    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+    if not re.fullmatch(r"v[0-9]+(\.[0-9]+){2,3}", tag):
         raise ValueError("Invalid release tag")
     if release.get("tag_name") != tag or release.get("draft") is not True:
         raise ValueError("The target must be the matching draft release")

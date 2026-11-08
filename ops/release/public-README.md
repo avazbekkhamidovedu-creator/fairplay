@@ -2,14 +2,14 @@
 
 Secure exam app for universities. This repository hosts the app downloads.
 
-## What's new in 0.8.4
+## What's new in 0.8.5
 
-- DKU OJ pages are shown exactly as DKU OJ sends them. A page such as "No such problem" no longer triggers a "could not be loaded" notice, a retry loop or the VPN prompt. Only a real connection failure does, and the VPN prompt stays away when a VPN is already connected.
-- The Windows toolbar now looks and works like the Mac one, and the version in the corner is easier to read.
-- The "Test my device" screen on the Mac no longer crowds its button on small windows.
-- Open-book exams: an instructor can list allowed websites (and a Duke Box folder). Students open them in separate tabs; the exam itself stays on DKU OJ. AI assistants, chat, translators and code or file sharing sites are always blocked. Nothing changes unless the instructor lists sites.
-- When the exam time is over, FairPlay unlocks the computer by itself, using each student's own deadline, so a student with extra time stays locked until their time ends.
-- Fewer start problems: a leftover session from an earlier exam, or signing in again on the same computer, no longer needs the instructor to step in. Instructors can use **Unlock and reopen** in one step.
+- More reliable recovery: if the app is reopened while the computer is locked and permission is missing, the lock protections still start; a failed browser start on Windows keeps the saved lock; a start request that is accepted but whose reply is lost can be recovered after a restart.
+- Clearer messages when a start request is refused, and DKU OJ pages are always shown exactly as DKU OJ sends them, with no false "could not be loaded" or VPN prompt.
+- Open-book rules (allowed sites, wildcard hosts, paths) now behave the same on Mac, Windows and the server.
+- Unlocking at the end of the exam also works while a hand-in is still being collected, and a reopened student's time can no longer be shortened.
+- The Windows toolbar matches the Mac, and the Mac "Test my device" screen no longer crowds its button.
+- Open-book exams, automatic unlock when the exam time is over, and one-step **Unlock and reopen** from 0.8.3 and 0.8.4 are included.
 
 ## Download FairPlay
 

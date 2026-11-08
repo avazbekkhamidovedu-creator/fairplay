@@ -21,12 +21,19 @@ private enum Source {
 
 @Suite struct EscapePathGuardTests {
     @Test func releaseSwallowsTheInvigilatorShortcutAndDoesNothing() throws {
-        #expect(!EventTap.postsEmergencyExit(isDev: false))
+        #expect(!EventTap.postsEmergencyExit(isDev: false, nativeLock: true))
         #expect(!Config.isDevBuild)
         let tap = try Source.text("Sources/Proctora/EventTap.swift")
-        #expect(tap.contains("EventTap.postsEmergencyExit(isDev: Config.isDevBuild)"))
+        #expect(tap.contains("EventTap.postsEmergencyExit(isDev: Config.isDevBuild, nativeLock: EventTap.nativeLockHeld)"))
         let main = try Source.text("Sources/Proctora/main.swift")
-        #expect(main.contains("guard EventTap.postsEmergencyExit(isDev: Config.isDevBuild) else { return }"))
+        #expect(main.contains("guard EventTap.postsEmergencyExit(isDev: Config.isDevBuild, nativeLock: EventTap.nativeLockHeld) else { return }"))
+    }
+
+    @Test func theShortcutStaysForOrdinaryExamLocksAndOnlyTheNativeLockSwallowsIt() {
+        #expect(EventTap.postsEmergencyExit(isDev: false, nativeLock: false))
+        #expect(EventTap.postsEmergencyExit(isDev: true, nativeLock: false))
+        #expect(EventTap.postsEmergencyExit(isDev: true, nativeLock: true))
+        #expect(!EventTap.postsEmergencyExit(isDev: false, nativeLock: true))
     }
 
     @Test func noTextPointsToTheShortcutOrToRestartingTheMac() throws {

@@ -64,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             wc?.handleServerStatus(status)
         }
         NotificationCenter.default.addObserver(forName: .proctoraEmergencyExit, object: nil, queue: .main) { [weak wc] _ in
-            guard EventTap.postsEmergencyExit(isDev: Config.isDevBuild) else { return }
+            guard EventTap.postsEmergencyExit(isDev: Config.isDevBuild, nativeLock: EventTap.nativeLockHeld) else { return }
             wc?.promptEmergencyExit()
         }
         recoveringExam = Watchdog.cleanUpAtLaunch()

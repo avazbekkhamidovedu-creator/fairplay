@@ -129,13 +129,31 @@ struct ProtectedBrowserPolicy {
 
     /// Registry-controlled suffixes a wildcard may never sit on ("https://*.com").
     private static let publicSuffixes: Set<String> = [
-        "com", "org", "net", "edu", "gov", "mil", "int", "io", "co", "ai", "app", "dev", "cn", "uk", "us", "de", "jp",
-        "co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "edu.cn", "org.cn", "net.cn", "gov.cn", "ac.cn",
-        "com.au", "edu.au", "co.jp", "ac.jp", "co.in", "com.hk", "edu.hk", "com.tw", "edu.tw", "github.io", "cloudfront.net",
-        "amazonaws.com", "herokuapp.com", "azurewebsites.net", "appspot.com", "blogspot.com", "web.app", "firebaseapp.com",
-        "s3.amazonaws.com", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "wordpress.com", "githubusercontent.com",
-        "gitlab.io", "onrender.com", "fly.dev", "replit.dev", "r2.dev", "hf.space", "notion.site", "glitch.me", "repl.co"
+        "ac", "ac.cn", "ac.in", "ac.jp", "ac.kr", "ac.uk", "ai", "amazonaws.com", "app", "appspot.com",
+        "azurestaticapps.net", "azurewebsites.net", "bitbucket.io", "biz", "blogspot.com", "carrd.co",
+        "cloudfront.net", "cn", "co", "co.in", "co.jp", "co.kr", "co.nz", "co.uk", "co.za", "codepen.io",
+        "codesandbox.io", "com", "com.ar", "com.au", "com.br", "com.cn", "com.hk", "com.mx", "com.my", "com.ru",
+        "com.sg", "com.tr", "com.tw", "com.uz", "de", "dev", "docs.google.com", "edu", "edu.au", "edu.cn", "edu.hk",
+        "edu.my", "edu.sg", "edu.tr", "edu.tw", "edu.uz", "eu", "firebaseapp.com", "fly.dev", "github.com",
+        "github.io", "githubusercontent.com", "gitlab.com", "gitlab.io", "glitch.me", "google.com",
+        "googleusercontent.com", "gov", "gov.cn", "gov.hk", "gov.sg", "gov.tw", "gov.uk", "herokuapp.com",
+        "hf.space", "info", "int", "io", "jp", "jsfiddle.net", "me", "me.uk", "mil", "neocities.org", "net",
+        "net.au", "net.cn", "net.hk", "net.tw", "netlify.app", "netlify.com", "ngrok-free.app", "ngrok.io",
+        "notion.site", "now.sh", "online", "onrender.com", "org", "org.au", "org.cn", "org.hk", "org.sg", "org.tr",
+        "org.tw", "org.uk", "page", "pages.dev", "r2.dev", "repl.co", "replit.app", "replit.dev", "ru",
+        "s3.amazonaws.com", "site", "sites.google.com", "stackblitz.io", "surge.sh", "translate.goog",
+        "trycloudflare.com", "uk", "us", "uz", "vercel.app", "web.app", "weebly.com", "wixsite.com", "wordpress.com",
+        "workers.dev", "xyz"
     ]
+
+    /// Second-level labels under a two-letter country code are public suffixes too (com.au, edu.tw).
+    private static let countrySecondLevels: Set<String> = ["com", "net", "org", "edu", "gov", "mil", "ac", "co", "go", "or", "ne", "gob", "nic", "sch", "gv"]
+
+    static func isSharedSuffix(_ suffix: String) -> Bool {
+        if publicSuffixes.contains(suffix) { return true }
+        let labels = suffix.split(separator: ".", omittingEmptySubsequences: false)
+        return labels.count == 2 && labels[1].count == 2 && countrySecondLevels.contains(String(labels[0]))
+    }
 
     /// "https://*.suffix" -> "suffix": one leading wildcard label, a suffix of at least two labels that is
     /// not a public suffix, no port, path, query or fragment, and not covering a denied host.
@@ -144,9 +162,9 @@ struct ProtectedBrowserPolicy {
         guard raw.utf8.count <= 253 + prefix.utf8.count, raw.hasPrefix(prefix) else { return nil }
         let suffix = String(raw.dropFirst(prefix.count))
         guard !suffix.isEmpty, !suffix.contains(where: { "/:?#*@%[]".contains($0) }), !suffix.hasSuffix("."),
-              suffix == suffix.lowercased(), !publicSuffixes.contains(suffix),
+              suffix == suffix.lowercased(), !isSharedSuffix(suffix),
               let url = URL(string: "https://" + suffix), origin(url) == "https://" + suffix,
-              suffix.split(separator: ".").count >= 2, !SiteDenyList.isDenied(host: "probe." + suffix) else { return nil }
+              suffix.split(separator: ".").count >= 2, !SiteDenyList.isDenied(host: "probe." + suffix), !SiteDenyList.exactHostIsUnder(suffix) else { return nil }
         return suffix
     }
 

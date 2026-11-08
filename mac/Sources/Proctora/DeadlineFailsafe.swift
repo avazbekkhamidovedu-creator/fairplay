@@ -25,7 +25,13 @@ struct DeadlineFailsafe: Equatable {
 
     /// Only an active, not-held context with a deadline arms it; every accepted context replaces the last one.
     mutating func accept(_ context: NativeDeviceContext, at mono: NativeExit.Monotonic) {
-        guard context.state == "active", context.hold != true, let deadline = context.deadline else { clear(); return }
+        // "finishing" (answers still being received) stays armed: a student who handed in and then lost the OJ must
+        // still be released. Without a deadline it keeps the last one; anywhere else a missing deadline means off.
+        guard context.state == "active" || context.state == "finishing", context.hold != true else { clear(); return }
+        guard let deadline = context.deadline else {
+            if context.state != "finishing" { clear() }
+            return
+        }
         let next = mono.seconds + Double(deadline - context.expires) + Self.grace
         if boot == mono.boot, let current = fireAt, abs(next - current) <= Self.sameDeadlineTolerance {
             if probing { verifiedWhileProbing = true }

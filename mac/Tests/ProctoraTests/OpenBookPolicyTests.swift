@@ -129,14 +129,14 @@ import WebKit
     }
 
     @Test func aDeniedHostIsBlockedEvenUnderAnAllowedWildcard() {
-        let p = policy(["https://*.google.com", "https://*.box.com", "https://*.claude.ai"])
-        #expect(p.allows(url("https://fonts.google.com/x.css"), mainFrame: false))
-        #expect(!p.allows(url("https://drive.google.com/x"), mainFrame: false))
-        #expect(!p.allows(url("https://gemini.google.com/x"), mainFrame: false))
+        let p = policy(["https://*.microsoft.com", "https://*.box.com", "https://*.claude.ai"])
+        #expect(p.allows(url("https://static.microsoft.com/x.css"), mainFrame: false))
+        #expect(!p.allows(url("https://copilot.microsoft.com/x"), mainFrame: false))
+        #expect(!p.allows(url("https://teams.microsoft.com/x"), mainFrame: false))
         #expect(!p.allows(url("https://a.box.com/x"), mainFrame: false))
         #expect(!p.allows(url("https://x.claude.ai/x"), mainFrame: false))
         let rules = p.contentRules
-        #expect(rules.contains("drive\\\\.google\\\\.com"))
+        #expect(rules.contains("copilot\\\\.microsoft\\\\.com"))
         #expect(!rules.contains("box\\\\.com"))
     }
 
@@ -149,7 +149,7 @@ import WebKit
     @Test func theCapOfSixtyFourStaysAndRulesCompile() {
         #expect(ProtectedBrowserPolicy(start: "https://oj.example.edu", additionalOrigins: "", forbiddenOrigin: forbidden,
                 resourceOrigins: (0..<65).map { "https://*.s\($0).org" }) == nil)
-        let p = policy(["https://*.duosecurity.com", "https://*.google.com"])
+        let p = policy(["https://*.duosecurity.com", "https://*.microsoft.com"])
         #expect((try? JSONSerialization.jsonObject(with: Data(p.contentRules.utf8))) != nil)
     }
 }
@@ -202,5 +202,85 @@ import WebKit
         #expect(!ProtectedBrowserController.clearsClipboard(from: site, to: exam, examTab: exam))
         #expect(!ProtectedBrowserController.clearsClipboard(from: site, to: other, examTab: exam))
         #expect(!ProtectedBrowserController.clearsClipboard(from: nil, to: site, examTab: exam))
+    }
+}
+
+@Suite struct ParityRulesTests {
+    @Test func aWildcardOverAnExactDeniedHostIsRefused() {
+        for pattern in ["https://*.google.com", "https://*.brave.com", "https://*.github.com"] {
+            #expect(ProtectedBrowserPolicy.resourceSuffix(pattern) == nil, "\(pattern)")
+        }
+        #expect(SiteDenyList.exactHostIsUnder("google.com") && SiteDenyList.exactHostIsUnder("brave.com"))
+        #expect(!SiteDenyList.exactHostIsUnder("duosecurity.com"))
+        for host in ["www.google.com", "translate.google.com", "meet.google.com", "search.brave.com", "google.com"] {
+            #expect(SiteDenyList.isDenied(host: host))
+        }
+    }
+
+    @Test func theSharedSuffixListCoversTheServerPatterns() {
+        for suffix in ["com.hk", "edu.tw", "ac.cn", "info", "biz", "ac", "co.kr", "ac.kr", "me.uk", "com.sg", "edu.my",
+                       "org.au", "net.au", "co.za", "co.nz", "com.br", "com.mx", "edu.uz", "com.uz", "r2.dev", "hf.space",
+                       "page", "site", "xyz", "ngrok.io", "translate.goog", "now.sh", "stackblitz.io", "com.xx"] {
+            #expect(ProtectedBrowserPolicy.isSharedSuffix(suffix), "\(suffix)")
+            #expect(ProtectedBrowserPolicy.resourceSuffix("https://*." + suffix) == nil, "\(suffix)")
+        }
+        #expect(!ProtectedBrowserPolicy.isSharedSuffix("duosecurity.com"))
+        #expect(ProtectedBrowserPolicy.resourceSuffix("https://*.duosecurity.com") == "duosecurity.com")
+    }
+
+    @Test func aTrailingSlashEntryMatchesItsPathWithAndWithoutTheSlashAndChildren() {
+        let slash = ExternalExamController.SiteRule("https://x.org/docs/")!
+        #expect(slash.matches(host: "x.org", path: "/docs/") && slash.matches(host: "x.org", path: "/docs"))
+        #expect(slash.matches(host: "x.org", path: "/docs/a/b"))
+        #expect(!slash.matches(host: "x.org", path: "/docsx") && !slash.matches(host: "x.org", path: "/other"))
+        let bare = ExternalExamController.SiteRule("https://x.org/docs")!
+        #expect(bare.matches(host: "x.org", path: "/docs") && bare.matches(host: "x.org", path: "/docs/") && bare.matches(host: "x.org", path: "/docs/a"))
+        #expect(!bare.matches(host: "x.org", path: "/docsx"))
+    }
+
+    @Test func aBareHTTPRefusalOfClaimOrRecoverGetsTheNeutralSentence() {
+        let neutral = ProtectedBrowserController.startNotAcceptedText
+        #expect(!neutral.contains("could not confirm"))
+        func n(_ lock: Bool, _ http: Bool, _ status: Int?, _ json: String?, conflict: Bool = false) -> String? {
+            ProtectedBrowserController.nativeFailureNotice(sendsLock: lock, httpAnswered: http, status: status,
+                                                           data: json.map { Data($0.utf8) }, recoverAfterConflict: conflict)
+        }
+        #expect(n(true, true, 404, nil) == neutral)
+        #expect(n(true, true, 409, "<html>", conflict: true) == neutral)
+        #expect(n(true, true, 404, #"{"error":"Not on the roster."}"#) == "Not on the roster.")
+        #expect(n(false, true, 404, nil) == nil)
+        #expect(n(true, false, nil, nil)?.contains("could not confirm") == true)
+    }
+
+    private func context(_ state: String, deadline: Int?, hold: Bool? = nil) throws -> NativeDeviceContext {
+        var json: [String: Any] = ["v": 2, "nonce": "n", "expires": 1_000_000, "session": UUID().uuidString,
+            "device": String(repeating: "a", count: 64), "user": "7", "contest": "exam", "participation": "1",
+            "state": state, "lease_until": 0]
+        if let deadline { json["deadline"] = deadline }
+        if let hold { json["hold"] = hold }
+        return try JSONDecoder().decode(NativeDeviceContext.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    @Test func theFailsafeStaysArmedWhileFinishing() throws {
+        let m = NativeExit.Monotonic(boot: "b", seconds: 0)
+        var f = DeadlineFailsafe()
+        f.accept(try context("active", deadline: 1_000_600), at: m)
+        let armed = f
+        f.accept(try context("finishing", deadline: nil), at: m)
+        #expect(f == armed)
+        f.accept(try context("finishing", deadline: 1_000_900), at: m)
+        #expect(f.isArmed && f != armed)
+        f.accept(try context("finishing", deadline: 1_000_900, hold: true), at: m)
+        #expect(!f.isArmed)
+        f.accept(try context("finishing", deadline: nil), at: m)
+        #expect(!f.isArmed)
+        f.accept(try context("active", deadline: 1_000_600), at: m)
+        f.accept(try context("completed", deadline: 1_000_600), at: m)
+        #expect(!f.isArmed)
+        var g = DeadlineFailsafe()
+        g.accept(try context("finishing", deadline: 1_000_600), at: m)
+        let last = NativeExit.Monotonic(boot: "b", seconds: 600 + DeadlineFailsafe.grace + DeadlineFailsafe.hardBound)
+        #expect(g.decide(at: NativeExit.Monotonic(boot: "b", seconds: 600 + DeadlineFailsafe.grace + 1)) == .probe)
+        #expect(g.decide(at: last) == .release)
     }
 }

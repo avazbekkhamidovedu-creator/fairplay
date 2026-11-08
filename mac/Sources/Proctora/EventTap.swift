@@ -145,7 +145,7 @@ final class EventTap {
             }
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             if EventTap.isEmergencyCombo(event, type: type) {
-                if type == .keyDown && !isRepeat && EventTap.postsEmergencyExit(isDev: Config.isDevBuild) {
+                if type == .keyDown && !isRepeat && EventTap.postsEmergencyExit(isDev: Config.isDevBuild, nativeLock: EventTap.nativeLockHeld) {
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: .proctoraEmergencyExit, object: nil)
                     }
@@ -346,8 +346,12 @@ final class EventTap {
         return (Int(ns.subtype.rawValue), ns.data1)
     }
 
-    /// Release builds swallow Ctrl-Opt-Cmd-E and do nothing; only dev builds still act on it.
-    static func postsEmergencyExit(isDev: Bool) -> Bool { isDev }
+    /// Mirrors LockdownController.nativeLockActive for the tap thread (set on the main thread).
+    static var nativeLockHeld = false
+
+    /// Ctrl-Opt-Cmd-E opens the exit-code prompt of an ordinary exam lock in every build. While the native
+    /// browser lock is held, release builds swallow it and do nothing; only dev builds still act on it.
+    static func postsEmergencyExit(isDev: Bool, nativeLock: Bool) -> Bool { isDev || !nativeLock }
 
     /// Ctrl-Opt-Cmd-E: swallowed while locked (dev builds: invigilator exit prompt).
     static func isEmergencyCombo(_ event: CGEvent, type: CGEventType) -> Bool {

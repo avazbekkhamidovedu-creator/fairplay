@@ -42,6 +42,12 @@ enum SiteDenyList {
         suffixes.filter { $0 == suffix || $0.hasSuffix("." + suffix) }
     }
 
+    /// True when `suffix` equals, or is a parent of, a host denied by exact name (www.google.com, search.brave.com):
+    /// a wildcard on it would cover that host.
+    static func exactHostIsUnder(_ suffix: String) -> Bool {
+        exact.contains { $0 == suffix || $0.hasSuffix("." + suffix) }
+    }
+
     static func isDenied(host rawHost: String) -> Bool {
         let host = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         guard !host.isEmpty, !exceptions.contains(host) else { return false }
