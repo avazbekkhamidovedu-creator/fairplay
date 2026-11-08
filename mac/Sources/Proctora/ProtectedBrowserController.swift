@@ -41,6 +41,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var approvedSites: [String] = []
     private var approvedResources: [String] = []
     private var failsafe = DeadlineFailsafe()
+    private var hostAnsweredAt: Date?
     private var failsafeCancel: (() -> Void)?
     private var pickerSites: [String] = []
     private var sitePicker: NSPopUpButton?
@@ -214,12 +215,16 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             check.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
             check.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -32),
             columns.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            columns.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            columns.topAnchor.constraint(greaterThanOrEqualTo: check.bottomAnchor, constant: 16),
+            columns.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -32),
             columns.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 32),
             columns.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -32),
             left.widthAnchor.constraint(equalToConstant: 340),
             right.widthAnchor.constraint(equalToConstant: 360)
         ])
+        let centered = columns.centerYAnchor.constraint(equalTo: root.centerYAnchor)
+        centered.priority = .defaultHigh
+        centered.isActive = true
     }
 
     static let keychainMessage = "This copy of FairPlay is not set up for secure exams. Contact your instructor. Your Mac was not locked."
@@ -683,7 +688,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         closePopupButton?.isHidden = orderedTabs.first === browser
         let failed = navigationState?.phase == .failed && lockIsOwned
         retryButton?.isHidden = !failed
-        vpnButton?.isHidden = !(failed && LockdownController.shared.vpnWindowAvailable && VPNLauncher.installed() != nil)
+        vpnButton?.isHidden = !(failed && LockdownController.shared.vpnWindowAvailable && VPNLauncher.installed() != nil
+            && VPNPromptGate.allowed(vpnInterfaceUp: VPNPromptGate.vpnInterfaceUp(), hostAnsweredAt: hostAnsweredAt, now: effects.now()))
         rebuildTabs()
         backButton?.isEnabled = browser?.canGoBack == true && lockIsOwned
         EventTap.reloadShortcutAllowed = isOpen && lockIsOwned && !LockdownController.shared.vpnYieldOpen
@@ -1011,14 +1017,22 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
     }
 
-    private func scheduleLoadRetry() {
+    private func scheduleLoadRetry(offerVPNPrompt: Bool = true) {
         let delay = loadRetry.failed()
         loadRetryCancel?()
         loadRetryCancel = effects.schedule(delay) { [weak self] in
             self?.loadRetryCancel = nil
             self?.retryFailedLoad()
         }
-        if loadRetry.shouldPrompt(vpnInstalled: VPNLauncher.installed() != nil) { offerVPN() }
+        let gate = VPNPromptGate.allowed(vpnInterfaceUp: VPNPromptGate.vpnInterfaceUp(), hostAnsweredAt: hostAnsweredAt, now: effects.now())
+        if offerVPNPrompt, gate, loadRetry.shouldPrompt(vpnInstalled: VPNLauncher.installed() != nil) { offerVPN() }
+    }
+
+    /// The OJ host sent an HTTP answer (any status): the failure state, retry timer and prompts are over.
+    private func ojAnswered() {
+        hostAnsweredAt = effects.now()
+        loadRetry.succeeded()
+        loadRetryCancel?(); loadRetryCancel = nil
     }
 
     private func retryFailedLoad() {
@@ -1156,6 +1170,16 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         return OJRefusal(text: text, retryAfter: retry)
     }
 
+    /// The OJ's own `error` text from an unsigned 4xx/5xx JSON body, cleaned for display; nil when it gave none.
+    static func ojErrorText(status: Int?, data: Data?) -> String? {
+        guard let status, status >= 400, let data, data.count <= 4096,
+              let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let raw = body["error"] as? String else { return nil }
+        let text = String(String.UnicodeScalarView(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
+            .prefix(200))).trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? nil : text
+    }
+
     static func nativeRequest(endpoint: URL, origin: URL, nonce: String, unclean: Bool, lockId: String? = nil, cookies: [HTTPCookie]) -> URLRequest {
         let matching = matchingCookies(cookies, origin: origin, endpoint: endpoint)
         var request = URLRequest(url: endpoint)
@@ -1240,9 +1264,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                             return
                         }
                         // A denial cannot disprove an earlier committed claim with a lost response.
-                        self.notice?.stringValue = path.hasPrefix("recover/") && self.claimWasConflict
-                            ? Self.claimConflictText
-                            : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
+                        if let shown = Self.ojErrorText(status: status, data: data) {
+                            self.notice?.stringValue = shown
+                        } else if error == nil, let status, status >= 400, !(path.hasPrefix("recover/") && self.claimWasConflict) {
+                            // The OJ answered with a page of its own: nothing of ours to add.
+                        } else {
+                            self.notice?.stringValue = path.hasPrefix("recover/") && self.claimWasConflict
+                                ? Self.claimConflictText
+                                : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
+                        }
                         self.scheduleNext(refusal)
                         return
                     }
@@ -1540,6 +1570,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         navigationState?.finished()
         loadRetry.succeeded()
         loadRetryCancel?(); loadRetryCancel = nil
+        if let url = webView.url, ProtectedBrowserPolicy.origin(url) == ProtectedBrowserPolicy.origin(selection.url) { hostAnsweredAt = effects.now() }
         LockdownController.shared.endVPNYield()
         updateNavigation()
         handInPageFinished(url: webView.url, title: webView.title)
@@ -1595,7 +1626,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")
         let initialPopupBlank = !parents.isEmpty && webView === browser
             && response.response.url?.absoluteString == "about:blank"
-        guard tracked(webView), lockIsOwned, response.canShowMIMEType, !AllowedSites.isAttachment(contentDisposition: disposition),
+        let httpStatus = (response.response as? HTTPURLResponse)?.statusCode
+        if response.isForMainFrame, httpStatus != nil, ProtectedBrowserPolicy.origin(response.response.url ?? selection.url) == ProtectedBrowserPolicy.origin(selection.url) {
+            ojAnswered()
+        }
+        // An HTTP error page is the site's own page: show it, never cancel it for its content type.
+        let showable = response.canShowMIMEType || (httpStatus ?? 0) >= 400
+        guard tracked(webView), lockIsOwned, showable, !AllowedSites.isAttachment(contentDisposition: disposition),
               initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
             if webView === browser, lockIsOwned {
                 if response.isForMainFrame {
@@ -1718,12 +1755,21 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             return
         }
         diagnostic("navigation-failed domain=" + domain + " code=" + String(failure.code), url: failedURL)
+        // A reply the server did send (bad body, interrupted frame, redirect loop) is not "unreachable":
+        // no notice, no retry loop, no VPN prompt; the page stays as the server left it.
+        if policy?.allows(failedURL, mainFrame: true) != false,
+           LoadOutcome.classify(status: nil, error: failure) != .unreachable {
+            navigationState?.finished()
+            updateNavigation()
+            return
+        }
         let blockedOrigin = failedURL.flatMap(ProtectedBrowserPolicy.origin).flatMap { origin in
             policy?.allows(failedURL, mainFrame: true) == false ? " · Blocked site: " + origin : nil
         } ?? ""
         navigationState?.failed(diagnostic: domain + " (" + String(failure.code) + ")" + blockedOrigin)
         updateNavigation()
-        if blockedOrigin.isEmpty { scheduleLoadRetry() }
+        let ojHost = failedURL.flatMap(ProtectedBrowserPolicy.origin) == ProtectedBrowserPolicy.origin(selection.url)
+        if blockedOrigin.isEmpty { scheduleLoadRetry(offerVPNPrompt: ojHost && webView === orderedTabs.first) }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

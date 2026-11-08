@@ -12,8 +12,8 @@ enum VersionLabel {
         label.textColor = .secondaryLabelColor
         label.isSelectable = false
         label.setAccessibilityIdentifier("fairplay.version")
-        label.frame = NSRect(x: 16, y: root.bounds.height - 14, width: 260, height: 12)
-        label.autoresizingMask = [.maxXMargin, .minYMargin]
+        label.frame = NSRect(x: 16, y: 8, width: 260, height: 12)
+        label.autoresizingMask = [.maxXMargin, .maxYMargin]
         root.addSubview(label)
     }
 }

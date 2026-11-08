@@ -125,6 +125,57 @@ struct LoadRetryPolicy {
     }
 }
 
+/// What a finished or failed load means. Any HTTP answer, whatever its status, is the site's own page
+/// and the app does nothing about it; only a failure to reach the host counts as "unreachable".
+enum LoadOutcome: Equatable {
+    case answered, unreachable, other
+
+    private static let unreachableCodes: Set<Int> = [
+        NSURLErrorTimedOut, NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost,
+        NSURLErrorDNSLookupFailed, NSURLErrorNotConnectedToInternet, NSURLErrorInternationalRoamingOff,
+        NSURLErrorCallIsActive, NSURLErrorDataNotAllowed,
+        NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateUntrusted,
+        NSURLErrorServerCertificateHasUnknownRoot, NSURLErrorServerCertificateNotYetValid,
+        NSURLErrorClientCertificateRejected, NSURLErrorClientCertificateRequired
+    ]
+
+    static func isUnreachable(domain: String, code: Int) -> Bool {
+        domain == NSURLErrorDomain && unreachableCodes.contains(code)
+    }
+
+    static func classify(status: Int?, error: NSError?) -> LoadOutcome {
+        if status != nil { return .answered }
+        guard let error else { return .other }
+        return isUnreachable(domain: error.domain, code: error.code) ? .unreachable : .other
+    }
+}
+
+/// Whether to offer the VPN app: never while a VPN already has an address, and never right after the OJ host answered.
+enum VPNPromptGate {
+    static let answeredWindow: TimeInterval = 120
+
+    static func allowed(vpnInterfaceUp: Bool, hostAnsweredAt: Date?, now: Date) -> Bool {
+        if vpnInterfaceUp { return false }
+        if let hostAnsweredAt, now.timeIntervalSince(hostAnsweredAt) < answeredWindow { return false }
+        return true
+    }
+
+    /// A tunnel interface (utunN) that is up and carries an IPv4 address: a VPN client's tunnel.
+    /// System tunnels (iCloud Private Relay and similar) only have IPv6 link-local addresses.
+    static func vpnInterfaceUp() -> Bool {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return false }
+        defer { freeifaddrs(list) }
+        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let name = String(cString: p.pointee.ifa_name)
+            guard name.hasPrefix("utun"), let addr = p.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            let flags = Int32(p.pointee.ifa_flags)
+            if flags & IFF_UP != 0 && flags & IFF_RUNNING != 0 { return true }
+        }
+        return false
+    }
+}
+
 /// Calls `onSatisfied` each time the Mac gets a usable network path (Wi-Fi joined, VPN connected).
 final class NetworkWatch {
     private let monitor = NWPathMonitor()
