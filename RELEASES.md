@@ -1,4 +1,4 @@
-## What's new in 0.8.3
+## What's new in 0.8.4
 
 - DKU OJ opens inside FairPlay on Mac and Windows, and DKU OJ pages are always shown exactly as DKU OJ sends them: no false "could not be loaded" notice and no VPN prompt, and DKU OJ's own reason is shown when an exam cannot be started.
 - Open-book exams: an instructor can list allowed websites (and a Duke Box folder). Students open them in separate tabs; the exam itself stays on DKU OJ. AI assistants, chat, translators and code or file sharing sites are always blocked, and the rules are the same on Mac, Windows and the server. Nothing changes unless the instructor lists sites.
