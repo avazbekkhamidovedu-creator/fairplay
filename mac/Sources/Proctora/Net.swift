@@ -77,7 +77,7 @@ enum Net {
 
     static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 15
+        cfg.timeoutIntervalForRequest = LoadTimeouts.request
         return URLSession(configuration: cfg, delegate: PinnedSessionDelegate(), delegateQueue: nil)
     }()
 

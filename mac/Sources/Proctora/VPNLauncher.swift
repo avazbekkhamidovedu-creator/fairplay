@@ -125,6 +125,11 @@ struct LoadRetryPolicy {
     }
 }
 
+/// One place for how long a native call or first load may take: a VPN path can be slow.
+enum LoadTimeouts {
+    static let request: TimeInterval = 20
+}
+
 /// What a finished or failed load means. Any HTTP answer, whatever its status, is the site's own page
 /// and the app does nothing about it; only a failure to reach the host counts as "unreachable".
 enum LoadOutcome: Equatable {
@@ -138,6 +143,17 @@ enum LoadOutcome: Equatable {
         NSURLErrorServerCertificateHasUnknownRoot, NSURLErrorServerCertificateNotYetValid,
         NSURLErrorClientCertificateRejected, NSURLErrorClientCertificateRequired
     ]
+
+    private static let tlsCodes: Set<Int> = [
+        NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateUntrusted,
+        NSURLErrorServerCertificateHasUnknownRoot, NSURLErrorServerCertificateNotYetValid,
+        NSURLErrorClientCertificateRejected, NSURLErrorClientCertificateRequired
+    ]
+
+    /// A certificate or handshake problem: the host was reached, so a VPN is not the fix.
+    static func isTLSFailure(domain: String, code: Int) -> Bool { domain == NSURLErrorDomain && tlsCodes.contains(code) }
+
+    static let tlsNotice = "Secure connection to DKU OJ failed (certificate check). Check the date and time of this Mac and the network, then retry."
 
     static func isUnreachable(domain: String, code: Int) -> Bool {
         domain == NSURLErrorDomain && unreachableCodes.contains(code)
@@ -160,39 +176,99 @@ enum VPNPromptGate {
         return true
     }
 
-    /// A tunnel interface (utunN) that is up and carries an IPv4 address: a VPN client's tunnel.
-    /// System tunnels (iCloud Private Relay and similar) only have IPv6 link-local addresses.
-    static func vpnInterfaceUp() -> Bool {
+    /// IPv4 addresses that say nothing about a campus VPN: link-local, and the 100.64.0.0/10 range other
+    /// VPN-like tools (tailnets) use.
+    static func isVPNCandidateAddress(_ a: UInt32) -> Bool {
+        let b1 = a >> 24, b2 = (a >> 16) & 0xff
+        if b1 == 169 && b2 == 254 { return false }
+        if b1 == 100 && (64...127).contains(b2) { return false }
+        return b1 != 0 && b1 != 127
+    }
+
+    static func isTunnelName(_ name: String) -> Bool { name.hasPrefix("utun") }
+
+    /// The first tunnel that makes a VPN count as connected: an up tunnel with a usable IPv4 address, or any up
+    /// tunnel whose IPv4 address is the one this Mac uses to reach `routeTarget` (an IPv4 literal, the OJ gateway).
+    static func vpnInterface(routeTarget: String? = nil) -> String? {
         var list: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&list) == 0, let first = list else { return false }
+        guard getifaddrs(&list) == 0, let first = list else { return nil }
         defer { freeifaddrs(list) }
+        let routed = routeTarget.flatMap(sourceAddress(toward:))
+        var excluded: String?
         for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
             let name = String(cString: p.pointee.ifa_name)
-            guard name.hasPrefix("utun"), let addr = p.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            guard isTunnelName(name), let addr = p.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
             let flags = Int32(p.pointee.ifa_flags)
-            if flags & IFF_UP != 0 && flags & IFF_RUNNING != 0 { return true }
+            guard flags & IFF_UP != 0 && flags & IFF_RUNNING != 0 else { continue }
+            let ip = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
+            if isVPNCandidateAddress(ip) || ip == routed { return name }
+            excluded = name
         }
-        return false
+        if let excluded { DebugLog.log("vpn", "tunnel \(excluded) ignored: local-only address and no route to the OJ") }
+        return nil
+    }
+
+    static func vpnInterfaceUp(routeTarget: String? = nil) -> Bool {
+        vpnInterface(routeTarget: routeTarget) != nil
+    }
+
+    /// The local IPv4 address the system would use toward `host` (a UDP connect sends nothing).
+    private static func sourceAddress(toward host: String) -> UInt32? {
+        var target = sockaddr_in()
+        target.sin_family = sa_family_t(AF_INET)
+        target.sin_port = UInt16(443).bigEndian
+        guard inet_pton(AF_INET, host, &target.sin_addr) == 1 else { return nil }
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        let connected = withUnsafePointer(to: &target) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else { return nil }
+        var local = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &local) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        return ok == 0 ? UInt32(bigEndian: local.sin_addr.s_addr) : nil
     }
 }
 
 /// Calls `onSatisfied` each time the Mac gets a usable network path (Wi-Fi joined, VPN connected).
 final class NetworkWatch {
-    private let monitor = NWPathMonitor()
-    private var wasSatisfied: Bool?
+    static let debounce: TimeInterval = 2
 
-    func start(onSatisfied: @escaping () -> Void) {
+    /// A path's identity for "did connectivity change": status plus the sorted interface names in use.
+    static func signature(satisfied: Bool, interfaces: [String]) -> String {
+        (satisfied ? "up:" : "down:") + interfaces.sorted().joined(separator: ",")
+    }
+
+    /// Only a page that failed or is still loading is reloaded; a loaded exam page is never reloaded behind the student.
+    static func shouldReload(afterChangeTo satisfied: Bool, phase: ProtectedBrowserNavigation.Phase?) -> Bool {
+        guard satisfied, let phase else { return false }
+        return phase == .failed || phase == .loading
+    }
+
+    private let monitor = NWPathMonitor()
+    private var last: String?
+    private var pending: DispatchWorkItem?
+
+    func start(onChange: @escaping (Bool) -> Void) {
         monitor.pathUpdateHandler = { [weak self] path in
             let ok = path.status == .satisfied
+            let sig = Self.signature(satisfied: ok, interfaces: path.availableInterfaces.map { $0.name })
             DispatchQueue.main.async {
                 guard let self else { return }
-                let changed = self.wasSatisfied != ok
-                self.wasSatisfied = ok
-                if ok && changed { onSatisfied() }
+                let changed = self.last != nil && self.last != sig
+                self.last = sig
+                guard changed else { return }
+                self.pending?.cancel()
+                let work = DispatchWorkItem { onChange(ok) }
+                self.pending = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.debounce, execute: work)
             }
         }
         monitor.start(queue: DispatchQueue(label: "fairplay.network-watch"))
     }
 
-    func stop() { monitor.cancel() }
+    func stop() { pending?.cancel(); monitor.cancel() }
 }

@@ -105,7 +105,7 @@ final class NativeBrowserIdentity: NSObject, URLSessionDelegate, URLSessionTaskD
     func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
-        config.timeoutIntervalForRequest = 12
+        config.timeoutIntervalForRequest = LoadTimeouts.request
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }
 }

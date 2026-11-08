@@ -193,6 +193,34 @@ import WebKit
         #expect(expiry.timeIntervalSince(Date()) > 85 && expiry.timeIntervalSince(Date()) <= 90)
     }
 
+    private func state(_ name: String, session: String = "s1") throws -> NativeDeviceContext {
+        let json: [String: Any] = ["v": 2, "nonce": "n", "expires": 1, "session": session, "device": "d", "user": "7",
+            "contest": "exam", "participation": "p", "state": name, "lease_until": 0]
+        return try JSONDecoder().decode(NativeDeviceContext.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    @Test func aVerifiedReleasedStateEndsTheLockAndLeavesNoPagesOrTimers() async throws {
+        let clock = Clock()
+        let (controller, root) = await resumed(clock, contest: "exam")
+        defer { controller.lockEnded() }
+        controller.receiveVerifiedState(try state("released"))
+        #expect(clock.released == 1)
+        #expect(!descendants(root).contains { $0 is WKWebView })
+        #expect(!controller.isOpen)
+        #expect(clock.items.isEmpty)
+    }
+
+    @Test func aStateThatDoesNotUnlockOrBelongsToAnotherSessionKeepsTheLock() async throws {
+        let clock = Clock()
+        let (controller, root) = await resumed(clock, contest: "exam")
+        defer { controller.lockEnded() }
+        controller.receiveVerifiedState(try state("active"))
+        controller.receiveVerifiedState(try state("rejected"))
+        controller.receiveVerifiedState(try state("released", session: "other"))
+        #expect(clock.released == 0)
+        #expect(descendants(root).contains { $0 is WKWebView })
+    }
+
     @Test func ordinaryPagesAndOtherContestsTriggerNothing() async throws {
         let clock = Clock()
         let (controller, _) = await resumed(clock, contest: "exam")

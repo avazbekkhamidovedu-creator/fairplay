@@ -294,7 +294,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         if probe.host == "localhost", probe.port == 18443 { probe = URL(string: "http://127.0.0.1:18081/")! }
         #endif
         var request = URLRequest(url: probe.appendingPathComponent("accounts/login/"))
-        request.timeoutInterval = 8
+        request.timeoutInterval = LoadTimeouts.request
         nativeHTTP.dataTask(with: request) { [weak self] _, response, error in
             DispatchQueue.main.async {
                 guard let self, self.isOpen, self.flow.state == .setup else { return }
@@ -650,7 +650,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         effects.load(view, policy.startURL)
         loadRetry = LoadRetryPolicy()
         let watch = NetworkWatch()
-        watch.start { [weak self] in self?.retryFailedLoad() }
+        watch.start { [weak self] satisfied in
+            guard let self, self.isOpen else { return }
+            self.diagnostic("network-path-changed up=\(satisfied)", url: nil)
+            if NetworkWatch.shouldReload(afterChangeTo: satisfied, phase: self.navigationState?.phase) { self.retryFailedLoad(force: true) }
+        }
         networkWatch = watch
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.captureDraft() }
         RunLoop.main.add(timer, forMode: .common)
@@ -688,8 +692,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         closePopupButton?.isHidden = orderedTabs.first === browser
         let failed = navigationState?.phase == .failed && lockIsOwned
         retryButton?.isHidden = !failed
-        vpnButton?.isHidden = !(failed && LockdownController.shared.vpnWindowAvailable && VPNLauncher.installed() != nil
-            && VPNPromptGate.allowed(vpnInterfaceUp: VPNPromptGate.vpnInterfaceUp(), hostAnsweredAt: hostAnsweredAt, now: effects.now()))
+        vpnButton?.isHidden = !(failed && navigationState?.failureDiagnostic != LoadOutcome.tlsNotice && LockdownController.shared.vpnWindowAvailable && VPNLauncher.installed() != nil
+            && VPNPromptGate.allowed(vpnInterfaceUp: VPNPromptGate.vpnInterfaceUp(routeTarget: selection.url.host), hostAnsweredAt: hostAnsweredAt, now: effects.now()))
         rebuildTabs()
         backButton?.isEnabled = browser?.canGoBack == true && lockIsOwned
         EventTap.reloadShortcutAllowed = isOpen && lockIsOwned && !LockdownController.shared.vpnYieldOpen
@@ -706,6 +710,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     static func clearsClipboard(from current: WKWebView?, to target: WKWebView, examTab: WKWebView?) -> Bool {
         guard let current, let examTab else { return false }
         return current === examTab && target !== examTab
+    }
+
+    /// A signed state already verified by the caller (signature, nonce, device, lock): a state that unlocks
+    /// (released by the instructor, completed) ends the lock and returns to the first screen.
+    func receiveVerifiedState(_ context: NativeDeviceContext) {
+        guard lockIsOwned, nativeExam.accept(context), nativeExam.permitsUnlock else { return }
+        close(release: true)
     }
 
     private func noteDeadline(_ context: NativeDeviceContext) {
@@ -1024,7 +1035,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             self?.loadRetryCancel = nil
             self?.retryFailedLoad()
         }
-        let gate = VPNPromptGate.allowed(vpnInterfaceUp: VPNPromptGate.vpnInterfaceUp(), hostAnsweredAt: hostAnsweredAt, now: effects.now())
+        let tunnel = VPNPromptGate.vpnInterface(routeTarget: selection.url.host)
+        if let tunnel { diagnostic("vpn-prompt-suppressed tunnel=" + tunnel, url: nil) }
+        let gate = VPNPromptGate.allowed(vpnInterfaceUp: tunnel != nil, hostAnsweredAt: hostAnsweredAt, now: effects.now())
         if offerVPNPrompt, gate, loadRetry.shouldPrompt(vpnInstalled: VPNLauncher.installed() != nil) { offerVPN() }
     }
 
@@ -1035,8 +1048,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         loadRetryCancel?(); loadRetryCancel = nil
     }
 
-    private func retryFailedLoad() {
-        guard isOpen, navigationState?.phase == .failed else { return }
+    private func retryFailedLoad(force: Bool = false) {
+        guard isOpen, navigationState?.phase == .failed || (force && navigationState?.phase == .loading) else { return }
         reloadPressed()
     }
 
@@ -1451,6 +1464,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             notice?.stringValue = "DKU OJ must confirm the end of this exam before unlocking."
             return
         }
+        // A release arriving under the Leave sheet or the VPN prompt closes it with the rest of the screen.
+        if let window = overlay?.window, let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
         nativeGeneration = UUID(); nativeRequestInFlight = false
         failsafeCancel?(); failsafeCancel = nil; failsafe.clear()
         nativeExam = NativeExamSession()
@@ -1774,10 +1789,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let blockedOrigin = failedURL.flatMap(ProtectedBrowserPolicy.origin).flatMap { origin in
             policy?.allows(failedURL, mainFrame: true) == false ? " · Blocked site: " + origin : nil
         } ?? ""
-        navigationState?.failed(diagnostic: domain + " (" + String(failure.code) + ")" + blockedOrigin)
+        let tls = LoadOutcome.isTLSFailure(domain: failure.domain, code: failure.code)
+        navigationState?.failed(diagnostic: tls ? LoadOutcome.tlsNotice : domain + " (" + String(failure.code) + ")" + blockedOrigin)
         updateNavigation()
         let ojHost = failedURL.flatMap(ProtectedBrowserPolicy.origin) == ProtectedBrowserPolicy.origin(selection.url)
-        if blockedOrigin.isEmpty { scheduleLoadRetry(offerVPNPrompt: ojHost && webView === orderedTabs.first) }
+        // A certificate problem means the host answered: retry, but a VPN is not the fix, so no prompt.
+        if blockedOrigin.isEmpty { scheduleLoadRetry(offerVPNPrompt: ojHost && webView === orderedTabs.first && !tls) }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

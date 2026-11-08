@@ -162,6 +162,9 @@ enum SystemChecks {
         "screensharingagent", "vncserver", "x11vnc", "todesk", "sunlogin", "sshd",
     ]
 
+    static func isDeniedBundleId(_ lowerId: String) -> Bool { deniedBundlePrefixes.contains { lowerId.hasPrefix($0) } }
+    static func isDeniedProcessName(_ lowerName: String) -> Bool { deniedProcessNames.contains { lowerName.contains($0) } }
+
     /// Scripts left running by the student (e.g. `sleep 600; killall FairPlay` started
     /// before the exam): user-owned, parent launchd, shell/sleep/osascript. Ended at lock.
     static let killableOrphans: Set<String> = [
@@ -206,7 +209,7 @@ enum SystemChecks {
         for app in NSWorkspace.shared.runningApplications where app.processIdentifier != me {
             guard let id = app.bundleIdentifier?.lowercased() else { continue }
             if Allowlist.keeps(app) { continue }
-            if deniedBundlePrefixes.contains(where: { id.hasPrefix($0) }) { f.deniedApps.append(app) }
+            if isDeniedBundleId(id) { f.deniedApps.append(app) }
         }
         let appPids = Set(f.deniedApps.map { $0.processIdentifier })
         let uid = getuid()
@@ -217,7 +220,7 @@ enum SystemChecks {
         let since = (lockedAt ?? Date()).addingTimeInterval(-orphanWindow)
         for p in procs where p.pid != me && p.pid > 1 {
             let lower = p.name.lowercased()
-            if !appPids.contains(p.pid), deniedProcessNames.contains(where: { lower.contains($0) }) {
+            if !appPids.contains(p.pid), isDeniedProcessName(lower) {
                 f.deniedProcs.append(p)
             } else {
                 switch classify(name: p.name, uid: p.uid, ppid: p.ppid, started: p.started, myUid: uid, since: since) {

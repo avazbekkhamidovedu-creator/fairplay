@@ -5,6 +5,8 @@
 - When the exam time is over, FairPlay unlocks the computer by itself, using each student's own deadline. It also unlocks if the connection to DKU OJ is lost, and while a hand-in is still being collected.
 - Fewer start problems: a leftover session from an earlier exam, or signing in again on the same computer, no longer needs the instructor to step in. Instructors can use **Unlock and reopen** in one step, and a reopen never shortens a student's time.
 - More reliable recovery: if the app is reopened while the computer is locked and permission is missing, the lock protections still start; a failed browser start on Windows keeps the saved lock; a start request whose reply was lost can be recovered after a restart.
+- Instructors can unlock a student with one button and one confirmation on the DKU OJ help page, with no codes or typing. The student's computer is released within about 25 seconds and the app returns to its first screen. A leftover exam attachment no longer changes what the student sees on DKU OJ pages.
+- The app works the same with the university VPN on or off: it follows the system proxy, reloads once when the VPN connects or drops, never asks for the VPN when one is connected, and treats a certificate problem as a certificate problem.
 - The Windows toolbar matches the Mac, the app version is shown in the corner, and the Mac "Test my device" screen no longer crowds its button.
 
 ## Download FairPlay

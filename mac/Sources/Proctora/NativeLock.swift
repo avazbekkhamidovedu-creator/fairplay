@@ -101,7 +101,7 @@ struct NativeLockSetup {
     }
 
     static func serverTransport(_ body: Data, _ done: @escaping (Int?, Data?) -> Void) {
-        var request = URLRequest(url: Config.serverURL.appendingPathComponent("api/native-exit/locks"), timeoutInterval: 10)
+        var request = URLRequest(url: Config.serverURL.appendingPathComponent("api/native-exit/locks"), timeoutInterval: LoadTimeouts.request)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
