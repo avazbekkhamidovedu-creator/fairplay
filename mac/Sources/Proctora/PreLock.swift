@@ -64,10 +64,11 @@ enum PreLockState {
         locked && preLocked ? .promote : .lock
     }
 
-    enum EmergencyExitAction { case requireCode, leaveUnlockedPractice, ignore }
+    enum EmergencyExitAction { case requireCode, leaveUnlockedPractice, nativeLeave, ignore }
 
     /// A locked device always needs verified authorization, even before admission.
-    static func emergencyExitAction(locked: Bool, deviceTestRunning: Bool) -> EmergencyExitAction {
+    static func emergencyExitAction(locked: Bool, deviceTestRunning: Bool, nativeLock: Bool = false) -> EmergencyExitAction {
+        if nativeLock { return .nativeLeave }
         if locked { return .requireCode }
         return deviceTestRunning ? .leaveUnlockedPractice : .ignore
     }

@@ -44,7 +44,7 @@ struct NativeLockSetup {
     static let firstRetryRange: ClosedRange<TimeInterval> = 1...5
 
     /// Only an overloaded server or a lost answer is worth another try; a refusal (403/409/422) never is.
-    static func escrowRetryable(status: Int?) -> Bool { status == nil || status == 429 || status == 503 }
+    static func escrowRetryable(status: Int?) -> Bool { status == nil || status == 429 || status == 502 || status == 503 || status == 504 }
 
     /// First wait is random 1-5 s, then the shared backoff steps with full jitter.
     func retryWait(afterFailure count: Int) -> TimeInterval {
@@ -273,7 +273,7 @@ struct NativeLockSetup {
                     if Self.escrowSucceeded(status: status, data: data) {
                         switch commit(reg) {
                         case .saved, .gone: registrar.finish(token)
-                        case .failed: retry(reg, failures: failures, fresh: fresh, retryAfter: nil, why: "the exit code could not be saved in the Keychain", serverAnswered: false)
+                        case .failed: retry(reg, failures: failures, fresh: fresh, retryAfter: nil, why: "the emergency exit key could not be saved in the Keychain", serverAnswered: false)
                         }
                         return
                     }
@@ -552,4 +552,26 @@ struct NativeLockMode: Equatable {
     var allowsUnlock: Bool { !active || releasing }
     mutating func beginRelease() { if active { releasing = true } }
     mutating func endRelease() { releasing = false; active = false }
+}
+
+/// What the full-screen block says while the lock's checks find a problem. An exam lock asks for the
+/// instructor's exit code; the native lock never does (its exit is the Leave sheet), is not red, and
+/// waits `grace` first so apps that only just opened (a reboot's login items) are closed before anything shows.
+enum NativeBlockScreen {
+    static let grace: TimeInterval = 6
+    static let calmFooter = "This Mac stays locked until your instructor releases it from DKU OJ or the exam time is over."
+    static let examFooter = "Stuck? Ask your instructor for an exit code."
+
+    struct Look: Equatable {
+        let calm: Bool
+        let text: String
+    }
+
+    static func look(problems: [String: String], nativeLock: Bool, since: Date?, now: Date) -> Look? {
+        guard !problems.isEmpty else { return nil }
+        let body = problems.keys.sorted().compactMap { problems[$0] }.joined(separator: "\n\n")
+        guard nativeLock else { return Look(calm: false, text: body + "\n\n" + examFooter) }
+        guard let since, now.timeIntervalSince(since) >= grace else { return nil }
+        return Look(calm: true, text: body + "\n\n" + calmFooter)
+    }
 }

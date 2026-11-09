@@ -9,7 +9,7 @@ protocol LockSurface: AnyObject {
     func takeFocus()
     func coverAllScreens()
     /// `quitAction`: shows a "Quit these apps now" button when non-nil.
-    func showBlocking(reason: String, quitAction: (() -> Void)?)
+    func showBlocking(reason: String, quitAction: (() -> Void)?, calm: Bool)
     func hideBlocking()
 }
 
@@ -33,6 +33,7 @@ final class LockdownController {
     ]
 
     private(set) var isLocked = false
+    private var problemsSince: Date?
     /// 2026-10-23: locked before the start code, no exam attached yet (PreLock.swift).
     private(set) var isPreLock = false
     /// The native OJ lock (NativeLock.swift): same OS-level effects, but it ends only through
@@ -95,7 +96,7 @@ final class LockdownController {
             DebugLog.log("lock", "dev build: left running (Allowlist.devKeep, hidden): " + devKept.joined(separator: ", "))
         }
         isLocked = true
-        problems.removeAll(); reported.removeAll(); quitting.removeAll()
+        problems.removeAll(); reported.removeAll(); quitting.removeAll(); problemsSince = nil
         // Audit M-09 (review 2026-10-14: the flag was never set, so VoiceOver chords were
         // always swallowed). Refreshed by every check round too.
         EventTap.voiceOverOn = NSWorkspace.shared.isVoiceOverEnabled
@@ -163,7 +164,7 @@ final class LockdownController {
         focusTimer?.invalidate(); focusTimer = nil
         pasteboardTimer?.invalidate(); pasteboardTimer = nil
         checkTimer?.invalidate(); checkTimer = nil
-        problems.removeAll()
+        problems.removeAll(); problemsSince = nil
         OfflineExit.reset()
         Watchdog.lockEnded()
         surface?.hideBlocking()
@@ -557,12 +558,15 @@ final class LockdownController {
         problems = found
         lastSummary = summary.joined(separator: ",")
         if problems.isEmpty {
+            problemsSince = nil
             surface?.hideBlocking()
         } else {
-            let quit: (() -> Void)? = problems["proc"] == nil ? nil : { [weak self] in self?.quitBlockedNow() }
-            let text = problems.keys.sorted().compactMap { problems[$0] }.joined(separator: "\n\n")
-                + "\n\nStuck? Ask your instructor for an exit code."
-            surface?.showBlocking(reason: text, quitAction: quit)
+            let now = Date()
+            if problemsSince == nil { problemsSince = now }
+            if let look = NativeBlockScreen.look(problems: problems, nativeLock: nativeLockActive, since: problemsSince, now: now) {
+                let quit: (() -> Void)? = problems["proc"] == nil ? nil : { [weak self] in self?.quitBlockedNow() }
+                surface?.showBlocking(reason: look.text, quitAction: quit, calm: look.calm)
+            }
         }
         surface?.coverAllScreens()
     }

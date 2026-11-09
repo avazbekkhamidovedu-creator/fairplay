@@ -6,22 +6,26 @@ import CryptoKit
 @testable import Proctora
 
 @Suite struct NativeLeaveTextTests {
-    @Test func wrongCodeShowsTheRemainingAttempts() {
-        let now = Date()
-        #expect(NativeLeaveText.message(for: .wrong(remaining: 4), now: now) == "That code is not right. 4 attempts left.")
-        #expect(NativeLeaveText.message(for: .wrong(remaining: 1), now: now) == "That code is not right. 1 attempt left.")
+    @Test func theLeaveNoticeHasNoCodeEntryAndNoMacCode() {
+        #expect(NativeLeaveText.notice == "Your instructor can release this Mac from DKU OJ. It unlocks by itself, usually within about 25 seconds. If you finished, use the hand-in on the exam page.")
+        let lower = NativeLeaveText.notice.lowercased()
+        #expect(!lower.contains("code") && !lower.contains("digit") && !lower.contains("type"))
     }
 
-    @Test func lockoutShowsTheWaitTime() {
-        let now = Date()
-        #expect(NativeLeaveText.message(for: .wait(until: now.addingTimeInterval(300)), now: now)?.contains("5 min") == true)
-        #expect(NativeLeaveText.message(for: .wait(until: now.addingTimeInterval(45)), now: now)?.contains("45 s") == true)
+    @Test func noStudentLeaveSourceCanOpenACodeField() throws {
+        for file in ["NativeLeaveSheet", "ProtectedBrowserController", "MainWindowController"] {
+            let text = try Source.text("Sources/Proctora/\(file).swift")
+            #expect(!text.contains("NativeLeavePanel"), "\(file)")
+            #expect(!text.contains("NativeLeavePrompt"), "\(file)")
+        }
+        let sheet = try Source.text("Sources/Proctora/NativeLeaveSheet.swift")
+        #expect(!sheet.contains("NSTextField") && !sheet.contains("NativeExit"))
+        let browser = try Source.text("Sources/Proctora/ProtectedBrowserController.swift")
+        #expect(!browser.contains("submitLeaveCode(") || !browser.contains("submit: {"))
     }
 
-    @Test func acceptedHasNoMessageAndMalformedAsksForSixDigits() {
-        #expect(NativeLeaveText.message(for: .accepted, now: Date()) == nil)
-        #expect(NativeLeaveText.message(for: .malformed, now: Date()) == "Enter the 6-digit code.")
-        #expect(NativeLeaveText.hint == "Ask your instructor for an exit code")
+    @Test func aDeviceTestPreviewLeavesAtOnceWithoutACode() {
+        #expect(PreLockState.emergencyExitAction(locked: false, deviceTestRunning: true) == .leaveUnlockedPractice)
     }
 }
 
@@ -204,6 +208,38 @@ import CryptoKit
         #expect(body(bad) == "nonce=n&confirm=1")
     }
 
+    @Test func nativeLockNeverSelectsTheCodePrompt() {
+        for locked in [true, false] {
+            for practice in [true, false] {
+                #expect(PreLockState.emergencyExitAction(locked: locked, deviceTestRunning: practice, nativeLock: true) == .nativeLeave)
+            }
+        }
+        #expect(PreLockState.emergencyExitAction(locked: true, deviceTestRunning: false) == .requireCode)
+    }
+
+    @Test func noNativeStringMentionsACode() {
+        let lost = NativeLockState(lockId: "K7QM3XPA", created: Date(), unclean: true)
+        var texts = [NativeLeaveText.notice, NativeBlockScreen.calmFooter, ProtectedBrowserController.lockConflictText]
+        for registration in [NativeLockRegistrar.Status.idle, .retrying, .paused, .refused, .noKey] {
+            texts.append(NativeExit.leaveCodeText(lost, registration: registration)
+                .replacingOccurrences(of: NativeExit.display(lost.lockId), with: ""))
+        }
+        let look = NativeBlockScreen.look(problems: ["x": "Close the app."], nativeLock: true,
+                                          since: Date(timeIntervalSinceNow: -60), now: Date())
+        texts.append(look?.text ?? "")
+        for text in texts {
+            let lower = text.lowercased()
+            #expect(!lower.contains("code") && !lower.contains("digit"), "\(text)")
+        }
+    }
+
+    @Test func lockConflictIsRecognisedInTheOldAndNewWording() {
+        for message in ["This Mac code belongs to another student or exam", "This lock belongs to another exam or student."] {
+            let data = Data("{\"error\": \"\(message)\"}".utf8)
+            #expect(ProtectedBrowserController.isLockConflict(status: 409, data: data))
+        }
+    }
+
     @Test func aBoundLockConflictIsRecognisedOnlyFor409WithTheMacCodeMessage() {
         let conflict = Data(#"{"error": "This Mac code belongs to another exam or student."}"#.utf8)
         #expect(ProtectedBrowserController.isLockConflict(status: 409, data: conflict))
@@ -263,78 +299,5 @@ import CryptoKit
         fresh.resumeNativeLock(NativeLockState(lockId: saved.lockId, verifier: saved.verifier, created: saved.created, unclean: true), in: NSView(frame: root.frame))
         defer { fresh.lockEnded() }
         #expect(!fresh.pendingUncleanRecover)
-    }
-}
-
-
-@MainActor @Suite struct NativeLeaveCodeChangeTests {
-    @Test func aCodeThatChangedWhileTheSheetIsOpenIsRefreshedAndNotSubmitted() {
-        var version = 0
-        var submitted = 0
-        var current = "AAAA-BBBB"
-        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { version }, reload: { $0(current, nil) },
-                                       submit: { _ in submitted += 1; return .wrong(remaining: 4) })
-        let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
-        let panel = NativeLeavePanel(prompt: prompt, window: window)
-        panel.field.stringValue = "123456"
-        panel.submit()
-        #expect(submitted == 1)
-        version = 1
-        current = "CCCC-DDDD"
-        panel.field.stringValue = "123456"
-        panel.submit()
-        #expect(submitted == 1)
-        #expect(panel.info.stringValue.contains("CCCC-DDDD") && !panel.info.stringValue.contains("AAAA-BBBB"))
-        panel.field.stringValue = "123456"
-        panel.submit()
-        #expect(submitted == 2)
-    }
-
-    @Test func aSlowReloadStillRefusesTheSubmit() {
-        var version = 1
-        var submitted = 0
-        var finish: ((String, String?) -> Void)?
-        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { version }, reload: { finish = $0 },
-                                       submit: { _ in submitted += 1; return .malformed })
-        let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
-        let panel = NativeLeavePanel(prompt: prompt, window: window)
-        version = 2
-        panel.submit()
-        panel.submit()
-        #expect(submitted == 0)
-        finish?("EEEE-FFFF", nil)
-        version = 2
-        panel.submit()
-        #expect(submitted == 1)
-    }
-
-    @Test func aCodeThatWentStaleBetweenTheSnapshotAndPresentingIsRefreshed() {
-        var submitted = 0
-        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { 1 }, shownVersion: 0, reload: { $0("CCCC-DDDD", nil) },
-                                       submit: { _ in submitted += 1; return .malformed })
-        let panel = NativeLeavePanel(prompt: prompt, window: NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true))
-        #expect(panel.refreshIfCodeChanged())
-        #expect(panel.info.stringValue.contains("CCCC-DDDD"))
-        panel.field.stringValue = "123456"
-        panel.submit()
-        #expect(submitted == 1)
-    }
-
-    @Test func aReloadReEnablesASubmitDisabledByARefusalUnlessStillRefused() {
-        var version = 0
-        var refused = true
-        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { version }, isRefused: { refused }, reload: { $0("CCCC-DDDD", nil) },
-                                       submit: { _ in .refused })
-        let panel = NativeLeavePanel(prompt: prompt, window: NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true))
-        panel.field.stringValue = "123456"
-        panel.submit()
-        #expect(!panel.field.isEnabled)
-        version = 1
-        #expect(panel.refreshIfCodeChanged())
-        #expect(!panel.field.isEnabled)
-        refused = false
-        version = 2
-        #expect(panel.refreshIfCodeChanged())
-        #expect(panel.field.isEnabled)
     }
 }

@@ -369,7 +369,7 @@ final class FakeEscrowClock {
 
 @Suite struct StudentMessageTests {
     @Test func beginPromptStatesTheLockPlainly() {
-        #expect(ProtectedBrowserController.beginText == "Continue locks this Mac until you finish the exam or your instructor gives you an exit code. Start only when your exam is about to begin.")
+        #expect(ProtectedBrowserController.beginText == "Continue locks this Mac until you finish the exam or your instructor releases this Mac from DKU OJ. Start only when your exam is about to begin.")
     }
 }
 

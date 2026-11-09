@@ -512,15 +512,11 @@ enum NativeExit {
         guard state.verifier == nil else { return shown }
         switch registration {
         case .retrying:
-            return shown + " (not registered with the server yet; FairPlay keeps trying in the background. If this code changes while the sheet is open, read the new one out)"
+            return shown + " (not registered with the server yet; FairPlay keeps trying in the background; your instructor can release this Mac in DKU OJ)"
         case .paused:
-            return shown + " (not registered with the server yet; FairPlay stopped trying for now and will try again later. No exit code can open this lock until then; your instructor can release this Mac in DKU OJ)"
-        case .refused:
-            return shown + " (the server refused to register this lock, so no exit code can open it; your instructor must release this Mac in DKU OJ)"
-        case .noKey:
-            return shown + " (this copy of FairPlay has no emergency exit key, so no exit code can open this lock; your instructor must release this Mac in DKU OJ)"
-        case .idle:
-            return shown + " (no exit code can open this lock; your instructor must release this Mac in DKU OJ)"
+            return shown + " (not registered with the server yet; FairPlay will try again later; your instructor can release this Mac in DKU OJ)"
+        case .refused, .noKey, .idle:
+            return shown + " (your instructor can release this Mac in DKU OJ)"
         }
     }
 

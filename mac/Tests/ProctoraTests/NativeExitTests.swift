@@ -308,7 +308,6 @@ private final class FailingStore: NativeLockStoring {
         #expect(attWith(good, s, wall: wall.addingTimeInterval(1_800), mono: mono + 1_800) == .refused)
         #expect(attWith(good, s, wall: t0.addingTimeInterval(3_599), mono: 1_000 + 3_599) == .refused)
         #expect(attWith(good, s, wall: wall.addingTimeInterval(86_400), mono: mono + 86_400) == .accepted)
-        #expect(NativeLeaveText.message(for: .refused, now: t0) == "Too many attempts. Ask your instructor to release your Mac.")
     }
 
     @Test func theGuessLimitRollsInsteadOfResettingAtAFixedPoint() {

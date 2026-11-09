@@ -132,14 +132,14 @@ import WebKit
     }
     private final class Probe {
         var locked = false, released = 0
-        var prompts: [NativeLeavePrompt] = []
+        var prompts = 0
         let store = InMemoryNativeLockStore()
         var code: String? { store.load().map { NativeExit.code(key: TestExit.key, lockId: $0.lockId) } }
     }
     private func openController(_ probe: Probe, root: NSView) async throws -> ProtectedBrowserController {
         var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { probe.locked = true; return true },
             ownsLock: { probe.locked }, release: { probe.locked = false; probe.released += 1 }, load: { _, _ in })
-        effects.presentLeave = { prompt, _ in probe.prompts.append(prompt) }
+        effects.presentLeave = { _ in probe.prompts += 1 }
         var setup = NativeLockSetup.dev
         setup.store = probe.store
         setup.newKey = { TestExit.key }
@@ -181,19 +181,14 @@ import WebKit
         controller.lockEnded()
     }
 
-    @Test func leaveButtonNeverUnlocksWithoutAValidCode() async throws {
+    @Test func leaveButtonOnlyShowsTheNoticeAndNeverUnlocks() async throws {
         let probe = Probe()
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
         let controller = try await openController(probe, root: root)
         let leave = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "browser.leave" })
         leave.performClick(nil)
-        #expect(await waitUntil { probe.prompts.count == 1 })
+        #expect(await waitUntil { probe.prompts == 1 })
         #expect(probe.locked && probe.released == 0 && controller.isOpen)
-        let prompt = try #require(probe.prompts.first)
-        #expect(prompt.lockCode == NativeExit.display(try #require(probe.store.load()).lockId))
-        let wrongCode = probe.code == "111111" ? "222222" : "111111"
-        #expect(prompt.submit(wrongCode) == .wrong(remaining: 4))
-        #expect(prompt.submit("12ab56") == .malformed)
         #expect(probe.locked && probe.released == 0 && controller.isOpen && probe.store.load() != nil)
         controller.lockEnded()
     }
@@ -225,13 +220,13 @@ import WebKit
         #expect(probe.store.load() == nil)
     }
 
-    @Test func leaveDuringAClaimedExamAlsoNeedsTheCode() async throws {
+    @Test func leaveDuringAClaimedExamOnlyShowsTheNotice() async throws {
         let probe = Probe()
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
         let controller = try await openController(probe, root: root)
         controller.applyExamContext(try context("active"), url: nil)
         try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "browser.leave" }).performClick(nil)
-        #expect(await waitUntil { probe.prompts.count == 1 })
+        #expect(await waitUntil { probe.prompts == 1 })
         #expect(probe.locked && probe.released == 0 && controller.isOpen)
         controller.lockEnded()
     }

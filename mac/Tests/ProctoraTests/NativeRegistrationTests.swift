@@ -98,7 +98,7 @@ import CryptoKit
             #expect(s.registrar.status == .refused)
             s.registerMissingVerifier(for: lost())
             #expect(h.sent.count == 1)
-            #expect(NativeExit.leaveCodeText(lost(), registration: .refused).contains("refused"))
+            #expect(NativeExit.leaveCodeText(lost(), registration: .refused).contains("release this Mac"))
         }
         for status in [500, 400, 408] as [Int?] {
             let store = InMemoryNativeLockStore(lost())
@@ -158,7 +158,7 @@ import CryptoKit
         let s = make(store: InMemoryNativeLockStore(lost()), harness: h, key: Data())
         s.registerMissingVerifier(for: lost())
         #expect(s.registrar.status == .noKey && h.sent.isEmpty)
-        #expect(NativeExit.leaveCodeText(lost(), registration: .noKey).contains("no emergency exit key"))
+        #expect(NativeExit.leaveCodeText(lost(), registration: .noKey).contains("release this Mac"))
         s.clear()
         #expect(s.registrar.status == .idle)
     }

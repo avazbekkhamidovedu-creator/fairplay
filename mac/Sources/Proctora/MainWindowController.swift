@@ -130,6 +130,55 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func cancelNativeRecovery() {
         recoveryTimer?.invalidate(); recoveryTimer = nil
         recoveredState = nil
+        recoveryRelease?.stop(); recoveryRelease = nil
+    }
+
+    private var recoveryRelease: NativeRecoveryRelease?
+    private lazy var recoveryIdentity = NativeBrowserIdentity(origin: UniversityDestination.dkuOJ.url,
+        ownsLock: { [weak self] in self?.recoveredState != nil })
+    private lazy var recoveryHTTP = recoveryIdentity.makeSession()
+
+    private func startRecoveryRelease(_ state: NativeLockState) {
+        guard recoveryRelease == nil else { return }
+        let origin = UniversityDestination.dkuOJ.url
+        let setup = NativeLockSetup.live
+        let deps = NativeRecoveryRelease.Deps(
+            request: { [weak self] path, done in
+                guard let self, let device = self.recoveryIdentity.fingerprint, origin.scheme == "https",
+                      let key = Config.universityPolicyPublicKey else { return false }
+                let endpoint = origin.appendingPathComponent("api/fairplay/native/" + path)
+                let nonce = UUID().uuidString
+                setup.background {
+                    let lockId = path.hasPrefix("recover/") ? setup.store.load()?.lockId : nil
+                    setup.onMain {
+                        let request = ProtectedBrowserController.nativeRequest(endpoint: endpoint, origin: origin, nonce: nonce,
+                                                                                unclean: false, lockId: lockId, cookies: [])
+                        self.recoveryHTTP.dataTask(with: request) { data, response, error in
+                            DispatchQueue.main.async {
+                                let status = (response as? HTTPURLResponse)?.statusCode
+                                guard error == nil, status == 200, let data, data.count <= 24000,
+                                      let envelope = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { done(nil); return }
+                                done(NativeDeviceContext.verify(envelope, publicKey: key, nonce: nonce, device: device))
+                            }
+                        }.resume()
+                    }
+                }
+                return true
+            },
+            schedule: { delay, fire in
+                let timer = Timer(timeInterval: max(delay, 0), repeats: false) { _ in fire() }
+                RunLoop.main.add(timer, forMode: .common)
+                return { timer.invalidate() }
+            },
+            monotonic: NativeExit.systemMonotonic,
+            release: {
+                DebugLog.log("lock", "native lock released from the relaunch block screen")
+                LockdownController.shared.releaseNativeLock()
+                setup.clear()
+            })
+        let poller = NativeRecoveryRelease(state: state, deps: deps)
+        recoveryRelease = poller
+        poller.start()
     }
 
     private func attemptNativeRecovery() {
@@ -137,6 +186,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         if LockdownController.shared.acquireNativeLock(recovering: true) {
             recoveryTimer?.invalidate(); recoveryTimer = nil
             recoveredState = nil
+            recoveryRelease?.stop(); recoveryRelease = nil
             hideBlocking()
             webView.stopLoading()
             webView.isHidden = true
@@ -146,7 +196,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         enterLockedMode()
         let union = NSScreen.screens.reduce(NSRect.zero) { $0.union($1.frame) }
         window?.setFrame(union.isEmpty ? (NSScreen.main?.frame ?? .zero) : union, display: true)
-        showBlocking(reason: "FairPlay could not lock this Mac again.\nAllow FairPlay in System Settings > Privacy & Security > Accessibility. This Mac stays locked until then.\nAsk your instructor for an exit code.", quitAction: nil)
+        showBlocking(reason: "FairPlay could not lock this Mac again.\nAllow FairPlay in System Settings > Privacy & Security > Accessibility. This Mac stays locked until then.\nYour instructor can release this Mac from DKU OJ.", quitAction: nil, calm: true)
+        startRecoveryRelease(state)
         if recoveryTimer == nil {
             let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.attemptNativeRecovery() }
             RunLoop.main.add(timer, forMode: .common)
@@ -161,43 +212,11 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard recoveredState != nil || LockdownController.shared.nativeLockActive else { return }
         let setup = NativeLockSetup.live
         setup.background { [weak self] in
-            let snapshot = setup.leaveSnapshot()
-            let code = snapshot.text, development = snapshot.development, version = snapshot.version
-            setup.onMain {
-                guard let self else { return }
-                let prompt = NativeLeavePrompt(lockCode: code, developmentCode: development,
-                                               lockVersion: { setup.registrar.lockIdChanges }, shownVersion: version,
-                                                            isRefused: { NativeExit.isRefused(setup.store.load()) }, reload: setup.reloadLeaveCode,
-                                               submit: { [weak self] typed in
-                    let (result, ticket) = NativeExit.attemptTicketed(typed: typed, store: setup.store, now: Date())
-                    if result == .accepted {
-                        return NativeExit.releaseIfCurrent(ticket, store: setup.store) { self?.finishLeaveWithoutBrowser(setup) } ? .accepted : .stale
-                    }
-                    return result
-                }, submitAsync: { [weak self] typed, done in
-                    NativeExit.attemptInBackground(typed: typed, store: setup.store, now: Date(), monotonic: NativeExit.systemMonotonic()) { result, ticket in
-                        if result == .accepted {
-                            let released = NativeExit.releaseIfCurrent(ticket, store: setup.store) { self?.finishLeaveWithoutBrowser(setup) }
-                            done(released ? .accepted : .stale)
-                            return
-                        }
-                        done(result)
-                    }
-                })
-                NativeLeaveSheet.present(prompt, in: self.window)
-            }
+            _ = setup.leaveSnapshot()
+            setup.onMain { NativeLeaveSheet.present(in: self?.window) }
         }
     }
 
-    private func finishLeaveWithoutBrowser(_ setup: NativeLockSetup) {
-        recoveryTimer?.invalidate(); recoveryTimer = nil
-        recoveredState = nil
-        LockdownController.shared.releaseNativeLock()
-        setup.clear()
-        webView.isHidden = false
-        takeFocus()
-        showProtectedBrowser()
-    }
 
     func openUniversityExam(_ key: String) {
         guard AppSession.isSafeToken(key, min: 1, max: 128), !LockdownController.shared.isLocked,
@@ -1467,9 +1486,9 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     private var blockingAction: (() -> Void)?
     private var blockingButton: NSButton?
 
-    func showBlocking(reason: String, quitAction: (() -> Void)?) {
+    func showBlocking(reason: String, quitAction: (() -> Void)?, calm: Bool = false) {
         blockingAction = quitAction
-        if blockingView == nil { DebugLog.log("lock", "red blocking screen shown") }
+        if blockingView == nil { DebugLog.log("lock", calm ? "calm blocking screen shown" : "red blocking screen shown") }
         if blockingView != nil {
             blockingLabel?.stringValue = reason
             blockingButton?.isHidden = quitAction == nil
@@ -1479,7 +1498,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         let v = NSView(frame: content.bounds)
         v.autoresizingMask = [.width, .height]
         v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor(calibratedRed: 0.55, green: 0.15, blue: 0.05, alpha: 0.97).cgColor
+        v.layer?.backgroundColor = (calm ? NSColor(calibratedRed: 0.10, green: 0.14, blue: 0.22, alpha: 1)
+            : NSColor(calibratedRed: 0.55, green: 0.15, blue: 0.05, alpha: 0.97)).cgColor
         let l = label(reason, size: 22, weight: .semibold)
         l.preferredMaxLayoutWidth = 760
         let b = NSButton(title: "Quit these apps now", target: self, action: #selector(blockingButtonPressed))
@@ -1615,9 +1635,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     func promptEmergencyExit() {
         DebugLog.log("exit", "exit prompt requested (locked=\(LockdownController.shared.isLocked))")
-        guard !LockdownController.shared.nativeLockActive else { presentNativeLeave(); return }
         switch PreLockState.emergencyExitAction(locked: LockdownController.shared.isLocked,
-                                               deviceTestRunning: deviceTest.isRunning) {
+                                               deviceTestRunning: deviceTest.isRunning,
+                                               nativeLock: LockdownController.shared.nativeLockActive || recoveredState != nil) {
+        case .nativeLeave:
+            presentNativeLeave()
+            return
         case .leaveUnlockedPractice:
             deviceTest.end(.leave)
             return
@@ -1707,7 +1730,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     /// Offline exit: show the Mac code, check the invigilator's answer locally.
     func promptOfflineExit(reason: String?) {
-        guard !LockdownController.shared.nativeLockActive else { return }
+        guard !LockdownController.shared.nativeLockActive, recoveredState == nil else { return }
         guard LockdownController.shared.isLocked, let win = window, win.attachedSheet == nil else { return }
         guard OfflineExit.isAvailable else {
             DebugLog.log("exit", "offline exit not available: no offline key for this exam")

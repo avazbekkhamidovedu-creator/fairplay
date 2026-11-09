@@ -54,9 +54,14 @@ private final class FailingStore: NativeLockStoring {
         #expect(!text.contains(NativeExit.code(key: opened, lockId: state.lockId)))
     }
 
+    @Test func gatewayAndOverloadStatusesAreRetryableRefusalsAreNot() {
+        for status in [nil, 429, 502, 503, 504] as [Int?] { #expect(NativeLockSetup.escrowRetryable(status: status)) }
+        for status in [200, 400, 403, 409, 422, 500] as [Int?] { #expect(!NativeLockSetup.escrowRetryable(status: status)) }
+    }
+
     @Test func anythingButExactly201OkMeansNoStateAndNoLock() {
         let key = serverPrivate.publicKey.rawRepresentation
-        for status in [200, 202, 403, 409, 422, 429, 503, 500] as [Int?] + [nil] {
+        for status in [200, 202, 403, 409, 422, 429, 502, 503, 504, 500] as [Int?] + [nil] {
             let store = InMemoryNativeLockStore()
             let result = run(setup(store: store, key: key, isDev: false, status: status))
             #expect(result == .failure(.escrow), "\(String(describing: status))")

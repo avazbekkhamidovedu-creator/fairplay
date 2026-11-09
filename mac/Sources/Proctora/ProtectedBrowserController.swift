@@ -106,7 +106,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             if hard { view.reloadFromOrigin() } else { view.reload() }
         }
         var showError: (WKWebView, String, URL) -> WKNavigation? = { $0.loadHTMLString($1, baseURL: $2) }
-        var presentLeave: (NativeLeavePrompt, NSWindow?) -> Void = { _, _ in }
+        var presentLeave: (NSWindow?) -> Void = { _ in }
         var setup: NativeLockSetup = .dev
         var now: () -> Date = Date.init
         var monotonic: () -> NativeExit.Monotonic = NativeExit.systemMonotonic
@@ -127,7 +127,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     release: { LockdownController.shared.releaseNativeLock() },
                     load: { $0.load(URLRequest(url: $1)) })
             effects.setup = .live
-            effects.presentLeave = { NativeLeaveSheet.present($0, in: $1) }
+            effects.presentLeave = { NativeLeaveSheet.present(in: $0) }
             return effects
         }
     }
@@ -546,7 +546,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     self.startButton?.isEnabled = true
                     self.destinationPicker?.isEnabled = true
                     self.notice?.stringValue = self.recoveringLock
-                        ? "FairPlay could not reopen DKU OJ. This Mac stays locked. Ask your instructor for an exit code."
+                        ? "FairPlay could not reopen DKU OJ. This Mac stays locked. Your instructor can release it from DKU OJ."
                         : "The Mac could not be locked. Recheck permissions and try again. No university page was opened."
                 }
             }
@@ -579,7 +579,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard let parsed = ProtectedBrowserPolicy(start: selection.url.absoluteString, additionalOrigins: selection.additionalOrigins,
                                                   forbiddenOrigin: Config.serverURL, allowHTTP: selection.url.scheme == "http"),
               let token = flow.prepare() else {
-            notice.stringValue = "FairPlay could not reopen DKU OJ. This Mac stays locked. Ask your instructor for an exit code."
+            notice.stringValue = "FairPlay could not reopen DKU OJ. This Mac stays locked. Your instructor can release it from DKU OJ."
             return
         }
         compileAndActivate(parsed, token: token, acquire: { [weak self] in self?.effects.ownsLock() == true })
@@ -591,7 +591,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func open(_ policy: ProtectedBrowserPolicy, rules: WKContentRuleList) {
         guard let root = overlay, !held else {
-            notice?.stringValue = "A security check interrupted startup. Use Leave with your instructor's exit code, then start again."
+            notice?.stringValue = "A security check interrupted startup. Ask your instructor to release this Mac from DKU OJ, then start again."
             return
         }
         self.policy = policy
@@ -713,7 +713,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         case .ready: notice?.stringValue = activeExamBinding == nil ? "Protected browsing" : "Exam in progress"
         case .loading: notice?.stringValue = "Loading…"
         case .failed: notice?.stringValue = failureDescription.map { "Could not load this page: " + $0 } ?? "Could not load this page. Try Reload."
-        case .unavailable: notice?.stringValue = "Website stopped. Use Leave with your instructor's exit code."
+        case .unavailable: notice?.stringValue = "Website stopped. Your instructor can release this Mac from DKU OJ."
         case nil: notice?.stringValue = ""
         }
         closePopupButton?.isHidden = orderedTabs.first === browser
@@ -1149,25 +1149,16 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         else { effects.reload(view, hard) }
     }
 
-    /// Before the lock there is nothing to leave. Once the Mac is locked, Leave always needs
-    /// the instructor's exit code (or an OJ-signed receipt, which arrives on its own).
+    /// Before the lock there is nothing to leave. Once the Mac is locked, Leave only explains how
+    /// the lock ends; it also gives a paused registration its next try.
     @objc private func leavePressed() {
         guard flow.ownsLock else { close(release: false); return }
         let setup = effects.setup
         setup.background { [weak self] in
-            let snapshot = setup.leaveSnapshot()
-            let code = snapshot.text, development = snapshot.development, version = snapshot.version
+            _ = setup.leaveSnapshot()
             setup.onMain {
                 guard let self, self.flow.ownsLock else { return }
-                self.effects.presentLeave(NativeLeavePrompt(lockCode: code, developmentCode: development,
-                                                            lockVersion: { setup.registrar.lockIdChanges }, shownVersion: version,
-                                                            isRefused: { NativeExit.isRefused(setup.store.load()) }, reload: setup.reloadLeaveCode,
-                                                            submit: { [weak self] in self?.submitLeaveCode($0) ?? .malformed },
-                                                            submitAsync: { [weak self] typed, done in
-                                                                guard let self else { done(.malformed); return }
-                                                                self.submitLeaveCodeInBackground(typed, completion: done)
-                                                            }),
-                                          self.overlay?.window)
+                self.effects.presentLeave(self.overlay?.window)
             }
         }
     }
@@ -1230,13 +1221,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         cookies.filter { $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == origin.host && endpoint.path.hasPrefix($0.path) }
     }
 
-    static let lockConflictText = "This Mac code belongs to another exam or student. Your Mac stays locked. Ask your instructor for help."
+    static let lockConflictText = "This lock belongs to another exam or student. Your Mac stays locked. Ask your instructor for help."
 
     static func isLockConflict(status: Int?, data: Data?) -> Bool {
         guard status == 409, let data, data.count <= 4096,
               let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let message = body["error"] as? String else { return false }
-        return message.contains("Mac code belongs to another")
+        return message.contains("Mac code belongs to another") || message.contains("lock belongs to another")
     }
 
     static let claimConflictText = "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry, or ask your instructor to move you to this computer."
@@ -1506,7 +1497,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     static let rejectedText = "DKU OJ rejected this session. Your Mac remains locked. Ask your instructor to release it."
     static let holdText = "Session on hold. Your instructor can unlock and reopen your exam."
-    static let beginText = "Continue locks this Mac until you finish the exam or your instructor gives you an exit code. Start only when your exam is about to begin."
+    static let beginText = "Continue locks this Mac until you finish the exam or your instructor releases this Mac from DKU OJ. Start only when your exam is about to begin."
     private var holdLabel: NSTextField?
     var isOnHold: Bool { holdLabel != nil }
 

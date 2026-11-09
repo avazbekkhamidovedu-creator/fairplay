@@ -4,7 +4,7 @@ import AppKit
 import WebKit
 @testable import Proctora
 
-private enum Source {
+enum Source {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     static func text(_ relative: String) throws -> String {
         try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
@@ -44,8 +44,8 @@ private enum Source {
             #expect(!text.lowercased().contains("restart the mac"), "\(file)")
             #expect(!text.contains("Restarting the Mac"), "\(file)")
         }
-        let lock = try Source.text("Sources/Proctora/LockdownController.swift")
-        #expect(lock.contains("Ask your instructor for an exit code."))
+        let screen = try Source.text("Sources/Proctora/NativeLock.swift")
+        #expect(screen.contains("Ask your instructor for an exit code."))
     }
 
     @Test func theOfflineExitDialogAndThePromptAreOutOfTheNativeLockPath() throws {
