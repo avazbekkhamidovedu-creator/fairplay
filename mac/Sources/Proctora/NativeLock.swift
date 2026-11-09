@@ -53,17 +53,23 @@ struct NativeLockSetup {
         return NativeRenewSchedule.equalJitter(step: NativeRenewSchedule.step(forFailure: count - 1), random: r)
     }
 
+    typealias RegisterTransport = (_ body: Data, _ done: @escaping (_ status: Int?, _ data: Data?, _ retryAfter: TimeInterval?) -> Void) -> Void
+
     var store: NativeLockStoring
     var publicKey: Data?
     var isDev: Bool
     var device: () -> String
     var transport: Transport
+    /// Like `transport` but also reports Retry-After; the background registration uses it when set.
+    var registerTransport: RegisterTransport? = nil
+    let registrar = NativeLockRegistrar()
     var loginItem: LoginItemRegistering
     var iterations: Int? = nil
     /// Development builds only, used when no escrow key is built in: a known exit key, so the lock can be left.
     var devKey: Data? = nil
     var newKey: () -> Data = NativeExit.newKey
     var random: () -> Double = { Double.random(in: 0..<1) }
+    var now: () -> Date = Date.init
     var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var background: (@escaping () -> Void) -> Void = { work in
         nonisolated(unsafe) let work = work
@@ -83,16 +89,19 @@ struct NativeLockSetup {
                         iterations: 2_000)
     }
 
-    static var live: NativeLockSetup {
+    static var live: NativeLockSetup { liveSetup }
+
+    private static let liveSetup: NativeLockSetup = {
         var setup = NativeLockSetup(store: DualNativeLockStore(primary: KeychainNativeLockStore(), secondary: FileNativeLockStore()),
                                     publicKey: Config.nativeExitPublicKey, isDev: Config.isDevBuild,
                                     device: { AppSession.shared.deviceId }, transport: serverTransport,
                                     loginItem: Config.isDevBuild ? NoLoginItem() : SystemLoginItem())
+        setup.registerTransport = serverRegisterTransport
         #if FAIRPLAY_DEV
         setup.devKey = NativeExit.developmentKey
         #endif
         return setup
-    }
+    }()
 
     /// The exit code a development lock without escrow accepts; nil whenever the code is not knowable.
     func developmentCode(lockId: String) -> String? {
@@ -101,6 +110,10 @@ struct NativeLockSetup {
     }
 
     static func serverTransport(_ body: Data, _ done: @escaping (Int?, Data?) -> Void) {
+        serverRegisterTransport(body) { status, data, _ in done(status, data) }
+    }
+
+    static func serverRegisterTransport(_ body: Data, _ done: @escaping (Int?, Data?, TimeInterval?) -> Void) {
         var request = URLRequest(url: Config.serverURL.appendingPathComponent("api/native-exit/locks"), timeoutInterval: LoadTimeouts.request)
         request.httpMethod = "POST"
         request.httpBody = body
@@ -109,8 +122,9 @@ struct NativeLockSetup {
         request.setValue(Config.version, forHTTPHeaderField: "X-FairPlay-Version")
         request.setValue("mac", forHTTPHeaderField: "X-FairPlay-Platform")
         Net.session.dataTask(with: request) { data, response, _ in
-            let status = (response as? HTTPURLResponse)?.statusCode
-            DispatchQueue.main.async { done(status, data) }
+            let http = response as? HTTPURLResponse
+            let retryAfter = NativeRenewSchedule.retryAfter(http?.value(forHTTPHeaderField: "Retry-After"))
+            DispatchQueue.main.async { done(http?.statusCode, data, retryAfter) }
         }.resume()
     }
 
@@ -179,11 +193,195 @@ struct NativeLockSetup {
 
     /// Deletes both copies and stops reopening the app after a reboot.
     func clear() {
-        NativeLockGate.run { store.delete() }
+        NativeLockGate.run {
+            registrar.cancel()
+            store.delete()
+        }
         loginItem.unregister()
     }
 
     func registerLoginItem() { loginItem.register() }
+
+    /// A relaunched lock with no verifier (state recreated after a crash, or the Keychain copy lost) is not known to the server, or
+    /// not with a key this Mac still has. Registers it in the background; the verifier counts as saved only when it reads back
+    /// from the store the app trusts (the Keychain), only if the saved lock is still this one, and only while this lock session
+    /// is current. An id the server already holds under another key (409) is replaced by a fresh id and key. Transient failures
+    /// are retried with long waits, a bounded number of times per run; after that the run pauses and is re-armed by a timer or the
+    /// next Leave sheet. Only 403/422 or a missing key stop it for good. The code still comes only from the server or the instructor.
+    func registerMissingVerifier(for saved: NativeLockState) {
+        guard saved.verifier == nil else { return }
+        guard let publicKey, publicKey.count == 32 else {
+            DebugLog.log("lock", "background registration not started: no usable server key in this build")
+            registrar.markNoKey()
+            return
+        }
+        var notYet: TimeInterval?
+        let started: Int? = NativeLockGate.run {
+            guard let current = store.load(), current.lockId == saved.lockId, current.verifier == nil else { return nil }
+            if let notBefore = current.retryNotBefore, now() < notBefore {
+                notYet = notBefore.timeIntervalSince(now())
+                registrar.markPaused()
+                return nil
+            }
+            return registrar.begin()
+        }
+        if let notYet { rearmAfter(max(notYet, 1)) }
+        guard let token = started else { return }
+        let originalId = saved.lockId
+        let deviceId = device()
+        let send = registerTransport ?? { body, done in transport(body) { done($0, $1, nil) } }
+
+        func prepare(_ lockId: String, then use: @escaping (Registration?) -> Void) {
+            let iterations = self.iterations, newKey = self.newKey
+            nonisolated(unsafe) let work = {
+                var key = newKey()
+                let verifier = NativeExit.makeVerifier(code: NativeExit.code(key: key, lockId: lockId), lockId: lockId,
+                                                       iterations: iterations ?? NativeExit.calibratedIterations())
+                var made: Registration?
+                if let blob = try? NativeExit.seal(key: key, lockId: lockId, serverPublic: publicKey),
+                   let body = try? NativeExit.escrowBody(lockId: lockId, blob: blob, device: deviceId) {
+                    made = Registration(lockId: lockId, verifier: verifier, body: body)
+                }
+                key.resetBytes(in: 0..<key.count)
+                nonisolated(unsafe) let result = made
+                self.onMain { use(result) }
+            }
+            background(work)
+        }
+
+        func stop(_ status: NativeLockRegistrar.Status, _ why: String) {
+            DebugLog.log("lock", "background registration stopped: \(why)")
+            registrar.stop(token, as: status)
+            if status == .paused { rearmAfter(NativeLockRegistrar.rearmInterval) }
+        }
+
+        func holdOff(_ pause: TimeInterval) {
+            NativeLockGate.run {
+                guard registrar.isCurrent(token), var st = store.load(), st.lockId == originalId, st.verifier == nil else { return }
+                let until = now().addingTimeInterval(pause)
+                guard (st.retryNotBefore ?? .distantPast) < until else { return }
+                st.retryNotBefore = until
+                try? store.save(st)
+            }
+        }
+
+        func attempt(_ reg: Registration, failures: Int, fresh: Int) {
+            NativeLockGate.run {
+                guard registrar.isCurrent(token) else { return }
+                send(reg.body) { status, data, retryAfter in
+                    guard registrar.isCurrent(token) else { return }
+                    if Self.escrowSucceeded(status: status, data: data) {
+                        switch commit(reg) {
+                        case .saved, .gone: registrar.finish(token)
+                        case .failed: retry(reg, failures: failures, fresh: fresh, retryAfter: nil, why: "the exit code could not be saved in the Keychain", serverAnswered: false)
+                        }
+                        return
+                    }
+                    if status == 409 {
+                        guard fresh < NativeLockRegistrar.freshIdLimit else { stop(.paused, "the server keeps reporting this id as taken"); return }
+                        prepare(NativeExit.newLockId()) { next in
+                            guard registrar.isCurrent(token) else { return }
+                            guard let next else { stop(.noKey, "the exit key could not be sealed"); return }
+                            attempt(next, failures: 0, fresh: fresh + 1)
+                        }
+                        return
+                    }
+                    guard NativeLockRegistrar.retryable(status: status) else {
+                        stop(.refused, "the server refused it (\(status ?? 0)); not retrying")
+                        return
+                    }
+                    retry(reg, failures: failures, fresh: fresh, retryAfter: retryAfter, why: "server answer \(status ?? 0)")
+                }
+            }
+        }
+
+        func retry(_ reg: Registration, failures: Int, fresh: Int, retryAfter: TimeInterval?, why: String, serverAnswered: Bool = true) {
+            let pause = NativeLockRegistrar.wait(afterFailure: failures + 1, random: random(), retryAfter: retryAfter)
+            if serverAnswered { holdOff(pause) }
+            guard failures + 1 < NativeLockRegistrar.attemptsPerRun else {
+                stop(.paused, "\(NativeLockRegistrar.attemptsPerRun) tries failed (last: \(why)); trying again later")
+                return
+            }
+            wait(pause) { attempt(reg, failures: failures + 1, fresh: fresh) }
+        }
+
+        enum Committed { case saved, gone, failed }
+        func commit(_ reg: Registration) -> Committed {
+            NativeLockGate.run {
+                guard registrar.isCurrent(token), let prior = store.load(), prior.lockId == originalId, prior.verifier == nil else { return .gone }
+                var next = prior
+                next.lockId = reg.lockId
+                next.verifier = reg.verifier
+                next.keychainLost = false
+                next = Self.budgetAfterRegistration(next)
+                do { try store.save(next) } catch { try? store.save(prior); return .failed }
+                guard let trusted = store.loadTrusted(), trusted.lockId == reg.lockId, trusted.verifier == reg.verifier else {
+                    try? store.save(prior)
+                    return .failed
+                }
+                registrar.noteRegistrationChanged()
+                return .saved
+            }
+        }
+
+        func rearmAfter(_ delay: TimeInterval) {
+            let slot = registrar.newRearm()
+            wait(delay) {
+                guard registrar.isCurrentRearm(slot) else { return }
+                background {
+                    let current = store.load()
+                    onMain { if let current { registerMissingVerifier(for: current) } }
+                }
+            }
+        }
+
+        prepare(originalId) { first in
+            guard registrar.isCurrent(token) else { return }
+            guard let first else { stop(.noKey, "the exit key could not be sealed"); return }
+            attempt(first, failures: 0, fresh: 0)
+        }
+    }
+
+    /// The wait, counters and hourly guess ledger carry over to a fresh id: deleting the Keychain item and registering
+    /// again must not hand out new guesses. One round of attempts is still left, because the verifier is new and
+    /// independent of every earlier guess, so the right code works once the wait is over.
+    static func budgetAfterRegistration(_ s: NativeLockState) -> NativeLockState {
+        var t = s
+        t.attempts = min(t.attempts, NativeExit.maxTotalAttempts - NativeExit.maxWrong)
+        t.retryNotBefore = nil
+        return t
+    }
+
+    struct LeaveSnapshot {
+        let lock: NativeLockState?
+        let text: String
+        let development: String?
+        /// `lockIdChanges` read before the lock was; a later value means `text` is stale.
+        var version = 0
+    }
+
+    /// For the Leave sheet; call off the main thread. Also gives a paused or never-started registration its next try.
+    func leaveSnapshot() -> LeaveSnapshot {
+        let version = registrar.lockIdChanges
+        let lock = store.load()
+        if let lock { registerMissingVerifier(for: lock) }
+        let development = lock.flatMap { developmentCode(lockId: $0.lockId) }
+        return LeaveSnapshot(lock: lock, text: NativeExit.leaveCodeText(lock, registration: registrar.status), development: development, version: version)
+    }
+
+    /// Reads the current code text for a Leave sheet that is already open; `done` runs on main.
+    func reloadLeaveCode(_ done: @escaping (_ text: String, _ development: String?) -> Void) {
+        background {
+            let snapshot = leaveSnapshot()
+            onMain { done(snapshot.text, snapshot.development) }
+        }
+    }
+
+    private struct Registration {
+        let lockId: String
+        let verifier: NativeLockState.Verifier
+        let body: Data
+    }
 
     func persist(contest: String?, binding: NativeDeviceContext.Binding?) {
         NativeLockGate.run {
@@ -214,6 +412,97 @@ struct NativeLockSetup {
             state.unclean = false
             try? store.save(state)
         }
+    }
+}
+
+/// Which background registration is current. Cancelled when the lock is cleared, so a released lock's
+/// retry can never register or save anything once a new lock exists.
+final class NativeLockRegistrar {
+    static let firstWait: TimeInterval = 60
+    static let waitCap: TimeInterval = 900
+    static let retryAfterCap: TimeInterval = 86_400
+    static let freshIdLimit = 3
+    static let attemptsPerRun = 12
+    static let rearmInterval: TimeInterval = 1_800
+
+    enum Status: Equatable {
+        case idle, retrying
+        /// Out of tries for now; a timer or the next Leave sheet starts again.
+        case paused
+        /// 403/422: the server will not take this lock. Final until the lock is cleared.
+        case refused
+        /// No usable server key in this build. Final until the lock is cleared.
+        case noKey
+    }
+
+    private let mutex = NSLock()
+    private var session = 0
+    private var active = false
+    private var stopped = Status.idle
+    private var idChanges = 0
+
+    var status: Status { mutex.lock(); defer { mutex.unlock() }; return active ? .retrying : stopped }
+    var isRetrying: Bool { status == .retrying }
+
+    /// Bumped whenever a registration was saved (a new lock id, or the verifier and budget restored under the same id),
+    /// so an open Leave sheet can tell what it shows is stale.
+    var lockIdChanges: Int { mutex.lock(); defer { mutex.unlock() }; return idChanges }
+    func noteRegistrationChanged() { mutex.lock(); idChanges += 1; mutex.unlock() }
+
+    private var rearm = 0
+
+    /// One pending re-arm timer at a time; a newer one, or `cancel()`, makes the older one do nothing.
+    func newRearm() -> Int { mutex.lock(); defer { mutex.unlock() }; rearm += 1; return rearm }
+    func isCurrentRearm(_ slot: Int) -> Bool { mutex.lock(); defer { mutex.unlock() }; return rearm == slot }
+
+    /// nil while one is already running or the server has refused this lock for good.
+    func begin() -> Int? {
+        mutex.lock(); defer { mutex.unlock() }
+        guard !active, stopped != .refused, stopped != .noKey else { return nil }
+        session += 1
+        active = true
+        stopped = .idle
+        return session
+    }
+
+    func isCurrent(_ token: Int) -> Bool { mutex.lock(); defer { mutex.unlock() }; return active && session == token }
+
+    func finish(_ token: Int) {
+        mutex.lock(); defer { mutex.unlock() }
+        if session == token { active = false }
+    }
+
+    func stop(_ token: Int, as status: Status) {
+        mutex.lock(); defer { mutex.unlock() }
+        if session == token, active { active = false; stopped = status }
+    }
+
+    func markPaused() {
+        mutex.lock(); defer { mutex.unlock() }
+        if !active, stopped == .idle { stopped = .paused }
+    }
+
+    func markNoKey() {
+        mutex.lock(); defer { mutex.unlock() }
+        if !active { stopped = .noKey }
+    }
+
+    func cancel() {
+        mutex.lock(); defer { mutex.unlock() }
+        session += 1
+        rearm += 1
+        active = false
+        stopped = .idle
+    }
+
+    /// Only a refusal (403/422, answered by 409 separately) is final; no answer, 429, 5xx and anything unexpected are tried again.
+    static func retryable(status: Int?) -> Bool { status != 403 && status != 422 }
+
+    /// 60 s doubling to 15 min with half-step jitter; a server Retry-After is never undercut (up to a day).
+    static func wait(afterFailure count: Int, random: Double, retryAfter: TimeInterval?) -> TimeInterval {
+        let step = min(waitCap, firstWait * pow(2, Double(max(count, 1) - 1)))
+        let jittered = step / 2 + min(max(random, 0), 1) * step / 2
+        return max(jittered, min(retryAfter ?? 0, retryAfterCap))
     }
 }
 

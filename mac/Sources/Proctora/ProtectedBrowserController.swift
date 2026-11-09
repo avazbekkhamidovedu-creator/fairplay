@@ -30,6 +30,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var nativeGeneration = UUID()
     private lazy var nativeIdentity = NativeBrowserIdentity(origin: UniversityDestination.dkuOJ.url,
         ownsLock: { [weak self] in self?.lockIsOwned == true })
+    private var failureDescription: String?
+    private var errorPageNavigation: WKNavigation?
     private lazy var nativeHTTP = nativeIdentity.makeSession()
     private var failureLog = RepeatedFailureLog()
     private var renewCancel: (() -> Void)?
@@ -85,6 +87,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var navigationState: ProtectedBrowserNavigation?
     private var activeNavigation: WKNavigation?
     private var policyDenial: ProtectedBrowserPolicyDenial?
+    private var activeDownloads: [ObjectIdentifier: (download: WKDownload, watch: NSKeyValueObservation?, file: URL?)] = [:]
     private var ruleIdentifier: String?
     private var pendingRuleIdentifier: String?
     private var held = false
@@ -102,6 +105,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         var reload: (WKWebView, Bool) -> Void = { view, hard in
             if hard { view.reloadFromOrigin() } else { view.reload() }
         }
+        var showError: (WKWebView, String, URL) -> WKNavigation? = { $0.loadHTMLString($1, baseURL: $2) }
         var presentLeave: (NativeLeavePrompt, NSWindow?) -> Void = { _, _ in }
         var setup: NativeLockSetup = .dev
         var now: () -> Date = Date.init
@@ -255,6 +259,26 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         return status < 500
     }
 
+    static let transportUnavailableText = "DKU OJ is unavailable. Check your connection and try again. Your Mac is still unlocked."
+
+    /// A transport error keeps the app text; an HTTP answer is shown with its status and the OJ page's own title.
+    static func preLockUnavailableNotice(status: Int?, failed: Bool, data: Data?) -> String {
+        guard !failed, let status else { return transportUnavailableText }
+        return "DKU OJ answered HTTP \(status)" + (OJPage.summary(data).map { ": " + $0 } ?? "") + ". Your Mac is still unlocked."
+    }
+
+    static func errorPageHTML(description: String, url: URL?) -> String {
+        func esc(_ t: String) -> String {
+            t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        return "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + esc(description)
+            + "</title></head><body style=\"font-family:-apple-system,sans-serif;margin:12vh auto;max-width:560px;color:#222\">"
+            + "<h2>This page can\u{2019}t be reached</h2><p>" + esc(description) + "</p>"
+            + (url.map { "<p style=\"color:#666;word-break:break-all\">" + esc($0.absoluteString) + "</p>" } ?? "")
+            + "</body></html>"
+    }
+
     var examBinding: String? { activeExamBinding }
     var approvedSitesExpiry: Date? { policyExpires }
     var restoredBinding: NativeDeviceContext.Binding? { nativeExam.binding }
@@ -297,12 +321,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         #endif
         var request = URLRequest(url: probe.appendingPathComponent("accounts/login/"))
         request.timeoutInterval = LoadTimeouts.request
-        nativeHTTP.dataTask(with: request) { [weak self] _, response, error in
+        nativeHTTP.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self, self.isOpen, self.flow.state == .setup else { return }
                 self.startButton?.isEnabled = true
-                guard Self.ojReachable(status: (response as? HTTPURLResponse)?.statusCode, failed: error != nil) else {
-                    self.notice?.stringValue = "DKU OJ is unavailable. Check your connection and try again. Your Mac is still unlocked."
+                let status = (response as? HTTPURLResponse)?.statusCode
+                guard Self.ojReachable(status: status, failed: error != nil) else {
+                    self.notice?.stringValue = Self.preLockUnavailableNotice(status: status, failed: error != nil, data: data)
                     return
                 }
                 self.prepareDraftStorage(allowInteraction: false)
@@ -687,7 +712,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         switch navigationState?.phase {
         case .ready: notice?.stringValue = activeExamBinding == nil ? "Protected browsing" : "Exam in progress"
         case .loading: notice?.stringValue = "Loading…"
-        case .failed: notice?.stringValue = "Could not load this page. Try Reload."
+        case .failed: notice?.stringValue = failureDescription.map { "Could not load this page: " + $0 } ?? "Could not load this page. Try Reload."
         case .unavailable: notice?.stringValue = "Website stopped. Use Leave with your instructor's exit code."
         case nil: notice?.stringValue = ""
         }
@@ -1130,12 +1155,14 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard flow.ownsLock else { close(release: false); return }
         let setup = effects.setup
         setup.background { [weak self] in
-            let lock = setup.store.load()
-            let code = lock.map { NativeExit.display($0.lockId) } ?? ""
-            let development = lock.flatMap { setup.developmentCode(lockId: $0.lockId) }
+            let snapshot = setup.leaveSnapshot()
+            let code = snapshot.text, development = snapshot.development, version = snapshot.version
             setup.onMain {
                 guard let self, self.flow.ownsLock else { return }
-                self.effects.presentLeave(NativeLeavePrompt(lockCode: code, developmentCode: development, submit: { [weak self] in self?.submitLeaveCode($0) ?? .malformed },
+                self.effects.presentLeave(NativeLeavePrompt(lockCode: code, developmentCode: development,
+                                                            lockVersion: { setup.registrar.lockIdChanges }, shownVersion: version,
+                                                            isRefused: { NativeExit.isRefused(setup.store.load()) }, reload: setup.reloadLeaveCode,
+                                                            submit: { [weak self] in self?.submitLeaveCode($0) ?? .malformed },
                                                             submitAsync: { [weak self] typed, done in
                                                                 guard let self else { done(.malformed); return }
                                                                 self.submitLeaveCodeInBackground(typed, completion: done)
@@ -1149,8 +1176,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     @discardableResult
     func submitLeaveCode(_ typed: String) -> NativeExitAttempt {
         guard flow.ownsLock else { return .malformed }
-        let result = NativeExit.attempt(typed: typed, store: effects.setup.store, now: effects.now(), monotonic: effects.monotonic)
-        if result == .accepted { completeLeave() }
+        let (result, ticket) = NativeExit.attemptTicketed(typed: typed, store: effects.setup.store, now: effects.now(), monotonic: effects.monotonic)
+        if result == .accepted { return completeLeaveIfCurrent(ticket) ? .accepted : .stale }
         return result
     }
 
@@ -1161,16 +1188,22 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     func submitLeaveCodeInBackground(_ typed: String, completion: @escaping (NativeExitAttempt) -> Void) {
         guard flow.ownsLock, !leaveInFlight else { completion(.malformed); return }
         leaveInFlight = true
-        NativeExit.attemptInBackground(typed: typed, store: effects.setup.store, now: effects.now(), monotonic: effects.monotonic()) { [weak self] result in
+        NativeExit.attemptInBackground(typed: typed, store: effects.setup.store, now: effects.now(), monotonic: effects.monotonic()) { [weak self] result, ticket in
             guard let self else { completion(result); return }
             self.leaveInFlight = false
-            if result == .accepted, self.flow.ownsLock { self.completeLeave() }
+            if result == .accepted {
+                guard self.flow.ownsLock, self.completeLeaveIfCurrent(ticket) else { completion(.stale); return }
+            }
             completion(result)
         }
     }
 
     /// Web view first, then the lock, then both saved copies; the OJ is told last and its answer
     /// (409, offline, anything) never undoes the unlock.
+    private func completeLeaveIfCurrent(_ ticket: NativeExit.Ticket?) -> Bool {
+        NativeExit.releaseIfCurrent(ticket, store: effects.setup.store) { completeLeave() }
+    }
+
     private func completeLeave() {
         let session = nativeExam.binding?.session
         let cookies = retainedWebsiteStore
@@ -1249,7 +1282,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     /// reach the OJ keeps the old wording.
     static func nativeFailureNotice(sendsLock: Bool, httpAnswered: Bool, status: Int?, data: Data?, recoverAfterConflict: Bool) -> String? {
         if let own = ojErrorText(status: status, data: data) { return own }
-        if httpAnswered { return sendsLock ? startNotAcceptedText : nil }
+        if httpAnswered {
+            guard sendsLock else { return nil }
+            guard let status else { return startNotAcceptedText }
+            return "DKU OJ answered HTTP \(status)" + (OJPage.summary(data).map { ": " + $0 } ?? "") + "."
+        }
         return recoverAfterConflict ? claimConflictText
             : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
     }
@@ -1602,6 +1639,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 return
             }
         }
+        if tracked(webView), lockIsOwned, action.shouldPerformDownload, let url = action.request.url,
+           let policy, DownloadPolicy.originAllowed(url, trusted: policy.downloadOrigins),
+           policy.allows(url, mainFrame: action.targetFrame?.isMainFrame ?? true) {
+            decisionHandler(.download); return
+        }
         let initialPopupBlank = !parents.isEmpty && webView === browser
             && webView.url == nil && action.request.url?.absoluteString == "about:blank"
         let trustedPopupRequest = action.targetFrame == nil && webView === browser
@@ -1641,6 +1683,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         guard webView === browser, lockIsOwned else { return }
+        if navigation === errorPageNavigation { return }
+        failureDescription = nil
         activeNavigation = navigation
         dialogs.cancel()
         navigationState?.started()
@@ -1648,6 +1692,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if navigation != nil, navigation === errorPageNavigation { return }
         guard webView === browser, lockIsOwned, let url = webView.url,
               policy?.allows(url, mainFrame: true) == true else { return }
         navigationState?.committed(url)
@@ -1657,6 +1702,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === browser, lockIsOwned else { return }
+        if navigation === errorPageNavigation { return }
         navigationState?.finished()
         loadRetry.succeeded()
         loadRetryCancel?(); loadRetryCancel = nil
@@ -1719,6 +1765,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let httpStatus = (response.response as? HTTPURLResponse)?.statusCode
         if response.isForMainFrame, httpStatus != nil, ProtectedBrowserPolicy.origin(response.response.url ?? selection.url) == ProtectedBrowserPolicy.origin(selection.url) {
             ojAnswered()
+        }
+        if tracked(webView), lockIsOwned, let policy, let url = response.response.url, (httpStatus ?? 200) < 400,
+           AllowedSites.isAttachment(contentDisposition: disposition) || !response.canShowMIMEType,
+           DownloadPolicy.originAllowed(url, trusted: policy.downloadOrigins),
+           policy.allows(url, mainFrame: response.isForMainFrame) {
+            decisionHandler(.download); return
         }
         // An HTTP error page is the site's own page: show it, never cancel it for its content type.
         let showable = response.canShowMIMEType || (httpStatus ?? 0) >= 400
@@ -1833,6 +1885,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func navigationFailed(_ webView: WKWebView, navigation: WKNavigation?, error: Error) {
         guard webView === browser, lockIsOwned else { return }
+        if navigation != nil, navigation === errorPageNavigation { return }
         let failure = error as NSError
         guard failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled else { return }
         let domain = [NSURLErrorDomain, WKError.errorDomain, "WebKitErrorDomain"].contains(failure.domain) ? failure.domain : "NavigationError"
@@ -1858,7 +1911,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         } ?? ""
         let tls = LoadOutcome.isTLSFailure(domain: failure.domain, code: failure.code)
         navigationState?.failed(diagnostic: tls ? LoadOutcome.tlsNotice : domain + " (" + String(failure.code) + ")" + blockedOrigin)
+        failureDescription = failure.localizedDescription
         updateNavigation()
+        if blockedOrigin.isEmpty, let failedURL, policy?.allows(failedURL, mainFrame: true) == true {
+            errorPageNavigation = effects.showError(webView, Self.errorPageHTML(description: failure.localizedDescription, url: failedURL), failedURL)
+        }
         let ojHost = failedURL.flatMap(ProtectedBrowserPolicy.origin) == ProtectedBrowserPolicy.origin(selection.url)
         // A certificate problem means the host answered: retry, but a VPN is not the fix, so no prompt.
         if blockedOrigin.isEmpty { scheduleLoadRetry(offerVPNPrompt: ojHost && webView === orderedTabs.first && !tls) }
@@ -1866,5 +1923,111 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         navigationFailed(webView, navigation: navigation, error: error)
+    }
+}
+
+enum OJPage {
+    /// The page's own <title>, else its first heading, else its first line of text; nil when there is none.
+    static func summary(_ data: Data?) -> String? {
+        guard let data, !data.isEmpty else { return nil }
+        let html = String(decoding: data.prefix(65536), as: UTF8.self)
+        func match(_ pattern: String) -> String? {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+                  let m = re.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+                  let r = Range(m.range(at: 1), in: html) else { return nil }
+            return clean(String(html[r]))
+        }
+        return match("<title[^>]*>(.*?)</title>") ?? match("<h1[^>]*>(.*?)</h1>")
+            ?? clean(html.replacingOccurrences(of: "<(script|style)[^>]*>.*?</\\1>", with: " ", options: [.regularExpression, .caseInsensitive]))
+    }
+
+    private static func clean(_ raw: String) -> String? {
+        var t = raw.replacingOccurrences(of: "<[^>]*>", with: " ", options: .regularExpression)
+        for (e, c) in [("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'")] { t = t.replacingOccurrences(of: e, with: c) }
+        let line = t.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+        let flat = String(String.UnicodeScalarView(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
+            .split(separator: " ").joined(separator: " ")
+        return flat.isEmpty ? nil : String(flat.prefix(120))
+    }
+}
+
+extension ProtectedBrowserController: WKDownloadDelegate {
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        adopt(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        adopt(download)
+    }
+
+    private func adopt(_ download: WKDownload) {
+        download.delegate = self
+        let watch = download.progress.observe(\.completedUnitCount) { [weak self, weak download] progress, _ in
+            guard progress.completedUnitCount > DownloadPolicy.maxBytes, let download else { return }
+            DispatchQueue.main.async { self?.abort(download, "The download was stopped: it is larger than \(DownloadPolicy.maxBytes / 1_048_576) MB.") }
+        }
+        activeDownloads[ObjectIdentifier(download)] = (download, watch, nil)
+    }
+
+    private func abort(_ download: WKDownload, _ message: String) {
+        guard activeDownloads[ObjectIdentifier(download)] != nil else { return }
+        download.cancel(nil)
+        finish(download, message)
+    }
+
+    private func finish(_ download: WKDownload, _ message: String?, removePartial: Bool = true) {
+        guard let entry = activeDownloads.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        entry.watch?.invalidate()
+        if removePartial, let file = entry.file { try? FileManager.default.removeItem(at: file) }
+        if let message, lockIsOwned { notice?.stringValue = message }
+    }
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
+                  completionHandler: @escaping (URL?) -> Void) {
+        guard lockIsOwned, let policy, DownloadPolicy.originAllowed(response.url, trusted: policy.downloadOrigins) else {
+            finish(download, nil); completionHandler(nil); return
+        }
+        switch DownloadPolicy.decide(suggestedName: suggestedFilename, expectedBytes: response.expectedContentLength) {
+        case .refuse(let reason):
+            finish(download, reason); completionHandler(nil)
+        case .save(let name):
+            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+            let folder = downloads.appendingPathComponent(DownloadPolicy.folderName, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            } catch {
+                finish(download, "Download failed: the folder \(DownloadPolicy.folderName) could not be created."); completionHandler(nil); return
+            }
+            let unique = DownloadPolicy.uniqueName(name) { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
+            let file = folder.appendingPathComponent(unique)
+            activeDownloads[ObjectIdentifier(download)]?.file = file
+            completionHandler(file)
+        }
+    }
+
+    func download(_ download: WKDownload, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                  decisionHandler: @escaping (WKDownload.RedirectPolicy) -> Void) {
+        if lockIsOwned, let policy, DownloadPolicy.originAllowed(request.url, trusted: policy.downloadOrigins) {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+            finish(download, "Download failed: it was redirected to another site.")
+        }
+    }
+
+    func download(_ download: WKDownload, didReceive challenge: URLAuthenticationChallenge,
+                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard lockIsOwned else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+        nativeIdentity.respond(challenge, completion: completionHandler)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        let name = activeDownloads[ObjectIdentifier(download)]?.file?.lastPathComponent
+        finish(download, name.map(DownloadPolicy.statusLine(saved:)), removePartial: false)
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        finish(download, "Download failed: \((error as NSError).localizedDescription)")
     }
 }

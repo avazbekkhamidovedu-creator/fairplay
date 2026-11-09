@@ -293,7 +293,7 @@ private final class FailingStore: NativeLockStoring {
         #expect(attWith(good, s, wall: t0.addingTimeInterval(1_000), mono: 50) == .wait(until: t0.addingTimeInterval(1_300)))
     }
 
-    @Test func theTotalCapRefusesEverythingIncludingTheRightCode() {
+    @Test func theTotalCapRefusesWhileTheHourIsFullAndChecksAgainOnceItFreesUp() {
         let (s, good) = store()
         let bad = wrongCode(good)
         var wall = t0
@@ -304,9 +304,52 @@ private final class FailingStore: NativeLockStoring {
             if case .wait = r { wall = wall.addingTimeInterval(301); mono += 301 }
         }
         #expect(s.load()?.attempts == NativeExit.maxTotalAttempts)
-        #expect(attWith(good, s, wall: wall.addingTimeInterval(86_400), mono: mono + 86_400) == .refused)
-        #expect(att(good, s, t0.addingTimeInterval(10_000_000)) == .refused)
+        #expect(attWith(good, s, wall: wall, mono: mono) == .refused)
+        #expect(attWith(good, s, wall: wall.addingTimeInterval(1_800), mono: mono + 1_800) == .refused)
+        #expect(attWith(good, s, wall: t0.addingTimeInterval(3_599), mono: 1_000 + 3_599) == .refused)
+        #expect(attWith(good, s, wall: wall.addingTimeInterval(86_400), mono: mono + 86_400) == .accepted)
         #expect(NativeLeaveText.message(for: .refused, now: t0) == "Too many attempts. Ask your instructor to release your Mac.")
+    }
+
+    @Test func theGuessLimitRollsInsteadOfResettingAtAFixedPoint() {
+        let (s, good) = store()
+        let bad = wrongCode(good)
+        var st = s.load()!
+        st.attempts = 0
+        st.guessLog = (0..<NativeExit.hourlyGuessCap).map {
+            .init(at: t0.addingTimeInterval(Double($0) * 60), boot: "boot-1", mono: 1_000 + Double($0) * 60)
+        }
+        try? s.save(st)
+        let freeAt = t0.addingTimeInterval(3_600)
+        #expect(attWith(bad, s, wall: t0.addingTimeInterval(1_000), mono: 2_000) == .wait(until: freeAt))
+        guard case .wrong = attWith(bad, s, wall: freeAt.addingTimeInterval(1), mono: 4_601) else { Issue.record("one slot should have freed"); return }
+        #expect(s.load()?.guessLog.count == NativeExit.hourlyGuessCap)
+        #expect(attWith(bad, s, wall: freeAt.addingTimeInterval(2), mono: 4_602) == .wait(until: t0.addingTimeInterval(3_660)))
+    }
+
+    @Test func mergingTheCopiesKeepsTheUnionOfTheNewestGuesses() {
+        let (a, _) = state(), (b, _) = state()
+        var x = a, y = b
+        x.guessLog = (0..<10).map { .init(at: t0.addingTimeInterval(Double($0)), boot: "b", mono: Double($0)) }
+        y.guessLog = (5..<20).map { .init(at: t0.addingTimeInterval(Double($0)), boot: "b", mono: Double($0)) }
+        let m = DualNativeLockStore.merged(x, y)
+        #expect(m.guessLog.count == NativeExit.hourlyGuessCap)
+        #expect(m.guessLog.first?.at == t0.addingTimeInterval(5) && m.guessLog.last?.at == t0.addingTimeInterval(19))
+    }
+
+    @Test func aTicketReleasesOnlyWhileTheSameLockIsStillSaved() {
+        let (s, good) = store()
+        let (result, ticket) = NativeExit.attemptTicketed(typed: good, store: s, now: t0, monotonic: { .init(boot: "b", seconds: 1) })
+        #expect(result == .accepted && ticket != nil)
+        let (replacement, _) = state(lockId: "ZZZZZZZZ")
+        try? s.save(replacement)
+        var released = false
+        #expect(!NativeExit.releaseIfCurrent(ticket, store: s) { released = true })
+        #expect(!released && s.load() == replacement)
+        let (again, _) = store()
+        let (_, fresh) = NativeExit.attemptTicketed(typed: good, store: again, now: t0, monotonic: { .init(boot: "b", seconds: 1) })
+        #expect(NativeExit.releaseIfCurrent(fresh, store: again) { released = true } && released)
+        #expect(!NativeExit.releaseIfCurrent(nil, store: again) { released = false } && released)
     }
 
     @Test func totalAttemptsSurviveAWaitExpiryAndAreNeverReset() {
@@ -320,12 +363,28 @@ private final class FailingStore: NativeLockStoring {
     }
 
     @Test func nativeStoreNamesDifferBetweenDevelopmentAndProduction() {
-        #expect(KeychainNativeLockStore.service(dev: true) != KeychainNativeLockStore.service(dev: false))
-        #expect(KeychainNativeLockStore.service(dev: false) == KeychainNativeLockStore.productionService)
-        #expect(FileNativeLockStore.defaultURL(dev: true) != FileNativeLockStore.defaultURL(dev: false))
-        #expect(FileNativeLockStore.defaultURL(dev: true).path.contains("Proctora-Dev"))
-        #expect(FileNativeLockStore.defaultURL(dev: false).path.hasSuffix("Proctora/native-lock.json"))
+        #expect(KeychainNativeLockStore.service(dev: true, isolated: false) != KeychainNativeLockStore.service(dev: false, isolated: false))
+        #expect(KeychainNativeLockStore.service(dev: false, isolated: false) == KeychainNativeLockStore.productionService)
+        #expect(FileNativeLockStore.defaultURL(dev: true, isolated: false) != FileNativeLockStore.defaultURL(dev: false, isolated: false))
+        #expect(FileNativeLockStore.defaultURL(dev: true, isolated: false).path.contains("Proctora-Dev"))
+        #expect(FileNativeLockStore.defaultURL(dev: false, isolated: false).path.hasSuffix("Proctora/native-lock.json"))
         #expect(KeychainNativeLockStore().service == KeychainNativeLockStore.service(dev: Config.isDevBuild))
+    }
+
+    @Test func isolatedTestBuildNeverSharesTheDevelopmentLockStore() {
+        #expect(KeychainNativeLockStore.service(dev: true, isolated: true) != KeychainNativeLockStore.service(dev: true, isolated: false))
+        #expect(KeychainNativeLockStore.service(dev: true, isolated: true) != KeychainNativeLockStore.productionService)
+        #expect(FileNativeLockStore.defaultURL(dev: true, isolated: true) != FileNativeLockStore.defaultURL(dev: true, isolated: false))
+        #expect(FileNativeLockStore.defaultURL(dev: true, isolated: true).path.contains("Proctora-Dev-Isolated"))
+    }
+
+    @Test func leaveSheetSaysWhenNoTypedCodeCanOpenTheLock() {
+        let (withVerifier, _) = state()
+        #expect(NativeExit.leaveCodeText(withVerifier) == NativeExit.display(withVerifier.lockId))
+        let relocked = NativeLockState(lockId: "K7QM3XPA", created: Date(), unclean: true)
+        #expect(NativeExit.leaveCodeText(relocked).hasPrefix("K7QM-3XPA"))
+        #expect(NativeExit.leaveCodeText(relocked).contains("release this Mac"))
+        #expect(NativeExit.leaveCodeText(nil) == "")
     }
 
     @Test func keychainRoundTrip() throws {
@@ -778,5 +837,41 @@ private final class FailingStore: NativeLockStoring {
         let after = ClearingStore(inner: store, clearBeforeSecondLoad: { false })
         #expect(NativeExit.attempt(typed: code, store: after, now: now, monotonic: { .init(boot: "b", seconds: 1) }) == .malformed)
         #expect(store.load() == nil)
+    }
+}
+
+
+@Suite struct NativeExitStaleAcceptTests {
+    private final class SwappingStore: NativeLockStoring {
+        var loads = 0
+        let first: NativeLockState, later: NativeLockState
+        var saved: [NativeLockState] = []
+        init(first: NativeLockState, later: NativeLockState) { self.first = first; self.later = later }
+        func load() -> NativeLockState? { loads += 1; return loads <= 1 ? first : later }
+        func save(_ state: NativeLockState) throws { saved.append(state) }
+        func delete() {}
+    }
+
+    @Test func aRightCodeForALockThatWasReplacedMeanwhileIsNotAccepted() {
+        let t = Date(timeIntervalSince1970: 1_000)
+        let old = NativeLockState(lockId: "K7QM3XPA", verifier: NativeExit.makeVerifier(code: "123456", lockId: "K7QM3XPA", iterations: 2_000), created: t)
+        let new = NativeLockState(lockId: "K7QM3XPB", verifier: NativeExit.makeVerifier(code: "123456", lockId: "K7QM3XPB", iterations: 2_000), created: t)
+        let store = SwappingStore(first: old, later: new)
+        let r = NativeExit.attempt(typed: "123456", store: store, now: t, monotonic: { .init(boot: "b", seconds: 1) })
+        #expect(r == .stale)
+        #expect(store.saved.allSatisfy { $0.lockId == "K7QM3XPA" })
+    }
+
+    @Test func aRightCodeWhoseLockWasClearedMeanwhileIsNotAccepted() {
+        let t = Date(timeIntervalSince1970: 1_000)
+        let old = NativeLockState(lockId: "K7QM3XPA", verifier: NativeExit.makeVerifier(code: "123456", lockId: "K7QM3XPA", iterations: 2_000), created: t)
+        final class Vanishing: NativeLockStoring {
+            var loads = 0; let s: NativeLockState
+            init(_ s: NativeLockState) { self.s = s }
+            func load() -> NativeLockState? { loads += 1; return loads <= 1 ? s : nil }
+            func save(_ state: NativeLockState) throws {}
+            func delete() {}
+        }
+        #expect(NativeExit.attempt(typed: "123456", store: Vanishing(old), now: t, monotonic: { .init(boot: "b", seconds: 1) }) == .stale)
     }
 }

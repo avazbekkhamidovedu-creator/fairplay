@@ -245,11 +245,39 @@ import WebKit
             ProtectedBrowserController.nativeFailureNotice(sendsLock: lock, httpAnswered: http, status: status,
                                                            data: json.map { Data($0.utf8) }, recoverAfterConflict: conflict)
         }
-        #expect(n(true, true, 404, nil) == neutral)
-        #expect(n(true, true, 409, "<html>", conflict: true) == neutral)
+        #expect(n(true, true, nil, nil) == neutral)
+        #expect(n(true, true, 404, nil) == "DKU OJ answered HTTP 404.")
+        #expect(n(true, true, 404, "<html><head><title>No such contest</title></head></html>") == "DKU OJ answered HTTP 404: No such contest.")
+        #expect(n(true, true, 409, "<html><body><h1>Conflict &amp; more</h1></body></html>", conflict: true) == "DKU OJ answered HTTP 409: Conflict & more.")
         #expect(n(true, true, 404, #"{"error":"Not on the roster."}"#) == "Not on the roster.")
         #expect(n(false, true, 404, nil) == nil)
         #expect(n(true, false, nil, nil)?.contains("could not confirm") == true)
+    }
+
+    @Test func preLockHTTPAnswerShowsStatusAndOJTitleButTransportKeepsAppText() {
+        typealias C = ProtectedBrowserController
+        let page = Data("<html><title>500 Internal Server Error</title></html>".utf8)
+        #expect(C.preLockUnavailableNotice(status: 500, failed: false, data: page)
+            == "DKU OJ answered HTTP 500: 500 Internal Server Error. Your Mac is still unlocked.")
+        #expect(C.preLockUnavailableNotice(status: 502, failed: false, data: nil) == "DKU OJ answered HTTP 502. Your Mac is still unlocked.")
+        #expect(C.preLockUnavailableNotice(status: nil, failed: true, data: nil) == C.transportUnavailableText)
+        #expect(C.preLockUnavailableNotice(status: 503, failed: true, data: page) == C.transportUnavailableText)
+        #expect(!C.ojReachable(status: 500, failed: false))
+    }
+
+    @Test func ojPageSummaryPrefersTitleThenHeadingThenFirstLine() {
+        func s(_ t: String) -> String? { OJPage.summary(Data(t.utf8)) }
+        #expect(s("<TITLE>\n Not Found </TITLE><h1>x</h1>") == "Not Found")
+        #expect(s("<body><h1 class=a>Bad <b>gateway</b></h1></body>") == "Bad gateway")
+        #expect(s("<style>p{}</style>\n\nServer exploded\nmore") == "Server exploded")
+        #expect(s("") == nil)
+        #expect(s(String(repeating: "a", count: 500))?.count == 120)
+    }
+
+    @Test func errorPageEscapesTheDescriptionAndShowsTheFailingURL() {
+        let html = ProtectedBrowserController.errorPageHTML(description: "bad <b>\"x\"", url: URL(string: "https://oj.example/a?b=1&c=2"))
+        #expect(html.contains("bad &lt;b&gt;&quot;x&quot;") && !html.contains("<b>"))
+        #expect(html.contains("https://oj.example/a?b=1&amp;c=2"))
     }
 
     private func context(_ state: String, deadline: Int?, hold: Bool? = nil) throws -> NativeDeviceContext {

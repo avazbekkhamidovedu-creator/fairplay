@@ -268,6 +268,36 @@ import Network
         #expect(!locked)
     }
 
+    @Test func midExamLoadFailureShowsAnErrorPageWithDescriptionAndURLAndKeepsTheLock() async throws {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
+        var locked = false
+        var requests: [URL] = []
+        var pages: [(String, URL)] = []
+        var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { locked = true; return true },
+            ownsLock: { locked }, release: { locked = false }, load: { _, url in requests.append(url) })
+        effects.showError = { _, html, url in pages.append((html, url)); return nil }
+        effects.setup = NativeLockSetup.dev.with(store: InMemoryNativeLockStore())
+        let controller = ProtectedBrowserController(busy: { false }, didClose: {}, effects: effects)
+        controller.show(in: root)
+        defer { controller.lockEnded() }
+        let fields = descendants(root).compactMap { $0 as? NSTextField }.filter { $0.isEditable }
+        fields[0].stringValue = "https://university.example.edu/initial"
+        try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "Lock and open" }).performClick(nil)
+        #expect(await waitUntil { requests.count == 1 })
+        let view = try #require(descendants(root).compactMap { $0 as? WKWebView }.first)
+        let target = URL(string: "https://university.example.edu/initial")!
+        let failure = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut, userInfo: [NSURLErrorFailingURLErrorKey: target])
+        controller.webView(view, didFailProvisionalNavigation: nil, withError: failure)
+        #expect(pages.count == 1)
+        #expect(pages[0].1 == target)
+        #expect(pages[0].0.contains(failure.localizedDescription) && pages[0].0.contains("university.example.edu/initial"))
+        #expect(locked)
+        let reload = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "browser.reload" })
+        #expect(reload.isEnabled)
+        reload.performClick(nil)
+        #expect(requests.last == target)
+    }
+
     @Test func firstLoadFailureRetriesAllowedRequestWithoutCommittedDocument() async throws {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1024, height: 768))
         var locked = false
@@ -295,11 +325,11 @@ import Network
         let reload = try #require(descendants(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "browser.reload" })
         #expect(reload.isEnabled)
         let messages = descendants(root).compactMap { $0 as? NSTextField }.map(\.stringValue).joined()
-        #expect(messages.contains("Could not load this page. Try Reload."))
+        #expect(messages.contains("Could not load this page: " + failure.localizedDescription))
         #expect(!messages.contains("never-use"))
         controller.webView(view, didFailProvisionalNavigation: nil,
                            withError: NSError(domain: "WebKitErrorDomain", code: 102))
-        #expect(descendants(root).compactMap { $0 as? NSTextField }.contains { $0.stringValue == "Could not load this page. Try Reload." })
+        #expect(descendants(root).compactMap { $0 as? NSTextField }.contains { $0.stringValue.hasPrefix("Could not load this page") })
         reload.performClick(nil)
         #expect(requests.count == 2)
         #expect(requests.allSatisfy { $0.absoluteString == "https://university.example.edu/initial" })

@@ -87,7 +87,7 @@ import Foundation
         #expect(AllowedSites.parse(["*.com", "*.net", "*.github.io", "*.amazonaws.com"]) == [])
     }
 
-    @Test func downloadsStayBlocked() {
+    @Test func attachmentResponsesAreRecognised() {
         #expect(AllowedSites.isAttachment(contentDisposition: "attachment; filename=\"notes.pdf\""))
         #expect(!AllowedSites.isAttachment(contentDisposition: "inline; filename=\"notes.pdf\""))
     }

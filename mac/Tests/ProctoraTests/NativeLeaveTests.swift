@@ -265,3 +265,76 @@ import CryptoKit
         #expect(!fresh.pendingUncleanRecover)
     }
 }
+
+
+@MainActor @Suite struct NativeLeaveCodeChangeTests {
+    @Test func aCodeThatChangedWhileTheSheetIsOpenIsRefreshedAndNotSubmitted() {
+        var version = 0
+        var submitted = 0
+        var current = "AAAA-BBBB"
+        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { version }, reload: { $0(current, nil) },
+                                       submit: { _ in submitted += 1; return .wrong(remaining: 4) })
+        let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        let panel = NativeLeavePanel(prompt: prompt, window: window)
+        panel.field.stringValue = "123456"
+        panel.submit()
+        #expect(submitted == 1)
+        version = 1
+        current = "CCCC-DDDD"
+        panel.field.stringValue = "123456"
+        panel.submit()
+        #expect(submitted == 1)
+        #expect(panel.info.stringValue.contains("CCCC-DDDD") && !panel.info.stringValue.contains("AAAA-BBBB"))
+        panel.field.stringValue = "123456"
+        panel.submit()
+        #expect(submitted == 2)
+    }
+
+    @Test func aSlowReloadStillRefusesTheSubmit() {
+        var version = 1
+        var submitted = 0
+        var finish: ((String, String?) -> Void)?
+        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { version }, reload: { finish = $0 },
+                                       submit: { _ in submitted += 1; return .malformed })
+        let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        let panel = NativeLeavePanel(prompt: prompt, window: window)
+        version = 2
+        panel.submit()
+        panel.submit()
+        #expect(submitted == 0)
+        finish?("EEEE-FFFF", nil)
+        version = 2
+        panel.submit()
+        #expect(submitted == 1)
+    }
+
+    @Test func aCodeThatWentStaleBetweenTheSnapshotAndPresentingIsRefreshed() {
+        var submitted = 0
+        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { 1 }, shownVersion: 0, reload: { $0("CCCC-DDDD", nil) },
+                                       submit: { _ in submitted += 1; return .malformed })
+        let panel = NativeLeavePanel(prompt: prompt, window: NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true))
+        #expect(panel.refreshIfCodeChanged())
+        #expect(panel.info.stringValue.contains("CCCC-DDDD"))
+        panel.field.stringValue = "123456"
+        panel.submit()
+        #expect(submitted == 1)
+    }
+
+    @Test func aReloadReEnablesASubmitDisabledByARefusalUnlessStillRefused() {
+        var version = 0
+        var refused = true
+        let prompt = NativeLeavePrompt(lockCode: "AAAA-BBBB", lockVersion: { version }, isRefused: { refused }, reload: { $0("CCCC-DDDD", nil) },
+                                       submit: { _ in .refused })
+        let panel = NativeLeavePanel(prompt: prompt, window: NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true))
+        panel.field.stringValue = "123456"
+        panel.submit()
+        #expect(!panel.field.isEnabled)
+        version = 1
+        #expect(panel.refreshIfCodeChanged())
+        #expect(!panel.field.isEnabled)
+        refused = false
+        version = 2
+        #expect(panel.refreshIfCodeChanged())
+        #expect(panel.field.isEnabled)
+    }
+}

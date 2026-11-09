@@ -122,6 +122,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         showWindow(nil)
         takeFocus()
         recoveredState = state
+        NativeLockSetup.live.registerMissingVerifier(for: state)
         attemptNativeRecovery()
     }
 
@@ -160,18 +161,26 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard recoveredState != nil || LockdownController.shared.nativeLockActive else { return }
         let setup = NativeLockSetup.live
         setup.background { [weak self] in
-            let lock = setup.store.load()
-            let code = lock.map { NativeExit.display($0.lockId) } ?? ""
-            let development = lock.flatMap { setup.developmentCode(lockId: $0.lockId) }
+            let snapshot = setup.leaveSnapshot()
+            let code = snapshot.text, development = snapshot.development, version = snapshot.version
             setup.onMain {
                 guard let self else { return }
-                let prompt = NativeLeavePrompt(lockCode: code, developmentCode: development, submit: { [weak self] typed in
-                    let result = NativeExit.attempt(typed: typed, store: setup.store, now: Date())
-                    if result == .accepted { self?.finishLeaveWithoutBrowser(setup) }
+                let prompt = NativeLeavePrompt(lockCode: code, developmentCode: development,
+                                               lockVersion: { setup.registrar.lockIdChanges }, shownVersion: version,
+                                                            isRefused: { NativeExit.isRefused(setup.store.load()) }, reload: setup.reloadLeaveCode,
+                                               submit: { [weak self] typed in
+                    let (result, ticket) = NativeExit.attemptTicketed(typed: typed, store: setup.store, now: Date())
+                    if result == .accepted {
+                        return NativeExit.releaseIfCurrent(ticket, store: setup.store) { self?.finishLeaveWithoutBrowser(setup) } ? .accepted : .stale
+                    }
                     return result
                 }, submitAsync: { [weak self] typed, done in
-                    NativeExit.attemptInBackground(typed: typed, store: setup.store, now: Date(), monotonic: NativeExit.systemMonotonic()) { result in
-                        if result == .accepted { self?.finishLeaveWithoutBrowser(setup) }
+                    NativeExit.attemptInBackground(typed: typed, store: setup.store, now: Date(), monotonic: NativeExit.systemMonotonic()) { result, ticket in
+                        if result == .accepted {
+                            let released = NativeExit.releaseIfCurrent(ticket, store: setup.store) { self?.finishLeaveWithoutBrowser(setup) }
+                            done(released ? .accepted : .stale)
+                            return
+                        }
                         done(result)
                     }
                 })

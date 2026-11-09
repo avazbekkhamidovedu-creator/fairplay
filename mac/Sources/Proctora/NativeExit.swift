@@ -10,6 +10,8 @@ enum NativeExitAttempt: Equatable {
     case malformed
     /// The total attempt cap is used up: only a signed release from the OJ ends this lock.
     case refused
+    /// The lock this attempt was counted against ended or was replaced while the code was being checked.
+    case stale
 }
 
 struct NativeLockState: Codable, Equatable {
@@ -49,6 +51,18 @@ struct NativeLockState: Codable, Equatable {
     var keychainLost: Bool = false
     /// Seconds of VPN front time used in this lock, so a relaunch does not renew the cap.
     var vpnUsed: TimeInterval = 0
+    /// Device-level guess ledger: the newest `hourlyGuessCap` guesses. It lives in the counters that survive a deleted
+    /// Keychain item and a replaced lock id, so registering a fresh id never hands out a fresh budget.
+    var guessLog: [GuessStamp] = []
+    /// Earliest time a background registration run may start again (from Retry-After and backoff); survives relaunches.
+    var retryNotBefore: Date? = nil
+
+    /// One counted guess, stamped on the wall and the continuous clock.
+    struct GuessStamp: Codable, Equatable, Hashable {
+        var at: Date
+        var boot: String?
+        var mono: TimeInterval?
+    }
 
     /// What may be written outside the Keychain: counters and binding, never the verifier.
     var withoutVerifier: NativeLockState {
@@ -61,6 +75,7 @@ struct NativeLockState: Codable, Equatable {
 extension NativeLockState {
     private enum CodingKeys: String, CodingKey {
         case v, lockId, verifier, created, contest, binding, wrong, until, unclean, lastAttempt, attempts, waitBoot, waitMono, keychainLost, vpnUsed
+        case guessLog, retryNotBefore
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +95,8 @@ extension NativeLockState {
         waitMono = try c.decodeIfPresent(TimeInterval.self, forKey: .waitMono)
         keychainLost = try c.decodeIfPresent(Bool.self, forKey: .keychainLost) ?? false
         vpnUsed = try c.decodeIfPresent(TimeInterval.self, forKey: .vpnUsed) ?? 0
+        guessLog = try c.decodeIfPresent([GuessStamp].self, forKey: .guessLog) ?? []
+        retryNotBefore = try c.decodeIfPresent(Date.self, forKey: .retryNotBefore)
     }
 }
 
@@ -96,6 +113,12 @@ protocol NativeLockStoring {
     func load() -> NativeLockState?
     func save(_ state: NativeLockState) throws
     func delete()
+    /// What the store the app trusts for the verifier holds; equals `load()` for a single store.
+    func loadTrusted() -> NativeLockState?
+}
+
+extension NativeLockStoring {
+    func loadTrusted() -> NativeLockState? { load() }
 }
 
 final class InMemoryNativeLockStore: NativeLockStoring {
@@ -109,9 +132,12 @@ final class InMemoryNativeLockStore: NativeLockStoring {
 struct KeychainNativeLockStore: NativeLockStoring {
     static let productionService = "ai.proctora.student.native-lock"
     static let developmentService = "ai.proctora.student.native-lock.dev"
+    static let isolatedService = "ai.proctora.student.native-lock.pr4-isolated"
 
     /// A development build never reads, writes or clears the production item.
-    static func service(dev: Bool) -> String { dev ? developmentService : productionService }
+    static func service(dev: Bool, isolated: Bool = Config.isIsolatedTestProfile) -> String {
+        isolated ? isolatedService : (dev ? developmentService : productionService)
+    }
     struct Failure: Error, Equatable { let status: OSStatus }
 
     let service: String
@@ -239,12 +265,14 @@ struct FileNativeLockStore: NativeLockStoring {
 
     init(url: URL) { self.url = url }
 
-    static func folderName(dev: Bool) -> String { dev ? "Proctora-Dev" : "Proctora" }
+    static func folderName(dev: Bool, isolated: Bool = Config.isIsolatedTestProfile) -> String {
+        isolated ? "Proctora-Dev-Isolated" : (dev ? "Proctora-Dev" : "Proctora")
+    }
 
-    static func defaultURL(dev: Bool = Config.isDevBuild) -> URL {
+    static func defaultURL(dev: Bool = Config.isDevBuild, isolated: Bool = Config.isIsolatedTestProfile) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent(folderName(dev: dev), isDirectory: true).appendingPathComponent("native-lock.json")
+        return base.appendingPathComponent(folderName(dev: dev, isolated: isolated), isDirectory: true).appendingPathComponent("native-lock.json")
     }
 
     init() { self.init(url: Self.defaultURL()) }
@@ -334,6 +362,14 @@ struct DualNativeLockStore: NativeLockStoring {
         m.lastAttempt = [a.lastAttempt, b.lastAttempt].compactMap { $0 }.max()
         m.unclean = a.unclean || b.unclean
         m.vpnUsed = max(a.vpnUsed, b.vpnUsed)
+        var most: [NativeLockState.GuessStamp: Int] = [:]
+        for log in [a.guessLog, b.guessLog] {
+            for (stamp, n) in Dictionary(grouping: log, by: { $0 }) { most[stamp] = max(most[stamp] ?? 0, n.count) }
+        }
+        m.guessLog = Array(most.flatMap { Array(repeating: $0.key, count: $0.value) }
+            .sorted { ($0.at, $0.mono ?? 0, $0.boot ?? "") < ($1.at, $1.mono ?? 0, $1.boot ?? "") }
+            .suffix(NativeExit.hourlyGuessCap))
+        m.retryNotBefore = [a.retryNotBefore, b.retryNotBefore].compactMap { $0 }.max()
         return m
     }
 
@@ -360,6 +396,8 @@ struct DualNativeLockStore: NativeLockStoring {
         }
     }
 
+    func loadTrusted() -> NativeLockState? { primary.load() }
+
     func save(_ state: NativeLockState) throws {
         try NativeLockGate.run {
             var errors = 0
@@ -385,6 +423,9 @@ enum NativeExit {
     static let maxWrong = 5
     static let waitSeconds: TimeInterval = 300
     static let maxTotalAttempts = 15
+    /// Guesses per rolling window across every lock id of this device.
+    static let hourlyGuessCap = 15
+    static let guessWindow: TimeInterval = 3600
     static let codePrefix = "fairplay-native-exit|v1|"
     static let sealInfo = "fairplay-native-exit-seal|v1"
 
@@ -461,6 +502,26 @@ enum NativeExit {
             }
         }
         return out
+    }
+
+    /// What the Leave sheet shows as the Mac code. A lock without a verifier (relaunched after its saved
+    /// state was lost) cannot be opened by any typed code, and its id may never have been registered.
+    static func leaveCodeText(_ state: NativeLockState?, registration: NativeLockRegistrar.Status = .idle) -> String {
+        guard let state else { return "" }
+        let shown = display(state.lockId)
+        guard state.verifier == nil else { return shown }
+        switch registration {
+        case .retrying:
+            return shown + " (not registered with the server yet; FairPlay keeps trying in the background. If this code changes while the sheet is open, read the new one out)"
+        case .paused:
+            return shown + " (not registered with the server yet; FairPlay stopped trying for now and will try again later. No exit code can open this lock until then; your instructor can release this Mac in DKU OJ)"
+        case .refused:
+            return shown + " (the server refused to register this lock, so no exit code can open it; your instructor must release this Mac in DKU OJ)"
+        case .noKey:
+            return shown + " (this copy of FairPlay has no emergency exit key, so no exit code can open this lock; your instructor must release this Mac in DKU OJ)"
+        case .idle:
+            return shown + " (no exit code can open this lock; your instructor must release this Mac in DKU OJ)"
+        }
     }
 
     static func display(_ lockId: String) -> String {
@@ -567,14 +628,58 @@ enum NativeExit {
         return (until, changed, reanchor)
     }
 
+    /// When each guess still inside the rolling hour leaves it. A guess leaves only when both the wall clock and
+    /// (within one boot) the continuous clock say its hour is over, so moving the wall clock forward does not free it.
+    static func activeGuessEnds(_ st: NativeLockState, now: Date, mono: Monotonic) -> [Date] {
+        st.guessLog.compactMap { guessEnd($0, now: now, mono: mono) }
+    }
+
+    private static func guessEnd(_ g: NativeLockState.GuessStamp, now: Date, mono: Monotonic) -> Date? {
+        var end = g.at.addingTimeInterval(guessWindow)
+        if g.boot == mono.boot, let m = g.mono {
+            end = max(end, now.addingTimeInterval(m + guessWindow - mono.seconds))
+        }
+        return end > now ? end : nil
+    }
+
+    /// Hourly cap reached: the time the oldest counted guess leaves the window.
+    static func guessCapEnd(_ st: NativeLockState, now: Date, mono: Monotonic) -> Date? {
+        let ends = activeGuessEnds(st, now: now, mono: mono)
+        return ends.count >= hourlyGuessCap ? ends.min() : nil
+    }
+
+    /// The attempt cap is spent and the hourly window is still full. When the window has room again the code is checked again.
+    static func isRefused(_ st: NativeLockState?, now: Date = Date(), mono: Monotonic = systemMonotonic()) -> Bool {
+        guard let st else { return false }
+        return st.attempts >= maxTotalAttempts && guessCapEnd(st, now: now, mono: mono) != nil
+    }
+
+    /// The lock an accepted code was validated against.
+    struct Ticket: Equatable {
+        let lockId: String
+        let verifier: NativeLockState.Verifier?
+    }
+
+    /// Runs `release` only if the saved lock is still the one the ticket was issued for. Checked under the store gate
+    /// and `release` runs inside it, so a replacement lock saved in between is never released or cleared.
+    @discardableResult
+    static func releaseIfCurrent(_ ticket: Ticket?, store: NativeLockStoring, release: () -> Void) -> Bool {
+        guard let ticket else { return false }
+        return NativeLockGate.run {
+            guard let latest = store.load(), latest.lockId == ticket.lockId, latest.verifier == ticket.verifier else { return false }
+            release()
+            return true
+        }
+    }
+
     /// The same attempt, with the PBKDF2 comparison off the main thread; `completion` runs on main.
     /// The clock reading is taken by the caller so nothing main-bound is touched on the worker.
     static func attemptInBackground(typed: String, store: NativeLockStoring, now: Date, monotonic: Monotonic,
-                                    completion: @escaping (NativeExitAttempt) -> Void) {
+                                    completion: @escaping (NativeExitAttempt, Ticket?) -> Void) {
         nonisolated(unsafe) let store = store
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = attempt(typed: typed, store: store, now: now, monotonic: { monotonic })
-            DispatchQueue.main.async { completion(result) }
+            let (result, ticket) = attemptTicketed(typed: typed, store: store, now: now, monotonic: { monotonic })
+            DispatchQueue.main.async { completion(result, ticket) }
         }
     }
 
@@ -583,12 +688,18 @@ enum NativeExit {
     /// runs outside it so other store access never waits for PBKDF2; the right-code reset re-reads under it.
     static func attempt(typed: String, store: NativeLockStoring, now: Date,
                         monotonic: () -> Monotonic = NativeExit.systemMonotonic) -> NativeExitAttempt {
-        guard typed.utf8.count == 6, typed.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else { return .malformed }
+        attemptTicketed(typed: typed, store: store, now: now, monotonic: monotonic).0
+    }
+
+    /// `.accepted` comes with the ticket of the lock it was validated against; pass it to `releaseIfCurrent`.
+    static func attemptTicketed(typed: String, store: NativeLockStoring, now: Date,
+                                monotonic: () -> Monotonic = NativeExit.systemMonotonic) -> (NativeExitAttempt, Ticket?) {
+        guard typed.utf8.count == 6, typed.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else { return (.malformed, nil) }
         enum Step { case done(NativeExitAttempt), compare(NativeLockState, NativeExitAttempt) }
         let step: Step = NativeLockGate.run {
             guard var st = store.load() else { return .done(.malformed) }
-            if st.attempts >= maxTotalAttempts { return .done(.refused) }
             let mono = monotonic()
+            if st.attempts >= maxTotalAttempts, guessCapEnd(st, now: now, mono: mono) != nil { return .done(.refused) }
 
             if let eff = effectiveUntil(st, now: now, mono: mono) {
                 if eff.changed {
@@ -607,8 +718,11 @@ enum NativeExit {
                 st.wrong = 0
             }
 
+            if let end = guessCapEnd(st, now: now, mono: mono) { return .done(.wait(until: end)) }
+            let live = st.guessLog.filter { guessEnd($0, now: now, mono: mono) != nil }
+            st.guessLog = Array((live + [.init(at: now, boot: mono.boot, mono: mono.seconds)]).suffix(hourlyGuessCap))
             st.wrong += 1
-            st.attempts += 1
+            st.attempts = min(st.attempts + 1, maxTotalAttempts)
             st.lastAttempt = max(now, st.lastAttempt ?? now)
             let lockedOut = st.wrong >= maxWrong
             if lockedOut {
@@ -624,18 +738,18 @@ enum NativeExit {
         }
         let counted: NativeLockState, miss: NativeExitAttempt
         switch step {
-        case .done(let result): return result
+        case .done(let result): return (result, nil)
         case .compare(let state, let missed): counted = state; miss = missed
         }
-        guard verifies(typed, lockId: counted.lockId, verifier: counted.verifier) else { return miss }
-        NativeLockGate.run {
-            guard var latest = store.load(), latest.lockId == counted.lockId else { return }
+        guard verifies(typed, lockId: counted.lockId, verifier: counted.verifier) else { return (miss, nil) }
+        return NativeLockGate.run {
+            guard var latest = store.load(), latest.lockId == counted.lockId, latest.verifier == counted.verifier else { return (.stale, nil) }
             latest.wrong = 0
             latest.until = nil
             latest.waitBoot = nil
             latest.waitMono = nil
             try? store.save(latest)
+            return (.accepted, Ticket(lockId: counted.lockId, verifier: counted.verifier))
         }
-        return .accepted
     }
 }

@@ -41,11 +41,25 @@ struct NativeRenewSchedule {
         return status == 429 || (500...599).contains(status)
     }
 
-    /// Seconds form only; a missing, negative or unreadable value is nil.
-    static func retryAfter(_ header: String?) -> TimeInterval? {
-        guard let header, let seconds = Double(header.trimmingCharacters(in: .whitespaces)), seconds.isFinite, seconds >= 0 else { return nil }
-        return seconds
+    /// Delta-seconds or an HTTP-date (IMF-fixdate, RFC 850, asctime) turned into seconds from `now`;
+    /// a missing or unreadable value is nil, a date already past is 0.
+    static func retryAfter(_ header: String?, now: Date = Date()) -> TimeInterval? {
+        guard let header else { return nil }
+        let text = header.trimmingCharacters(in: .whitespaces)
+        if !text.isEmpty, text.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 || $0 == 46 }), let seconds = Double(text), seconds.isFinite {
+            return seconds
+        }
+        for format in httpDateFormats {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(identifier: "GMT")
+            f.dateFormat = format
+            if let date = f.date(from: text) { return max(0, date.timeIntervalSince(now)) }
+        }
+        return nil
     }
+
+    private static let httpDateFormats = ["EEE, dd MMM yyyy HH:mm:ss 'GMT'", "EEEE, dd-MMM-yy HH:mm:ss 'GMT'", "EEE MMM d HH:mm:ss yyyy"]
 
     /// Steps 2, 4, 8, 16 s, then the cap for every later failure.
     static func step(forFailure count: Int) -> TimeInterval {

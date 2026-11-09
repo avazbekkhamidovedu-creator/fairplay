@@ -5,6 +5,14 @@ struct NativeLeavePrompt {
     let lockCode: String
     /// Development builds without an escrow key only: the code that opens this lock.
     var developmentCode: String? = nil
+    /// Changes whenever the lock id (and so the Mac code) was replaced after the sheet opened.
+    var lockVersion: () -> Int = { 0 }
+    /// The version read together with the code text shown; a later `lockVersion` means the shown code is stale. Nil: taken when the panel is made.
+    var shownVersion: Int? = nil
+    /// True when the lock now saved has used up its attempts; read on main after a reload.
+    var isRefused: () -> Bool = { false }
+    /// Reads the current code text and development code; answers on the main thread.
+    var reload: (@escaping (String, String?) -> Void) -> Void = { _ in }
     let submit: (String) -> NativeExitAttempt
     /// When set, the sheet uses this instead of `submit`: the check runs off the main thread and answers on it.
     var submitAsync: ((String, @escaping (NativeExitAttempt) -> Void) -> Void)? = nil
@@ -27,6 +35,8 @@ enum NativeLeaveText {
             return "Enter the 6-digit code."
         case .refused:
             return "Too many attempts. Ask your instructor to release your Mac."
+        case .stale:
+            return "This lock changed while the code was checked. Try again."
         }
     }
 }
@@ -36,8 +46,13 @@ final class NativeLeavePanel: NSObject {
     private let prompt: NativeLeavePrompt
     private weak var window: NSWindow?
     private let panel: NSPanel
-    private let field = NSTextField(frame: NSRect(x: 20, y: 96, width: 340, height: 24))
+    let field = NSTextField(frame: NSRect(x: 20, y: 96, width: 340, height: 24))
     private let status = NSTextField(wrappingLabelWithString: "")
+    let info: NSTextField
+    private var shownVersion: Int
+    private var reloading = false
+    private var refusedLatch = false
+    private var watch: Timer?
     private let spinner = NSProgressIndicator(frame: NSRect(x: 336, y: 62, width: 20, height: 20))
     private let leave = NSButton(title: "Leave", target: nil, action: nil)
     private let cancel = NSButton(title: "Cancel", target: nil, action: nil)
@@ -46,13 +61,14 @@ final class NativeLeavePanel: NSObject {
     init(prompt: NativeLeavePrompt, window: NSWindow) {
         self.prompt = prompt
         self.window = window
+        shownVersion = prompt.shownVersion ?? prompt.lockVersion()
+        info = NSTextField(wrappingLabelWithString: "")
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 270), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         let title = NSTextField(labelWithString: "Leave")
         title.font = .boldSystemFont(ofSize: 15)
         title.frame = NSRect(x: 20, y: 236, width: 340, height: 20)
-        let info = NSTextField(wrappingLabelWithString: "Mac code:  \(prompt.lockCode)\n\n\(NativeLeaveText.hint), then type its 6 digits here. If DKU OJ rejected or paused your session, your instructor must release it."
-            + (prompt.developmentCode.map { "\n\nDevelopment build, exit code: \($0)" } ?? ""))
+        info.stringValue = Self.infoText(code: prompt.lockCode, development: prompt.developmentCode)
         info.frame = NSRect(x: 20, y: 130, width: 340, height: 100)
         field.placeholderString = NativeLeaveText.hint
         field.target = self; field.action = #selector(leavePressed)
@@ -73,11 +89,59 @@ final class NativeLeavePanel: NSObject {
         panel.initialFirstResponder = field
     }
 
+    private static func infoText(code: String, development: String?) -> String {
+        "Mac code:  \(code)\n\n\(NativeLeaveText.hint), then type its 6 digits here. If DKU OJ rejected or paused your session, your instructor must release it."
+            + (development.map { "\n\nDevelopment build, exit code: \($0)" } ?? "")
+    }
+
+    static let codeChangedText = "The Mac code changed. Read the new code above to your instructor, then enter the code you get for it."
+
     func show(reason: String?) {
         guard let window, window.attachedSheet == nil else { return }
         status.stringValue = reason ?? ""
         Self.active = self
-        window.beginSheet(panel) { _ in Self.active = nil }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.reopenIfNoLongerRefused()
+            _ = self?.refreshIfCodeChanged()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watch = timer
+        window.beginSheet(panel) { [weak self] _ in
+            self?.watch?.invalidate(); self?.watch = nil
+            Self.active = nil
+        }
+        refreshIfCodeChanged()
+    }
+
+    /// True while the shown code is stale or being replaced; the displayed code is then updated and a typed code is not sent.
+    @discardableResult
+    func refreshIfCodeChanged() -> Bool {
+        let version = prompt.lockVersion()
+        if reloading { return true }
+        guard version != shownVersion else { return false }
+        reloading = true
+        prompt.reload { [weak self] code, development in
+            guard let self else { return }
+            self.info.stringValue = Self.infoText(code: code, development: development)
+            self.status.stringValue = Self.codeChangedText
+            self.shownVersion = version
+            self.reloading = false
+            self.field.stringValue = ""
+            if self.refusedLatch && !self.prompt.isRefused() {
+                self.refusedLatch = false
+                self.field.isEnabled = true
+                self.leave.isEnabled = true
+            }
+        }
+        return true
+    }
+
+    private func reopenIfNoLongerRefused() {
+        guard refusedLatch, !prompt.isRefused() else { return }
+        refusedLatch = false
+        field.isEnabled = true
+        leave.isEnabled = true
+        status.stringValue = ""
     }
 
     private func busy(_ on: Bool) {
@@ -91,8 +155,11 @@ final class NativeLeavePanel: NSObject {
 
     private func close() { window?.endSheet(panel) }
 
-    @objc private func leavePressed() {
+    @objc private func leavePressed() { submit() }
+
+    func submit() {
         guard leave.isEnabled else { return }
+        if refreshIfCodeChanged() { status.stringValue = Self.codeChangedText; return }
         let typed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         busy(true)
         if let submitAsync = prompt.submitAsync {
@@ -109,6 +176,7 @@ final class NativeLeavePanel: NSObject {
         status.stringValue = NativeLeaveText.message(for: result, now: Date()) ?? ""
         field.stringValue = ""
         if result == .refused {
+            refusedLatch = true
             field.isEnabled = false
             leave.isEnabled = false
         } else {

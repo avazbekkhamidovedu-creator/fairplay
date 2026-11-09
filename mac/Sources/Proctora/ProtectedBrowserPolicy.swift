@@ -193,6 +193,12 @@ struct ProtectedBrowserPolicy {
         return resourceSuffixes.contains { host.hasSuffix("." + $0) }
     }
 
+    var downloadOrigins: Set<String> {
+        var set = assetOrigins.filter { !SiteDenyList.isDenied(host: URL(string: $0)?.host ?? "") }
+        if let first = Self.origin(startURL) { set.insert(first) }
+        return set
+    }
+
     /// The first tab stays inside DKU OJ and its login hosts; allowed sites open in their own tabs.
     func allowsMainTab(_ url: URL?) -> Bool {
         guard let url, allows(url, mainFrame: true), let origin = Self.origin(url) else { return false }
