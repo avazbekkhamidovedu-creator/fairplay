@@ -90,7 +90,7 @@ def _release(draft):
     AssignmentDraft.objects.filter(pk=draft.pk).update(harvested_at=None)
 
 
-def harvest_participation(participation):
+def harvest_participation(participation, *, judge_on_commit=False):
     """Submit every substantive draft ``participation`` still holds; return the submissions made."""
     if not participation_is_harvestable(participation):
         return []
@@ -149,6 +149,7 @@ def harvest_participation(participation):
                 language=draft.language if is_code else Language.get_answer_language(),
                 answer=answer,
                 participation=participation, contest_problem=contest_problem,
+                judge_on_commit=judge_on_commit,
             )
         except Exception:
             logger.exception('Auto-submit failed for draft %d, participation %d', draft.pk, participation.pk)

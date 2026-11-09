@@ -84,6 +84,9 @@
   var serverDraftTimer = null;
   var serverDraftRetryTimer = null;
   var pendingServerDraft = null;
+  var nativeAdmitted = app.dataset.nativeAdmitted === '1';
+  var latestServerDraft = null;
+  var serverDraftQueue = Promise.resolve(true);
   // 'idle' | 'saving' | 'saved' | 'error' — local-only copy must not hide a failed sync.
   var serverDraftSync = 'idle';
   var SERVER_DRAFT_RETRY_MS = [2000, 5000];
@@ -113,6 +116,7 @@
     showAutosaveHint(true);
   }
   function markServerDraftFailed(payload, attempt) {
+    if (nativeAdmitted && payload !== latestServerDraft) return;
     if (attempt < SERVER_DRAFT_RETRY_MS.length) {
       serverDraftSync = 'error';
       setDraftStatus(gettext('Not synced to the server. Retrying…'), 'error');
@@ -128,6 +132,7 @@
     showAutosaveHint(false);
   }
   function sendServerDraft(payload, attempt) {
+    if (nativeAdmitted) return sendServerDraftSerialized(payload, attempt);
     if (!serverDraftsEnabled()) return Promise.resolve();
     attempt = attempt || 0;
     cancelServerDraftRetry();
@@ -139,10 +144,32 @@
       })
       .catch(function () { markServerDraftFailed(payload, attempt); });
   }
+  function sendServerDraftSerialized(payload, attempt) {
+    if (!serverDraftsEnabled()) return Promise.resolve(true);
+    attempt = attempt || 0;
+    if (attempt && payload !== latestServerDraft) return Promise.resolve(true);
+    if (!attempt) latestServerDraft = payload;
+    cancelServerDraftRetry();
+    serverDraftSync = 'saving';
+    // Serialize writes: a slow older request must not overwrite a newer answer.
+    serverDraftQueue = serverDraftQueue.catch(function () { return false; }).then(function () {
+      return fetch(serverDraftUrl, { method: 'POST', credentials: 'same-origin', body: serverDraftBody(payload) })
+        .then(function (response) {
+          if (response.ok) {
+            if (payload === latestServerDraft && !pendingServerDraft) markServerDraftSaved();
+            return true;
+          }
+          markServerDraftFailed(payload, attempt); return false;
+        })
+        .catch(function () { markServerDraftFailed(payload, attempt); return false; });
+    });
+    return serverDraftQueue;
+  }
   // Typing fires constantly, so text answers are coalesced; a discrete choice is sent at once.
   function queueServerDraft(content, language) {
     if (!serverDraftsEnabled()) return;
     pendingServerDraft = { content: content, language: language };
+    if (nativeAdmitted) latestServerDraft = pendingServerDraft;
     if (serverDraftTimer) clearTimeout(serverDraftTimer);
     cancelServerDraftRetry();
     serverDraftTimer = setTimeout(function () {
@@ -165,13 +192,28 @@
     cancelPendingServerDraft();
     var useBeacon = !(options && options.beacon === false);
     if (useBeacon && navigator.sendBeacon && navigator.sendBeacon(serverDraftUrl, serverDraftBody(payload))) {
+      if (nativeAdmitted) {
+        // Beacon acceptance only means queued by the browser, not stored by OJ.
+        serverDraftSync = 'saving';
+        return Promise.resolve(false);
+      }
       markServerDraftSaved();
       return Promise.resolve();
     }
     return sendServerDraft(payload);
   }
   // Leave waits for this so the harvest in ContestLeave sees the last keystrokes.
-  window.dkuojFlushServerDraft = function () {
+  window.dkuojFlushBlocksLeave = nativeAdmitted;
+  window.dkuojFlushServerDraft = nativeAdmitted ? async function () {
+    await flushServerDraft({ beacon: false });
+    await serverDraftQueue;
+    if (pendingServerDraft) return window.dkuojFlushServerDraft();
+    if (serverDraftSync === 'error' && latestServerDraft) {
+      await sendServerDraftSerialized(latestServerDraft, 0);
+      await serverDraftQueue;
+    }
+    return serverDraftSync !== 'error' && serverDraftSync !== 'saving';
+  } : function () {
     return flushServerDraft({ beacon: false });
   };
   function serverDraft() {
@@ -232,11 +274,38 @@
 
   function saveDraft() {
     if (!draftsEnabled() || !source) return;
+    if (nativeAdmitted) source.value = sourceValue();
     try { localStorage.setItem(draftKey(), sourceValue()); } catch (err) { /* ignore */ }
     setLocalDraftStatus();
     var language = languageSelect();
     queueServerDraft(sourceValue(), language ? language.value : '');
   }
+  // Native recovery carries only answer fields scoped to this logged-in workspace.
+  // Apply through the real editors so the ordinary OJ draft pipeline stays authoritative.
+  window.addEventListener('fairplay-restore-draft', function (event) {
+    if (!nativeAdmitted || !draftsEnabled() || !event.detail || typeof event.detail !== 'object') return;
+    var fields = event.detail;
+    var language = languageSelect();
+    if (language && typeof fields.language === 'string' && Array.from(language.options).some(function (o) { return o.value === fields.language; })) {
+      language.value = fields.language;
+      language.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (source && typeof fields.source === 'string') { setSource(fields.source); saveDraft(); }
+    if (typeof fields.answer === 'string' && $('#id_answer')) {
+      $('#id_answer').value = fields.answer;
+      if (window.RichEditor) RichEditor.setMarkdown('workspace-answer', fields.answer);
+      queueServerDraft(JSON.stringify({ text: fields.answer }));
+    }
+    $$('input[name^="fb_"],textarea[name^="fb_"],input[name^="blank_"],textarea[name^="blank_"],.answer-form input[type="radio"],.answer-form input[type="checkbox"]').forEach(function (el) {
+      var choice = el.type === 'radio' || el.type === 'checkbox';
+      var key = choice ? el.name + ':' + el.value : el.name;
+      if (typeof fields[key] !== 'string') return;
+      if (choice) el.checked = fields[key] === 'true'; else el.value = fields[key];
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
   function resetFileInputs() {
     // After a successful submit the input still holds that file. Picking a revised copy with the
     // same name does not fire `change` in most browsers, so the new answer would never be saved
@@ -1820,12 +1889,14 @@
     applyLeaveProgress(leaveProgressFromDrawer());
   }
 
+  var nativeSubmitInFlight = false;
   var submitForm = $('#workspace-submit-form');
   if (submitForm) {
     submitForm.addEventListener('submit', function (event) {
       event.preventDefault();
-      if (timerExpired) return;
+      if (timerExpired || (nativeAdmitted && nativeSubmitInFlight)) return;
       if (source && !languageSelect()) return;
+      if (nativeAdmitted) nativeSubmitInFlight = true;
       syncAnswerFields();
       var button = $('#btn-submit');
       if (button) button.disabled = true;
@@ -1851,6 +1922,8 @@
             if (button) button.disabled = true;
             throw new Error(gettext('Time expired'));
           }
+          nativeSubmitInFlight = false;
+          if (nativeAdmitted && button && !timerExpired) button.disabled = false;
           activateTab('result');
           history.replaceState(null, '', location.pathname + '?submission=' + payload.submission_id);
           clearCurrentDrafts();
@@ -1891,11 +1964,12 @@
             app.dataset.submissionGraded = '1';
             if (button && !timerExpired) button.disabled = false;
           } else {
-            pollFormal(payload.status_url, button);
+            pollFormal(payload.status_url, nativeAdmitted ? null : button);
           }
         })
         .catch(function (error) {
-          if (button) button.disabled = false;
+          nativeSubmitInFlight = false;
+          if (button && (!nativeAdmitted || !timerExpired)) button.disabled = false;
           // Only replace the summary pane — keep submitted source / comments siblings.
           ensureResultStructure();
           var main = $('#workspace-result-main');

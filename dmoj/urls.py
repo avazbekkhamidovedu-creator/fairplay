@@ -18,6 +18,7 @@ from judge.views import (
     problem, problem_import, problem_manage, ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.api import fairplay as fairplay_api
+from judge.views.fairplay_launch import ContestFairPlayLaunch, ContestFairPlayLaunchFile
 from judge.views.editor_attachment import editor_file_download, editor_file_uploader
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
@@ -104,7 +105,17 @@ def paged_list_view(view, name):
     ])
 
 
+from judge.views.fairplay_browser_context import browser_context
+from judge.views.fairplay_native_session import native_claim, native_state, native_renew, native_finish, native_abort, native_recover
+
 urlpatterns = [
+    path("api/fairplay/browser-context", browser_context, name="fairplay_browser_context"),
+    path("api/fairplay/native/recover/<slug:key>", native_recover, name="fairplay_native_recover"),
+    path("api/fairplay/native/claim/<slug:key>", native_claim, name="fairplay_native_claim"),
+    path("api/fairplay/native/session/<uuid:session_id>", native_state, name="fairplay_native_state"),
+    path("api/fairplay/native/session/<uuid:session_id>/renew", native_renew, name="fairplay_native_renew"),
+    path("api/fairplay/native/session/<uuid:session_id>/finish", native_finish, name="fairplay_native_finish"),
+    path("api/fairplay/native/session/<uuid:session_id>/abort", native_abort, name="fairplay_native_abort"),
     path('', blog.PostList.as_view(template_name='home.html', title=_('Home')), kwargs={'page': 1}, name='home'),
     path('500/', exception),
     path('admin/', admin.site.urls),
@@ -293,6 +304,8 @@ urlpatterns = [
         path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
         path('/access-codes.pdf', fairplay.ContestAccessCodesPdf.as_view(), name='contest_access_codes_pdf'),
         path('/fairplay-help', fairplay.ContestStudentHelp.as_view(), name='contest_fairplay_help'),
+        path('/fairplay-launch', ContestFairPlayLaunch.as_view(), name='contest_fairplay_launch'),
+        path('/fairplay-launch-file', ContestFairPlayLaunchFile.as_view(), name='contest_fairplay_launch_file'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),
         path('/grade', contests.ContestGrade.as_view(), name='contest_grade'),
@@ -411,6 +424,7 @@ urlpatterns = [
     ])),
 
     path('api/fairplay/v1/', include([
+        path('installation', fairplay_api.installation, name='fairplay_api_installation'),
         path('exams', fairplay_api.exams, name='fairplay_api_exams'),
         path('exams/<str:key>/package', fairplay_api.exam_package, name='fairplay_api_package'),
         path('exams/<str:key>/assets/<str:name>', fairplay_api.exam_asset, name='fairplay_api_asset'),

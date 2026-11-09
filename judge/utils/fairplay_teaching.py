@@ -1,6 +1,7 @@
 """Class rosters for the FairPlay bridge: who counts as a student of a class."""
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q
 
@@ -22,13 +23,15 @@ def mark_class_login(class_id):
 
 
 def class_has_fairplay_login(class_id):
+    if not getattr(settings, 'FAIRPLAY_CLASS_LOGIN_ENABLED', False):
+        return False
     return cache.get(CLASS_LOGIN_KEY % class_id) is not None
 
 
 def classes_with_fairplay_login(class_ids):
     """Of ``class_ids``, those with a FairPlay class login made from DKU OJ."""
     class_ids = list(class_ids)
-    if not class_ids:
+    if not class_ids or not getattr(settings, 'FAIRPLAY_CLASS_LOGIN_ENABLED', False):
         return set()
     found = cache.get_many([CLASS_LOGIN_KEY % class_id for class_id in class_ids])
     return {class_id for class_id in class_ids if (CLASS_LOGIN_KEY % class_id) in found}

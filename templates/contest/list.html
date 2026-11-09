@@ -142,6 +142,7 @@
 {% endmacro %}
 
 {% block body %}
+    {% include "contest/fairplay_discovery.html" %}
     <div class="content-description">
         {% if active_participations %}
             <h4>{{ _('Active assignment') }}</h4>

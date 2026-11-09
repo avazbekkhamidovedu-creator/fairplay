@@ -232,6 +232,12 @@ class ProblemWorkspaceTestCase(TestCase):
         self.assertNotContains(detail, 'Raw submitted answer')
         self.assertContains(detail, 'id="workspace-result-comments"')
 
+    def test_native_admitted_flag_rendered_only_for_native_device(self):
+        url = reverse('problem_detail', args=[self.problem.code])
+        self.assertContains(self.client.get(url), 'data-native-admitted="0"')
+        with mock.patch('judge.utils.fairplay_native_scope.admitted_contest_id', return_value=self.contest.pk):
+            self.assertContains(self.client.get(url), 'data-native-admitted="1"')
+
     def test_short_answer_workspace_exposes_upload_urls_for_students(self):
         short = create_problem(code='ws-shortup', is_public=True, submission_type='S')
         response = self.client.get(reverse('problem_detail', args=[short.code]))

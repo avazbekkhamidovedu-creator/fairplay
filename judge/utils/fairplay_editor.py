@@ -7,6 +7,7 @@ from django.utils.translation import gettext as _
 
 from judge.utils.fairplay import FAIRPLAY_CALCULATOR_CHOICES, FAIRPLAY_REVIEW_CHOICES, fairplay_check_contest, \
     fairplay_edit_locked, fairplay_enabled, is_fairplay_exam, set_fairplay_exam
+from judge.utils.fairplay_audience import audience_descriptor, confirm_audience
 
 __all__ = [
     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
@@ -18,7 +19,7 @@ __all__ = [
 logger = logging.getLogger('judge.fairplay')
 
 # Editor fields gated by the same permission as the Safe Exam Browser option (contest_seb_requirement).
-FAIRPLAY_EDITOR_FIELDS = ('fairplay_required', 'fairplay_settings')
+FAIRPLAY_EDITOR_FIELDS = ('fairplay_required', 'fairplay_settings', 'fairplay_audience_confirm', 'fairplay_audience_mode')
 # What FairPlay uses until settings are saved.
 DEFAULT_SETTINGS = {
     'calculator': 'off', 'open_book': False, 'websites': [], 'strong_lock': False,
@@ -27,6 +28,7 @@ DEFAULT_SETTINGS = {
 MAX_WEBSITE_LINES = 100
 MAX_WEBSITE_LENGTH = 2100
 MAX_UPLOAD_DAYS = 7
+_AUDIENCE_FIELDS = {'classes', 'organizations', 'private_contestants', 'is_private', 'is_organization_private'}
 BOX_LINK_RE = re.compile(r'https://duke(?:\.app)?\.box\.com/s/[A-Za-z0-9_-]+', re.IGNORECASE)
 BOX_CHANGE_REFUSED = _('The Duke Box folder cannot be changed after students have started.')
 
@@ -147,6 +149,8 @@ class FairPlayEditorPlan:
 
     def __init__(self, want=None, settings=None, was_on=False):
         self.want, self.settings, self.was_on = want, settings, was_on
+        self.audience_mode = None
+        self.audience_from_scope = False
 
 
 def parse_fairplay_payload(contest, payload, restricted):
@@ -161,6 +165,15 @@ def parse_fairplay_payload(contest, payload, restricted):
             plan.want = None
     if payload.get('fairplay_settings') is not None and fairplay_enabled():
         plan.settings = clean_settings(payload['fairplay_settings'], partial=True)
+    can_reconcile = not (_AUDIENCE_FIELDS & set(restricted))
+    plan.audience_from_scope = bool((_AUDIENCE_FIELDS | {'vis_mode'}) & payload.keys()) and can_reconcile
+    if payload.get('fairplay_audience_confirm') is True:
+        if 'fairplay_audience_confirm' in restricted or not can_reconcile:
+            raise ValidationError('You cannot confirm this FairPlay audience.')
+        mode = payload.get('fairplay_audience_mode')
+        if mode not in ('classes', 'organizations', 'selected'):
+            raise ValidationError('Choose the intended FairPlay audience before confirming it.')
+        plan.audience_mode = mode
     return plan
 
 
@@ -169,6 +182,12 @@ def apply_fairplay_editor(contest, plan):
     on = plan.was_on if plan.want is None else plan.want
     set_fairplay_exam(contest, on)
     fairplay_check_contest(contest)
+    if on and plan.audience_from_scope:
+        mode = ('classes' if contest.is_organization_private and contest.classes.exists() else
+                'organizations' if contest.is_organization_private else 'selected')
+        confirm_audience(contest, mode)
+    elif on and plan.audience_mode is not None:
+        confirm_audience(contest, plan.audience_mode)
 
 
 def fairplay_edit_lock(contest):
@@ -203,22 +222,262 @@ class FairPlayEditLock:
             raise ValidationError(_("The problems can't be changed now."))
 
 
-def open_exam_values(contest, acting_user=None):
-    """The saved allowed websites and Duke Box link for the form; empty when FairPlay cannot say."""
+def acting_editor_username(contest):
+    """A synced editor of the exam (author first, then curator), for reads made without a request user."""
+    from judge.models import Profile
+    for relation in ('authored_contests', 'curated_contests'):
+        name = Profile.objects.filter(**{relation: contest}).order_by('user__username').values_list(
+            'user__username', flat=True).first()
+        if name:
+            return name
+    return None
+
+
+CLOSED_BOOK = {'pages': [], 'resources': []}
+_ORIGIN_RE = re.compile(r'https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?')
+_WILDCARD_RE = re.compile(r'https://\*\.([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)')
+_SHARED_SUFFIXES = frozenset((
+    'com', 'org', 'net', 'edu', 'gov', 'mil', 'int', 'io', 'co', 'ac', 'app', 'dev', 'info', 'biz',
+    'co.uk', 'ac.uk', 'org.uk', 'gov.uk', 'me.uk', 'com.au', 'edu.au', 'org.au', 'net.au', 'com.cn', 'edu.cn',
+    'org.cn', 'net.cn', 'gov.cn', 'co.jp', 'ac.jp', 'co.kr', 'ac.kr', 'co.in', 'ac.in', 'com.br', 'com.mx',
+    'co.nz', 'co.za', 'edu.uz', 'com.uz', 'github.io', 'herokuapp.com', 'blogspot.com', 'appspot.com',
+    'cloudfront.net', 'amazonaws.com', 'azurewebsites.net', 'netlify.app', 'vercel.app', 'pages.dev',
+    's3.amazonaws.com', 'workers.dev', 'wordpress.com', 'githubusercontent.com', 'gitlab.io', 'onrender.com',
+    'fly.dev', 'replit.dev', 'r2.dev', 'hf.space', 'web.app', 'firebaseapp.com', 'notion.site', 'glitch.me', 'repl.co'))
+
+
+def _resource_ok(value):
+    if not isinstance(value, str) or len(value) > 300:
+        return False
+    if _ORIGIN_RE.fullmatch(value):
+        return True
+    m = _WILDCARD_RE.fullmatch(value)
+    return bool(m) and m.group(1) not in _SHARED_SUFFIXES
+MAX_SIGNED_SITES = 32
+
+
+def clean_lock_sites(value):
+    """FairPlay's lock_sites reduced to what may be signed: https pages, https origins, no resources without pages."""
+    if not isinstance(value, dict):
+        return dict(CLOSED_BOOK, pages=[], resources=[])
+    pages = [p for p in value.get('pages') or [] if isinstance(p, str) and p.startswith('https://') and '*' not in p.split('/')[2]
+             and len(p) <= 2100 and not any(c in p for c in ' \t\r\n"\'<>')]
+    resources = [r for r in value.get('resources') or [] if _resource_ok(r)]
+    if not pages:
+        return {'pages': [], 'resources': []}
+    resources = resources[:max(0, MAX_SIGNED_SITES - 1)]
+    return {'pages': pages[:MAX_SIGNED_SITES - len(resources)], 'resources': resources}
+
+
+OPEN_EXAM_FAILURE = 5
+
+
+def open_exam_values(contest, acting_user=None, with_lock_sites=False):
+    """The saved allowed websites and Duke Box link for the form, and FairPlay's lock_sites (the only
+    thing ever signed for a client); empty when FairPlay cannot say."""
     from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
     empty = {'websites': [], 'box_link': ''}
+    if with_lock_sites:
+        empty['lock_sites'] = clean_lock_sites(None)
+    from django.core.cache import cache
+    failed = 'fp-open-exam-failed:%s' % contest.key
+    if cache.get(failed):
+        return empty
     try:
         view = FairPlayClient(acting_user=acting_user).exam(contest.key, read_timeout=QUICK_READ_TIMEOUT)
     except FairPlayError:
+        cache.set(failed, 1, OPEN_EXAM_FAILURE)
         return empty
-    settings = editor_settings(view.get('settings') if isinstance(view, dict) else None)
-    return {'websites': [line for line in settings['websites'].splitlines() if line.strip()],
-            'box_link': settings.get('box_link', '')}
+    fp_settings = view.get('settings') if isinstance(view, dict) else None
+    settings = editor_settings(fp_settings)
+    values = {'websites': [line for line in settings['websites'].splitlines() if line.strip()],
+              'box_link': settings.get('box_link', '')}
+    if with_lock_sites:
+        values['lock_sites'] = clean_lock_sites(fp_settings.get('lock_sites') if isinstance(fp_settings, dict) else None)
+    return values
+
+
+LOCK_SITES_FRESH = 15
+LOCK_SITES_FAILURE = 2
+LOCK_SITES_STALE = 600
+LOCK_SITES_LOGGER = logging.getLogger('judge.fairplay')
+
+
+def _fetch_lock_sites(contest, acting_user):
+    """FairPlay's lock_sites for the exam, or None when FairPlay cannot be asked or does not answer."""
+    from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
+    try:
+        view = FairPlayClient(acting_user=acting_user).exam(contest.key, read_timeout=QUICK_READ_TIMEOUT)
+    except FairPlayError:
+        return None
+    fp_settings = view.get('settings') if isinstance(view, dict) else None
+    if not isinstance(fp_settings, dict):
+        return None
+    return clean_lock_sites(fp_settings.get('lock_sites'))
+
+
+def refresh_lock_sites(contest):
+    """Fill the per-exam cache; call it before any row lock is taken. One caller asks FairPlay at a time, the last
+    good value is served for 10 minutes when FairPlay fails, and a failure is remembered for 2 seconds only."""
+    from django.core.cache import cache
+    fresh, good, flight = ('fp-browser-sites-v2:%s' % contest.pk, 'fp-lock-sites-good:%s' % contest.pk,
+                           'fp-lock-sites-flight:%s' % contest.pk)
+    if isinstance(cache.get(fresh), dict):
+        return
+    if not cache.add(flight, 1, 10):
+        return
+    try:
+        editor = acting_editor_username(contest)
+        value = _fetch_lock_sites(contest, editor) if editor else None
+        if editor is None and cache.add('fp-lock-sites-noeditor:%s' % contest.pk, 1, 3600):
+            LOCK_SITES_LOGGER.warning('FairPlay exam %s has no author or curator to read its websites as; '
+                                      'students get a closed-book exam', contest.key)
+        if value is not None:
+            cache.set(fresh, value, LOCK_SITES_FRESH)
+            from django.utils import timezone
+            until_end = int((contest.end_time - timezone.now()).total_seconds())
+            cache.set(good, value, max(LOCK_SITES_STALE, until_end))
+        else:
+            kept = cache.get(good)
+            cache.set(fresh, kept if isinstance(kept, dict) else clean_lock_sites(None), LOCK_SITES_FAILURE)
+    finally:
+        cache.delete(flight)
+
+
+_ASSET_DENY_SUFFIX = (
+    "openai.com", "chatgpt.com", "oaiusercontent.com", "claude.ai", "anthropic.com", "gemini.google.com",
+    "bard.google.com", "aistudio.google.com", "notebooklm.google.com", "copilot.microsoft.com",
+    "copilot.cloud.microsoft", "bing.com", "perplexity.ai", "poe.com", "deepseek.com", "kimi.moonshot.cn", "kimi.com",
+    "moonshot.cn", "doubao.com", "tongyi.aliyun.com", "qianwen.aliyun.com", "yiyan.baidu.com", "chatglm.cn",
+    "yuanbao.tencent.com", "character.ai", "you.com", "phind.com", "mistral.ai", "groq.com", "x.ai", "grok.com",
+    "meta.ai", "pi.ai", "cohere.com", "huggingface.co", "hf.co", "githubcopilot.com", "copilot.github.com",
+    "blackbox.ai", "chatbot.theb.ai", "quillbot.com", "qwen.ai", "tongyi.com", "z.ai", "metaso.cn", "kimi.ai",
+    "manus.im", "felo.ai", "chegg.com", "wolframalpha.com", "grammarly.com", "deepl.com", "duckduckgo.com",
+    "kagi.com", "msn.com", "github.dev", "vscode.dev", "replit.com", "codepen.io", "jsfiddle.net", "ideone.com",
+    "onlinegdb.com", "godbolt.org", "rentry.co", "dpaste.org", "whatsapp.com", "whatsapp.net", "telegram.org",
+    "telegram.me", "t.me", "wechat.com", "weixin.qq.com", "wx.qq.com", "qq.com", "messenger.com", "facebook.com",
+    "instagram.com", "discord.com", "discord.gg", "discordapp.com", "slack.com", "teams.microsoft.com",
+    "teams.live.com", "signal.org", "line.me", "skype.com", "mail.google.com", "outlook.live.com",
+    "outlook.office.com", "chat.google.com", "x.com", "twitter.com", "outlook.office365.com", "teams.cloud.microsoft",
+    "m365.cloud.microsoft", "zoom.us", "reddit.com", "drive.google.com", "docs.google.com", "sheets.google.com",
+    "slides.google.com", "keep.google.com", "dropbox.com", "onedrive.live.com", "1drv.ms", "sharepoint.com",
+    "box.com", "notion.so", "notion.site", "evernote.com", "pastebin.com", "paste.ee", "hastebin.com",
+    "gist.github.com", "gist.githubusercontent.com", "raw.githubusercontent.com", "wetransfer.com", "mega.nz",
+    "pan.baidu.com", "weiyun.com", "kdocs.cn", "docs.qq.com", "shimo.im", "yuque.com", "feishu.cn", "larksuite.com",
+    "codeshare.io", "file.io", "gofile.io", "catbox.moe", "notion.com", "icloud.com", "proton.me", "alipan.com",
+    "quark.cn",
+)
+_ASSET_DENY_EXACT = (
+    "github.com", "www.github.com", "www.google.com", "google.com", "translate.google.com", "meet.google.com",
+    "search.brave.com",
+)
+
+
+def _asset_denied(host):
+    return host in _ASSET_DENY_EXACT or any(host == d or host.endswith('.' + d) for d in _ASSET_DENY_SUFFIX)
+
+
+def _asset_origin(value):
+    """'https://host[:port]' for an absolute or protocol-relative URL, else None. Never from user input."""
+    from urllib.parse import urlsplit
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.startswith('//'):
+        text = 'https:' + text
+    if not text.startswith('https://'):
+        return None
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or '').lower().rstrip('.')
+    if parts.username is not None or parts.password is not None or '*' in host or not host or _asset_denied(host):
+        return None
+    origin = 'https://' + host + (':%d' % port if port not in (None, 443) else '')
+    return origin if _ORIGIN_RE.fullmatch(origin) else None
+
+
+_ASSET_TEMPLATE_RE = re.compile(r'<(?:script|link)\b[^>]*?\b(?:src|href)=["\'](https?://[^"\']+|//[^"\']+)["\']', re.I)
+_ASSET_TEMPLATES = ('mathjax-load.html', 'base.html', 'problem/workspace.html', 'contest/contest.html', 'problem/problem.html')
+_ASSET_SETTINGS = ('ACE_URL', 'SELECT2_JS_URL', 'SELECT2_CSS_URL', 'JQUERY_JS', 'FONTAWESOME_CSS', 'STATIC_URL',
+                   'MATHOID_URL', 'MATHOID_CACHE_URL', 'MEDIA_URL')
+MAX_ASSETS = 16
+
+
+def _oj_asset_origins():
+    """Exact https origins the OJ's own pages load subresources from (CDNs, remote static), from the live settings
+    and the page templates; relative or local URLs add nothing. Deny-listed hosts never appear."""
+    import os
+    from django.conf import settings
+    from django.core.cache import cache
+    cached = cache.get('fp-oj-assets')
+    if isinstance(cached, list):
+        return cached
+    candidates = [getattr(settings, name, None) for name in _ASSET_SETTINGS]
+    roots = []
+    for engine in getattr(settings, 'TEMPLATES', []):
+        roots += [d for d in engine.get('DIRS', []) if isinstance(d, str)]
+    for name in _ASSET_TEMPLATES:
+        for root in roots:
+            path = os.path.join(root, name)
+            if os.path.isfile(path):
+                try:
+                    with open(path, encoding='utf-8') as handle:
+                        candidates += _ASSET_TEMPLATE_RE.findall(handle.read())
+                except (OSError, ValueError):
+                    pass
+                break
+    out = []
+    for candidate in candidates:
+        origin = _asset_origin(candidate)
+        if origin and origin not in out:
+            out.append(origin)
+    out = out[:MAX_ASSETS]
+    cache.set('fp-oj-assets', out, LOCK_SITES_FRESH)
+    return out
+
+
+def _log_hourly(key, message, *args):
+    from django.core.cache import cache
+    try:
+        if cache.add('fp-editor-warn:' + key, 1, 3600):
+            LOCK_SITES_LOGGER.exception(message, *args)
+    except Exception:
+        pass
+
+
+def oj_asset_origins():
+    """The asset origins, never able to raise into a request: on any error the last good list (or none)."""
+    from django.core.cache import cache
+    try:
+        origins = _oj_asset_origins()
+        cache.set('fp-oj-assets-good', origins, 86400)
+        return origins
+    except Exception:
+        _log_hourly('assets', 'FairPlay could not work out the OJ asset origins')
+        try:
+            good = cache.get('fp-oj-assets-good')
+        except Exception:
+            good = None
+        return good if isinstance(good, list) else []
+
+
+def signed_lock_sites(contest):
+    """Pages and resource origins to sign for an active session of this exam. Reads the cache only: it never
+    calls FairPlay, so it is safe under row locks; refresh_lock_sites fills the cache beforehand."""
+    from django.core.cache import cache
+    value = cache.get('fp-browser-sites-v2:%s' % contest.pk)
+    if not isinstance(value, dict):
+        value = cache.get('fp-lock-sites-good:%s' % contest.pk)
+    return clean_lock_sites(value)
 
 
 def fairplay_editor_context(request, contest, restricted):
     on = is_fairplay_exam(contest) if contest is not None else False
     context = {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on, 'fairplay_open_exam': None}
+    context['fairplay_audience'] = audience_descriptor(contest) if contest is not None else None
     if fairplay_enabled() and 'fairplay_settings' not in restricted:
         context['fairplay_open_exam'] = (open_exam_values(contest, request.user.username) if on
                                          else {'websites': [], 'box_link': ''})
@@ -244,9 +503,14 @@ def fairplay_box_error(result):
 
 def fairplay_save_settings(acting_user, contest, plan, old_key=None):
     """After the editor's save: send changed settings (or, on a key change, the old ones) to FairPlay."""
+    from django.contrib.auth.models import User
+    from judge.models import Contest
     from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
     if not fairplay_enabled() or not is_fairplay_exam(contest):
         return FairPlaySaveResult()
+    user = User.objects.filter(username=acting_user, is_active=True).first() if acting_user else None
+    if user is None or not Contest.objects.filter(id=contest.id).exists() or not contest.is_editable_by(user):
+        return FairPlaySaveResult(not_saved=_('You are not an author or curator of this assignment.'))
     settings = plan.settings
     if settings is None and old_key and old_key != contest.key:
         try:

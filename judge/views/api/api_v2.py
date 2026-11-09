@@ -217,7 +217,7 @@ class APIContestList(APIListView):
             .prefetch_related(
                 Prefetch(
                     'tags',
-                    queryset=ContestTag.objects.only('name'),
+                    queryset=ContestTag.objects.exclude(name__startswith='fp-aud-').only('name'),
                     to_attr='tag_list',
                 ),
             )

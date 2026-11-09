@@ -103,6 +103,15 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
             'review': 'answers'}, read_timeout=3)
         self.assertTrue(is_fairplay_exam(self.reload_exam()))
 
+    def test_settings_not_sent_for_a_non_editor(self):
+        from judge.utils.fairplay_editor import FairPlayEditorPlan, fairplay_save_settings
+        plan = FairPlayEditorPlan(settings=dict(EDITOR_SETTINGS))
+        for who in ('fp_tester', 'fp_outsider', 'nobody', ''):
+            result = fairplay_save_settings(who, self.reload_exam(), plan, old_key='other')
+            self.assertIsNotNone(result.not_saved, who)
+        self.fp.set_settings.assert_not_called()
+        self.fp.exam.assert_not_called()
+
     def test_unchanged_settings_not_sent(self):
         self.assertEqual(self.save().status_code, 200)
         self.fp.set_settings.assert_not_called()
@@ -139,15 +148,23 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         ContestTag.objects.create(name='exam', color='#123456')
         tag = ContestTag.objects.get(name=FAIRPLAY_TAG)
         exam_tag = ContestTag.objects.get(name='exam')
+        reserved = set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True))
         # The picker's tags replace the others but leave the FairPlay tag as the lock option says.
         self.assertEqual(self.save(tags=[exam_tag.id], fairplay_required=Ellipsis).status_code, 200)
         exam = self.reload_exam()
-        self.assertEqual(sorted(exam.tags.values_list('name', flat=True)), ['exam', FAIRPLAY_TAG])
-        self.assertEqual(self.save(tags=[exam_tag.id, tag.id], fairplay_required=False).status_code, 200)
+        self.assertEqual(sorted(exam.tags.exclude(name__startswith='fp-aud-').values_list('name', flat=True)),
+                         ['exam', FAIRPLAY_TAG])
+        self.assertEqual(set(exam.tags.filter(name__startswith='fp-aud-').values_list('id', flat=True)), reserved)
+        self.assertEqual(self.save(tags=[exam_tag.id, tag.id], fairplay_required=False).status_code, 400)
+        self.assertTrue(is_fairplay_exam(self.reload_exam()))
+        self.assertEqual(self.save(tags=[exam_tag.id], fairplay_required=False).status_code, 200)
         self.assertFalse(is_fairplay_exam(self.reload_exam()))
+        self.assertEqual(set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True)), reserved)
         # Not offered in the picker, and not creatable from it.
         html = self.client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
         self.assertNotIn('>%s</option>' % FAIRPLAY_TAG, html)
+        for name in exam.tags.filter(name__startswith='fp-aud-').values_list('name', flat=True):
+            self.assertNotIn('>%s</option>' % name, html)
         self.assertIn('>exam</option>', html)
         response = self.client.post(reverse('contest_tag_create'), json.dumps({'name': FAIRPLAY_TAG}),
                                     content_type='application/json')
@@ -192,6 +209,7 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         curator = create_user(username='fp_curator', user_permissions=('edit_own_contest',))
         self.exam.curators.add(curator.profile)
         set_fairplay(self.exam, False)
+        reserved = set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True))
         client = Client()
         client.force_login(curator)
         html = client.get(reverse('contest_edit', args=['fpexam'])).content.decode()
@@ -199,6 +217,12 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         response = client.post(reverse('contest_edit', args=['fpexam']),
                                json.dumps(self.payload(fairplay_settings=EDITOR_SETTINGS,
                                                        tags=[ContestTag.objects.get(name=FAIRPLAY_TAG).id])),
+                               content_type='application/json')
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertFalse(is_fairplay_exam(self.reload_exam()))
+        self.assertEqual(set(self.reload_exam().tags.filter(name__startswith='fp-aud-').values_list('id', flat=True)), reserved)
+        response = client.post(reverse('contest_edit', args=['fpexam']),
+                               json.dumps(self.payload(fairplay_settings=EDITOR_SETTINGS, tags=[])),
                                content_type='application/json')
         self.assertEqual(response.status_code, 200, response.content)
         self.assertFalse(is_fairplay_exam(self.reload_exam()))
@@ -524,3 +548,17 @@ class FairPlayOpenExamTestCase(FairPlayEditorMixin, TestCase):
         response = self.save(fairplay_settings=EDITOR_SETTINGS)
         self.assertEqual(response.status_code, 200, response.content)
         self.assertNotIn('box_link', self.fp.set_settings.call_args.args[1])
+
+
+class FairPlayOpenExamFailureCacheTestCase(FairPlayEditorMixin, TestCase):
+    def test_an_unreachable_fairplay_server_is_asked_once_in_a_short_window(self):
+        from django.core.cache import cache
+        from judge.utils.fairplay_editor import open_exam_values
+        cache.delete('fp-open-exam-failed:%s' % self.exam.key)
+        self.fp.exam.side_effect = FairPlayUnreachable('down')
+        first = open_exam_values(self.exam)
+        second = open_exam_values(self.exam)
+        self.assertEqual(first, {'websites': [], 'box_link': ''})
+        self.assertEqual(second, first)
+        self.assertEqual(self.fp.exam.call_count, 1)
+        cache.delete('fp-open-exam-failed:%s' % self.exam.key)

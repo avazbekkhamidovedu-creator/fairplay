@@ -2,7 +2,7 @@
 import re
 
 from django.test import Client, TestCase
-from django.urls import URLPattern, URLResolver, get_resolver
+from django.urls import URLPattern, URLResolver, get_resolver, reverse
 
 from judge.models import ContestParticipation, ContestSubmission, Language, Problem, Submission, SubmissionSource
 from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin
@@ -85,7 +85,21 @@ class FairPlayHidingCrawlTestCase(FairPlayDataMixin, TestCase):
                         continue
                     body = b''.join(response) if response.streaming else response.content
                     text = body.decode('utf-8', errors='replace')
-                    found = [m for m in MARKERS if m in text]
+                    metadata_landing = user.pk == self.student.pk and url in {
+                        reverse('contest_view', args=[self.exam.key]),
+                        reverse('contest_fairplay_launch', args=[self.exam.key]),
+                    }
+                    if metadata_landing:
+                        self.assertIn('<main class="fp-launch">', text)
+                        self.assertIn('no-store', response['Cache-Control'])
+                    discovery_list = user.pk == self.student.pk and url in {
+                        reverse('contest_list'), reverse('contest_list', args=[1]),
+                        reverse('contest_list_legacy'), reverse('contest_list_legacy', args=[1]),
+                    }
+                    if discovery_list:
+                        self.assertIn(reverse('contest_fairplay_launch', args=[self.exam.key]), text)
+                    allowed_name = (metadata_landing or discovery_list)
+                    found = [m for m in MARKERS if m in text and not (allowed_name and m == self.exam.name)]
                     if found:
                         leaks.append('%s %s?%s -> %s' % (user.username, url, '&'.join(query), found))
         self.maxDiff = None

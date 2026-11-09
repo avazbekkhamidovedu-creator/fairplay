@@ -467,7 +467,18 @@ class Profile(models.Model):
 
     def update_contest(self):
         contest = self.current_contest
-        if contest is not None and (contest.ended or not contest.contest.is_accessible_by(self.user)):
+        if contest is None:
+            return
+        if contest.ended:
+            self.remove_contest()
+            return
+        # An ordinary browser request must not erase a device-owned participation.
+        # Retaining this pointer grants no content permission; admission remains request-scoped.
+        from judge.models.fairplay_device_session import FairPlayDeviceSession
+        if FairPlayDeviceSession.objects.filter(user_id=self.user_id, participation_id=contest.pk,
+                state__in=('active', 'finishing'), fairplaydeviceslot__user_id=self.user_id).exists():
+            return
+        if not contest.contest.is_accessible_by(self.user):
             self.remove_contest()
 
     update_contest.alters_data = True

@@ -391,7 +391,14 @@
                 if (typeof window.dkuojFlushServerDraft === 'function') {
                     var flushed = window.dkuojFlushServerDraft();
                     if (flushed && typeof flushed.then === 'function') {
-                        flushed.then(submitLeave, submitLeave);
+                        if (window.dkuojFlushBlocksLeave) {
+                            var leaveSent = false;
+                            var leaveOnce = function () { if (!leaveSent) { leaveSent = true; submitLeave(); } };
+                            setTimeout(leaveOnce, 5000);
+                            flushed.then(leaveOnce, leaveOnce);
+                        } else {
+                            flushed.then(submitLeave, submitLeave);
+                        }
                         return;
                     }
                 }

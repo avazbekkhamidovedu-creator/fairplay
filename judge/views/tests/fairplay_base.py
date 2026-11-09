@@ -18,7 +18,9 @@ from judge.storage.resilient import ResilientStorage
 from judge.utils.fairplay import set_fairplay_exam
 
 TOKEN = 'fp-test-token-0123456789abcdef0123456789'
-FAIRPLAY_ON = override_settings(FAIRPLAY_TOKEN=TOKEN, FAIRPLAY_URL='https://exam.example.edu')
+INSTALLATION_ID = 'eaab2f6e-7072-4c86-968c-a9c624cc676d'
+FAIRPLAY_ON = override_settings(FAIRPLAY_TOKEN=TOKEN, FAIRPLAY_URL='https://exam.example.edu',
+                                FAIRPLAY_INSTALLATION_ID=INSTALLATION_ID)
 FAIRPLAY_OFF = override_settings(FAIRPLAY_TOKEN='', FAIRPLAY_URL='')
 
 # Strings that exist only in answer keys / hidden data; none may ever reach FairPlay.
@@ -112,6 +114,10 @@ class FairPlayDataMixin:
         for order, problem in enumerate((cls.mcq, cls.blank, cls.short, cls.file, cls.code), 1):
             create_contest_problem(contest=cls.exam, problem=problem, points=problem.points, order=order,
                                    partial=True)
+        from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
+        apply_fairplay_editor(cls.exam, parse_fairplay_payload(cls.exam, {
+            'fairplay_required': True, 'fairplay_audience_confirm': True,
+            'fairplay_audience_mode': 'classes'}, set()))
 
     @classmethod
     def setUpClass(cls):
@@ -143,9 +149,21 @@ class FairPlayDataMixin:
         return Contest.objects.get(pk=self.exam.pk)
 
 
+def installation_path(path):
+    from urllib.parse import parse_qsl, urlencode, urlsplit
+    from judge.utils.fairplay_identity import installation_id
+    parsed = urlsplit(path)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(name == 'installation_id' for name, _value in query):
+        query.append(('installation_id', installation_id()))
+    return parsed._replace(query=urlencode(query)).geturl()
+
+
 def fp_signed(method, path, body=b'', token=TOKEN, timestamp=None, nonce=None, acting_user=None):
     """Test-client META for a request signed by FairPlay."""
+    from urllib.parse import urlsplit
     from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, signed_headers
+    path = installation_path(path)
     headers = signed_headers(method, path, body, acting_user=acting_user, timestamp=timestamp, nonce=nonce,
                              token=token, direction=DIRECTION_FP_TO_OJ)
-    return {'HTTP_' + key.upper().replace('-', '_'): value for key, value in headers.items()}
+    return dict({'HTTP_' + key.upper().replace('-', '_'): value for key, value in headers.items()}, QUERY_STRING=urlsplit(path).query)

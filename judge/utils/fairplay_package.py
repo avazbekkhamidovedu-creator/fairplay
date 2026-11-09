@@ -331,7 +331,9 @@ def build_package(contest):
     collector = _AssetCollector()
     contest_problems = list(contest.contest_problems.select_related('problem').order_by('order', 'id'))
     questions = [_question(contest, cp, index, collector) for index, cp in enumerate(contest_problems)]
+    from judge.utils.fairplay_audience import audience_descriptor
     body = {
+        'audience': audience_descriptor(contest),
         'total_points': sum(cp.points for cp in contest_problems),
         'description_md': collector.rewrite(contest.description or ''),
         'questions': questions,
@@ -384,6 +386,7 @@ def build_exam_entry(contest, package=None):
         Q(authored_contests=contest) | Q(curated_contests=contest)).select_related('user').distinct()
     return {
         'key': contest.key,
+        'audience': package.get('audience', {}),
         'name': contest.name,
         'course': _course(contest),
         'classes': [{'id': c.id, 'name': c.name} for c in contest.classes.order_by('id')],

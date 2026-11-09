@@ -2,6 +2,7 @@
 import json
 import logging
 from functools import wraps
+from django.core.exceptions import ImproperlyConfigured
 
 from django.db.models import Q
 from django.http import Http404, HttpResponse, JsonResponse
@@ -14,7 +15,8 @@ from judge.utils.fairplay import FAIRPLAY_LEAD, fairplay_exams, fairplay_token
 from judge.utils.fairplay_delivery import DeliveryError, TRANSIENT_ERRORS, deliver_submission, parse_time, \
     results_page, store_upload, transient_error
 from judge.utils.fairplay_package import PACKAGE_MAX_BYTES, build_package, exam_list_page, iso
-from judge.utils.fairplay_signing import SignatureError, parse_signature_headers, verify_signature
+from judge.utils.fairplay_signing import SignatureError, parse_signature_headers, signed_headers, verify_signature
+from judge.utils.fairplay_identity import installation_id
 from judge.utils.fairplay_teaching import class_roster, classes_with_fairplay_login
 
 __all__ = ['class_roster_view', 'exam_asset', 'exam_package', 'exam_results', 'exam_submissions', 'exam_uploads',
@@ -89,12 +91,31 @@ def fairplay_api(view=None, max_bytes=DEFAULT_MAX_BYTES):
             return _delivery_error(e)
         request.fairplay_body = body
         try:
-            return view(request, *args, **kwargs)
+            identity = installation_id()
+            if request.GET.getlist('installation_id') != [identity]:
+                response = _error(409, 'Installation identity does not match.')
+            elif request.content_type == 'application/json' and body and isinstance(json.loads(body), dict) and \
+                    json.loads(body).get('installation_id', identity) != identity:
+                response = _error(409, 'Installation identity does not match.')
+            else:
+                response = view(request, *args, **kwargs)
+        except ImproperlyConfigured:
+            response = _error(503, 'Installation identity is not configured.')
+        except (ValueError, UnicodeDecodeError):
+            response = _error(400, 'Invalid JSON body.')
+        except Http404:
+            response = _error(404, 'Not Found')
         except DeliveryError as e:
-            return _delivery_error(e)
+            response = _delivery_error(e)
         except TRANSIENT_ERRORS:
             logger.exception('FairPlay API %s %s failed', request.method, request.path)
-            return _delivery_error(transient_error('DKU OJ is temporarily unavailable; try again.'))
+            response = _delivery_error(transient_error('DKU OJ is temporarily unavailable; try again.'))
+        if not response.streaming:
+            for name, value in signed_headers('RESPONSE %s %d' % (request.method, response.status_code),
+                                             request.get_full_path(), response.content,
+                                             acting_user=parsed[1]).items():
+                response[name] = value
+        return response
     return csrf_exempt(wrapped)
 
 
@@ -137,6 +158,13 @@ def _too_early(contest, now):
     response = _error(425, 'The exam package is available from %s.' % iso(opens))
     response['Retry-After'] = str(int((opens - now).total_seconds()) + 1)
     return response
+
+
+@fairplay_api
+@require_GET
+def installation(request):
+    return _json({'protocol': 1, 'installation_id': installation_id(),
+                  'request_nonce': request.META['HTTP_X_FP_NONCE']})
 
 
 @fairplay_api

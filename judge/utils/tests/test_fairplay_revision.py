@@ -151,6 +151,8 @@ class FairPlayRevisionListTestCase(FairPlayAPIMixin, TestCase):
                                        args=['fpexam', 'fp_student', self.mcq.code])).content.decode()
         self.assertIn('FairPlay hand-in 1, superseded', html)
         self.assertIn('FairPlay hand-in 2', html)
+        self.assertIn('FairPlay hand-in 2 · latest', html)
+        self.assertLess(html.index('FairPlay hand-in 2'), html.index('FairPlay hand-in 1, superseded'))
         self.client.force_login(self.student)
         self.assertNotIn('FairPlay hand-in', self.client.get(
             reverse('contest_user_submissions', args=['fpexam', 'fp_student', self.mcq.code])).content.decode())

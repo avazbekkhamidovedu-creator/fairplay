@@ -1,0 +1,19 @@
+{% if fairplay_native_mode %}
+<p class="fairplay-exam-row"><strong>{{ _('FairPlay required') }}</strong> — {{ _('Students must open this exam in the FairPlay app. No access code is needed.') }}</p>
+{% else %}
+{% set t = fairplay_modes.table %}
+<p class="fairplay-exam-row">
+    <strong>{{ _('FairPlay exam: yes') }}</strong>
+    {% if not t %}
+        - {{ _('mode per student: -') }}
+    {% else %}
+        - {{ _('strong lock') }}: {% if t.strong_lock is none %}-{% elif t.strong_lock %}{{ _('on') }}{% else %}{{ _('off') }}{% endif %}
+        - {{ _('ON') }} {{ t.counts.on }}, {{ _('OFF') }} {{ t.counts.off }},
+        {{ _('NOT STARTED') }} {{ t.counts.not_started }}, {{ _('SUBMITTED') }} {{ t.counts.submitted }}
+        {% if t.second_device_total %}
+            <span class="fairplay-second-device" style="background:#c0392b;color:#fff;border-radius:3px;padding:0 4px">{{ _('second device x%(n)d (%(s)d students)', n=t.second_device_total, s=t.second_device_students) }}</span>
+        {% endif %}
+    {% endif %}
+</p>
+
+{% endif %}

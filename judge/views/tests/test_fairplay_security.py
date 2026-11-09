@@ -17,7 +17,7 @@ from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP,
     sign
 from judge.utils.fairplay_teaching import CLASS_LOGIN_KEY
 from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, fp_signed, \
-    set_fairplay
+    installation_path, set_fairplay
 from judge.views.tests.test_fairplay_pages import PagesMixin, fake_response
 
 NEW_TOKEN = 'fp-new-token-rotation-0123456789abcdefghij'
@@ -56,6 +56,7 @@ class ClassScopeTestCase(FairPlayDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('zed', [s['username'] for s in response.json()['students']])
 
+    @override_settings(FAIRPLAY_CLASS_LOGIN_ENABLED=True)
     def test_class_with_a_class_login_shares_its_roster(self):
         # A class login may come before any FairPlay assignment; DKU OJ records it in the cache.
         from judge.utils.fairplay_teaching import mark_class_login
@@ -70,6 +71,12 @@ class ClassScopeTestCase(FairPlayDataMixin, TestCase):
         # Lost (cache cleared): back to 404 until a manager makes or sees a class login again.
         cache.delete(CLASS_LOGIN_KEY % self.math.id)
         self.assertEqual(self.get('fairplay_api_class_roster', self.math.id).status_code, 404)
+
+    def test_class_login_cache_ignored_while_class_logins_are_off(self):
+        from judge.utils.fairplay_teaching import mark_class_login
+        mark_class_login(self.math.id)
+        self.assertEqual(self.get('fairplay_api_class_roster', self.math.id).status_code, 404)
+        self.assertEqual(self.get('fairplay_api_student_classes', 'zed').json(), {'classes': []})
 
     def test_course_wide_fairplay_assignment_covers_its_classes(self):
         create_contest('mathcourse', authors=('fp_teacher',), is_organization_private=True,
@@ -296,7 +303,7 @@ class TokenRotationTestCase(FairPlayDataMixin, TestCase):
                             return_value=fake_response(200, {'ok': True})) as request:
                 FairPlayClient(acting_user='fp_teacher').close_exam('fpexam')
         headers = request.call_args[1]['headers']
-        canonical = canonical_string('POST', '/api/integrations/dkuoj/v1/exams/fpexam/close',
+        canonical = canonical_string('POST', installation_path('/api/integrations/dkuoj/v1/exams/fpexam/close'),
                                      headers['X-FP-Timestamp'], headers['X-FP-Nonce'], 'fp_teacher',
                                      hashlib.sha256(b'').hexdigest())
         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, NEW_TOKEN), canonical))

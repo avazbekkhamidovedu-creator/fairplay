@@ -39,6 +39,11 @@ class AssignmentDraftView(LoginRequiredMixin, View):
         if participation is None or participation.contest.key != self.kwargs['contest']:
             return self._error(_('Join the assignment before saving answers.'), 403)
         contest = participation.contest
+        # A retained participation is not proof of current protected admission.
+        # Apply the same exam visibility boundary as question/submission routes.
+        from judge.utils.fairplay import fairplay_hidden_for
+        if fairplay_hidden_for(self.request.user, contest):
+            return self._error(_('Open this exam in FairPlay to save answers.'), 403)
         # Spectators and staff who bypass assignment rules are not being graded, so a draft of
         # theirs would only give auto-submit work that must not be submitted.
         if participation.spectate or user_bypasses_assignment_rules(self.request.user, contest):

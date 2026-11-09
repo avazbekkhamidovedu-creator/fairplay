@@ -1,0 +1,17 @@
+{% if fairplay_discovery %}
+<section class="cl-section fairplay-discovery" aria-label="{{ _('Your FairPlay exams') }}">
+    <h2>{{ _('Your FairPlay exams') }}</h2>
+    {% for exam in fairplay_discovery %}
+    <article class="cl-row" data-key="{{ exam.key }}" data-status="{{ exam.status }}"
+             data-orgs="{{ exam.orgs|join(',') }}" data-classes="{{ exam.classes|join(',') }}"
+             data-tags="{{ exam.tags|join(',') }}"{% if exam.authors %} data-authors="{{ exam.authors|join(',') }}"{% endif %}
+             data-search="{{ exam.name }} {{ exam.key }}">
+        <div class="cl-main">
+            <a class="contest-list-title" href="{{ exam.url }}">{{ exam.name }}</a>
+            <div>{{ exam.start|date(_("M j, Y, G:i")) }}{% if exam.end %} – {{ exam.end|date(_("M j, Y, G:i")) }}{% endif %}</div>
+        </div>
+        <a class="btn btn-primary" href="{{ exam.url }}">{{ _('Open in FairPlay') }}</a>
+    </article>
+    {% endfor %}
+</section>
+{% endif %}

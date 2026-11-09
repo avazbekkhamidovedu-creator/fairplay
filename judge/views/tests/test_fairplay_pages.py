@@ -15,10 +15,11 @@ from judge.models import Class
 from judge.models.tests.util import create_organization, create_user
 from judge.utils.fairplay_client import CLASS_STATUS_CACHE_KEY, FairPlayClient, FairPlayError, FairPlayUnreachable, \
     QUICK_READ_TIMEOUT, cached_class_status
+from judge.utils.fairplay_modes import fairplay_mode_table
 from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP, body_sha256, canonical_string, \
     direction_key, sign, signed_headers
 from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, \
-    fp_signed, grant, set_fairplay
+    fp_signed, grant, installation_path, set_fairplay
 
 # Fixed signing vectors, shared with the FairPlay server's tests.
 VECTORS_PATH = os.path.join(os.path.dirname(__file__), 'fairplay_vectors.json')
@@ -78,13 +79,14 @@ class IncomingSignatureTestCase(FairPlayDataMixin, TestCase):
         return next(c for p, c in self.vectors.items() if p.startswith(path_prefix) and c['direction'] == 'fp->oj')
 
     def send(self, case, path=None, body=None, clock=None, **header_overrides):
-        headers = {'X-FP-Timestamp': str(case['timestamp']), 'X-FP-Nonce': case['nonce'],
-                   'X-FP-Signature': case['signature']}
+        headers = signed_headers(case['method'], installation_path(case['path']), case['body'].encode(),
+                                 timestamp=case['timestamp'], nonce=case['nonce'], token=TOKEN,
+                                 direction=DIRECTION_FP_TO_OJ, acting_user=case.get('acting_user'))
         headers.update(header_overrides)
         with mock.patch('judge.utils.fairplay_signing.time.time', return_value=clock or case['timestamp']):
             if case['method'] == 'GET':
-                return self.client.get(path or case['path'], **meta(headers))
-            return self.client.post(path or case['path'], (body if body is not None else case['body']).encode(),
+                return self.client.get(installation_path(path or case['path']), **meta(headers))
+            return self.client.post(installation_path(path or case['path']), (body if body is not None else case['body']).encode(),
                                     content_type='application/json', **meta(headers))
 
     def test_vector_get_accepted_then_replay_rejected(self):
@@ -257,13 +259,13 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
             data = FairPlayClient(acting_user='fp_teacher').open_exam('fpexam', 'all')
         self.assertEqual(data, {'status': 'live'})
         args, kwargs = call.call_args
-        self.assertEqual(args, ('POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/open'))
+        self.assertEqual(args, ('POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/open')))
         self.assertEqual(kwargs['timeout'], (5, 15))
         body = kwargs['data']
         self.assertEqual(json.loads(body), {'open_to': 'all'})
         headers = kwargs['headers']
         self.assertEqual(headers['X-FP-Acting-User'], 'fp_teacher')
-        canonical = canonical_string('POST', '/api/integrations/dkuoj/v1/exams/fpexam/open',
+        canonical = canonical_string('POST', installation_path('/api/integrations/dkuoj/v1/exams/fpexam/open'),
                                      headers['X-FP-Timestamp'], headers['X-FP-Nonce'], 'fp_teacher',
                                      hashlib.sha256(body).hexdigest())
         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical))
@@ -275,7 +277,7 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
             data = FairPlayClient().access_codes_pdf('fpexam', 'fp_teacher')
         self.assertEqual(data, b'%PDF-1.4 codes')
         args, kwargs = call.call_args
-        path = '/api/integrations/dkuoj/v1/exams/fpexam/access-codes.pdf'
+        path = installation_path('/api/integrations/dkuoj/v1/exams/fpexam/access-codes.pdf')
         self.assertEqual(args, ('GET', 'https://exam.example.edu' + path))
         headers = kwargs['headers']
         self.assertEqual(headers['X-FP-Acting-User'], 'fp_teacher')
@@ -317,18 +319,33 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
             with self.assertRaises(FairPlayUnreachable):
                 client.exam('fpexam')
 
+    @override_settings(FAIRPLAY_CLASS_LOGIN_ENABLED=True)
     def test_read_timeouts(self):
         client = FairPlayClient(acting_user='fp_teacher')
         with mock.patch('judge.utils.fairplay_client.requests.request',
                         return_value=fake_response(200, {'ok': True})) as call:
             client.exam('fpexam', read_timeout=QUICK_READ_TIMEOUT)
             self.assertEqual(call.call_args[1]['timeout'], (3, 3))
-            client.class_status(self.klass.id, use_cache=False, read_timeout=QUICK_READ_TIMEOUT)
+            FairPlayClient(acting_user='fp_course_admin').class_status(
+                self.klass.id, use_cache=False, read_timeout=QUICK_READ_TIMEOUT)
             self.assertEqual(call.call_args[1]['timeout'], (3, 3))
             client.close_exam('fpexam')                       # exam actions keep the long timeout
             self.assertEqual(call.call_args[1]['timeout'], (5, 15))
         self.assertIsNone(cached_class_status(999999))
 
+    def test_class_login_calls_are_off_by_default(self):
+        client = FairPlayClient(acting_user='fp_course_admin')
+        with mock.patch('judge.utils.fairplay_client.requests.request') as call:
+            for fn in (lambda: client.class_status(self.klass.id, use_cache=False),
+                       lambda: client.create_class_login(self.klass),
+                       lambda: client.stop_class_login(self.klass),
+                       lambda: client.reset_student('fp_student', self.klass.id)):
+                with self.assertRaises(FairPlayError) as cm:
+                    fn()
+                self.assertEqual(cm.exception.status, 404)
+            self.assertEqual(call.call_count, 0)
+
+    @override_settings(FAIRPLAY_CLASS_LOGIN_ENABLED=True)
     def test_class_status_cached_and_invalidated(self):
         client = FairPlayClient(acting_user='fp_course_admin')
         status = {'login': None, 'students': []}
@@ -339,11 +356,12 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
             self.assertEqual(call.call_count, 1)
             client.reset_student('fp_student', self.klass.id)
             self.assertEqual(call.call_args[0][1],
-                             'https://exam.example.edu/api/integrations/dkuoj/v1/students/fp_student/reset')
+                             installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/students/fp_student/reset'))
             self.assertEqual(json.loads(call.call_args[1]['data']), {'class_id': self.klass.id})
             client.class_status(self.klass.id)
             self.assertEqual(call.call_count, 3)
 
+    @override_settings(FAIRPLAY_CLASS_LOGIN_ENABLED=True)
     def test_class_status_cache_never_holds_the_password(self):
         client = FairPlayClient(acting_user='fp_course_admin')
         status = {'login': {'username': 'fpsecti-m4tz', 'password': 'river-cotton-pine-moss-583', 'used': 2},
@@ -360,13 +378,34 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
             self.assertEqual(call.call_count, 2)
         self.assertEqual(status['login']['password'], 'river-cotton-pine-moss-583')   # the answer itself untouched
 
+    @override_settings(FAIRPLAY_CLASS_LOGIN_ENABLED=True)
+    def test_class_calls_need_a_current_class_teacher(self):
+        status = {'login': None, 'students': []}
+        with mock.patch('judge.utils.fairplay_client.requests.request',
+                        return_value=fake_response(200, status)) as call:
+            for who in ('fp_teacher', 'fp_student', 'nobody', ''):
+                client = FairPlayClient(acting_user=who)
+                for fn in (lambda: client.class_status(self.klass.id, use_cache=False),
+                           lambda: client.create_class_login(self.klass),
+                           lambda: client.stop_class_login(self.klass),
+                           lambda: client.reset_student('fp_student', self.klass.id)):
+                    with self.assertRaises(FairPlayError) as cm:
+                        fn()
+                    self.assertEqual(cm.exception.status, 403)
+            self.assertEqual(call.call_count, 0)
+            self.org.admins.clear()
+            with self.assertRaises(FairPlayError):
+                FairPlayClient(acting_user='fp_course_admin').class_status(self.klass.id, use_cache=False)
+            self.assertEqual(call.call_count, 0)
+
+    @override_settings(FAIRPLAY_CLASS_LOGIN_ENABLED=True)
     def test_paths(self):
-        client = FairPlayClient(acting_user='u')
+        client = FairPlayClient(acting_user='fp_course_admin')
         with mock.patch('judge.utils.fairplay_client.requests.request',
                         return_value=fake_response(200, {'ok': True})) as call:
             client.create_class_login(self.klass)
             self.assertEqual(call.call_args[0], (
-                'POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/classes/%d/login' % self.klass.id))
+                'POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/classes/%d/login' % self.klass.id)))
             self.assertEqual(json.loads(call.call_args[1]['data']),
                              {'class_name': 'FP Section A', 'course_name': 'fporg'})
             client.stop_class_login(self.klass)
@@ -379,7 +418,7 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
                     ('approve', ('fpexam', 'fp_student'), '/exams/fpexam/approve'),
                     ('student_report', ('fpexam', 'fp_student'), '/exams/fpexam/students/fp_student/report')):
                 getattr(client, method)(*args)
-                self.assertEqual(call.call_args[0][1], 'https://exam.example.edu/api/integrations/dkuoj/v1' + path)
+                self.assertEqual(call.call_args[0][1], installation_path('https://exam.example.edu/api/integrations/dkuoj/v1' + path))
 
 
 EXAM = {
@@ -435,6 +474,10 @@ class PagesMixin(FairPlayDataMixin):
         self.client_class = patcher.start()
         self.addCleanup(patcher.stop)
         self.fp = self.client_class.return_value
+        modes_patcher = mock.patch('judge.utils.fairplay_modes.FairPlayClient', self.client_class)
+        modes_patcher.start()
+        self.addCleanup(modes_patcher.stop)
+        cache.clear()
         self.fp.exam.return_value = exam()
         self.fp.class_status.return_value = {
             'login': {'username': 'fpsecti-m4tz', 'created_at': '2026-10-20T08:00:00Z',
@@ -477,7 +520,11 @@ class AccessCodesTestCase(PagesMixin, TestCase):
         html = self.participation(self.teacher).content.decode()
         self.assertIn(self.BUTTON, html)
         self.assertIn(url, html)
-        self.assertNotIn(self.BUTTON, self.participation(self.student).content.decode())
+        self.assertIn('class="fp-tools"', html)
+        self.assertIn('FairPlay student help', html)
+        student_html = self.participation(self.student).content.decode()
+        self.assertNotIn(self.BUTTON, student_html)
+        self.assertNotIn('class="fp-tools"', student_html)
         set_fairplay(self.exam, False)
         self.assertNotIn(self.BUTTON, self.participation(self.teacher).content.decode())
 
@@ -518,3 +565,60 @@ class AccessCodesTestCase(PagesMixin, TestCase):
         set_fairplay(self.exam, False)
         self.assertEqual(self.download(self.teacher).status_code, 404)
         self.fp.access_codes_pdf.assert_not_called()
+
+
+MODE_STUDENTS = [
+    {'netid': 'fp_student', 'status': 'writing', 'fp_mode': 'on', 'device_state': 'bound',
+     'second_device_attempts': 2, 'last_beat_at': '2026-11-01T10:00:00Z'},
+    {'netid': 'fp_classmate', 'status': 'not_started', 'fp_mode': 'not_started', 'device_state': 'unused',
+     'second_device_attempts': 0, 'last_beat_at': None},
+    {'netid': 'old_one', 'status': 'handed_in'},
+    {'netid': 'odd', 'fp_mode': 'weird', 'device_state': 5, 'second_device_attempts': 'x'},
+]
+
+
+@FAIRPLAY_ON
+class ModeTableTestCase(PagesMixin, TestCase):
+    def test_cells_from_batch_response(self):
+        self.fp.exam.return_value = exam(settings={'strong_lock': True}, students=MODE_STUDENTS)
+        table = fairplay_mode_table(self.exam, 'fp_teacher')
+        cell = table['students']['fp_student']
+        self.assertEqual((cell['mode'], cell['device'], cell['second_device']), ('on', 'bound', 2))
+        self.assertEqual(table['students']['fp_classmate']['device'], 'unused')
+        for netid in ('old_one', 'odd'):
+            cell = table['students'][netid]
+            self.assertEqual((cell['mode'], cell['device'], cell['second_device'], cell['last_beat_at']),
+                             (None, None, 0, None))
+        self.assertIs(table['strong_lock'], True)
+        self.assertEqual(table['counts']['on'], 1)
+        self.assertEqual((table['second_device_total'], table['second_device_students']), (2, 1))
+
+    def test_one_batch_call_cached_briefly(self):
+        fairplay_mode_table(self.exam, 'fp_teacher')
+        fairplay_mode_table(self.exam, 'fp_teacher')
+        self.fp.exam.assert_called_once_with('fpexam', read_timeout=QUICK_READ_TIMEOUT)
+
+    def test_unreachable_is_not_cached(self):
+        self.fp.exam.side_effect = FairPlayUnreachable()
+        self.assertIsNone(fairplay_mode_table(self.exam, 'fp_teacher'))
+        self.fp.exam.side_effect = None
+        self.fp.exam.return_value = exam(students=MODE_STUDENTS)
+        self.assertIsNotNone(fairplay_mode_table(self.exam, 'fp_teacher'))
+
+    def test_summary_row_for_editors_only(self):
+        self.fp.exam.return_value = exam(settings={'strong_lock': False}, students=MODE_STUDENTS)
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        self.assertIn('FairPlay exam: yes', html)
+        self.assertIn('second device x2 (1 students)', html)
+        html = self.login(self.student).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        self.assertNotIn('fairplay-exam-row', html)
+
+    def test_page_survives_old_fairplay_and_outage(self):
+        self.fp.exam.return_value = exam(students=[{'netid': 'fp_student', 'status': 'writing'}])
+        response = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam']))
+        self.assertEqual(response.status_code, 200)
+        self.fp.exam.side_effect = FairPlayUnreachable()
+        cache.clear()
+        response = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam']))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('mode per student: -', response.content.decode())

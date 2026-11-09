@@ -1,0 +1,35 @@
+# Separate protected transport. Keep the existing port-80 DKU OJ site unchanged.
+# Render the ingress secret into a root-readable-only config before nginx -t.
+# Certificates must have IP:10.200.31.64 in SAN; native apps pin the approved CA.
+server {
+    listen 8443 ssl;
+    server_name 10.200.31.64;
+    ssl_certificate /etc/dkuoj-native/server-chain.pem;
+    ssl_certificate_key /etc/dkuoj-native/server.key;
+    ssl_client_certificate /etc/dkuoj-native/device-ca.pem;
+    ssl_crl /etc/dkuoj-native/device-ca.crl;
+    ssl_verify_client optional;
+    ssl_verify_depth 2;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 25m;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-FairPlay-Ingress-Key "REPLACE_WITH_PRIVATE_INGRESS_SECRET";
+        proxy_set_header X-FairPlay-Client-Verify $ssl_client_verify;
+        proxy_set_header X-FairPlay-Client-Cert $ssl_client_escaped_cert;
+        proxy_set_header X-FairPlay-TLS-Fingerprint "";
+        proxy_set_header X-FairPlay-TLS-Timestamp "";
+        proxy_set_header X-FairPlay-TLS-Nonce "";
+        proxy_set_header X-FairPlay-TLS-Signature "";
+        proxy_redirect http://10.200.31.64/ https://10.200.31.64:8443/;
+        proxy_read_timeout 120s;
+    }
+}
+# REQUIRED in every existing public HTTP/HTTPS proxy location to this Django app:
+# proxy_set_header X-FairPlay-Ingress-Key "";
+# proxy_set_header X-FairPlay-Client-Verify "";
+# proxy_set_header X-FairPlay-Client-Cert "";
+# Keep the Django upstream private. Never expose its port to students.

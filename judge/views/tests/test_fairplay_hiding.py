@@ -69,9 +69,14 @@ class FairPlayHidingRoutesTestCase(FairPlayDataMixin, TestCase):
 
     def test_contest_page(self):
         url = reverse('contest_view', args=['fpexam'])
-        for user in self.students() + [AnonymousUser()]:
+        for user in [self.outsider, AnonymousUser()]:
             with self.subTest(user=str(user)):
                 self.assertTrue(hidden(self.as_user(user).get(url), 'CS 101 Midterm'))
+        for user in [self.student, self.classmate]:
+            with self.subTest(user=str(user)):
+                response = self.as_user(user).get(url)
+                self.assertContains(response, 'Start exam in FairPlay')
+                self.assertNotContains(response, MARK)
         for user in self.staff_users():
             with self.subTest(user=str(user)):
                 response = self.as_user(user).get(url)
@@ -81,7 +86,9 @@ class FairPlayHidingRoutesTestCase(FairPlayDataMixin, TestCase):
     def test_join(self):
         client = self.as_user(self.classmate)
         response = client.post(reverse('contest_join', args=['fpexam']))
-        self.assertTrue(hidden(response))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], reverse('contest_fairplay_launch', args=['fpexam']))
+        self.assertNotContains(client.get(response['Location']), MARK)
         self.assertFalse(ContestParticipation.objects.filter(contest=self.exam, user=self.classmate.profile).exists())
         self.classmate.profile.refresh_from_db()
         self.assertIsNone(self.classmate.profile.current_contest)
@@ -118,10 +125,16 @@ class FairPlayHidingRoutesTestCase(FairPlayDataMixin, TestCase):
                 self.assertTrue(hidden(client.get(url)))
 
     def test_contest_lists_and_api(self):
-        for user in (self.student, AnonymousUser()):
+        for user in (self.student, self.outsider, AnonymousUser()):
             client = self.as_user(user)
             with self.subTest(user=str(user)):
-                self.assertNotContains(client.get(reverse('contest_list')), 'CS 101 Midterm')
+                response = client.get(reverse('contest_list'))
+                if user == self.student:
+                    self.assertContains(response, 'CS 101 Midterm')
+                    self.assertContains(response, reverse('contest_fairplay_launch', args=['fpexam']))
+                    self.assertNotContains(response, MARK)
+                else:
+                    self.assertNotContains(response, 'CS 101 Midterm')
                 data = client.get('/api/v2/contests').json()
                 self.assertNotIn('fpexam', [c['key'] for c in data['data']['objects']])
                 self.assertEqual(client.get('/api/v2/contest/fpexam').status_code, 404)

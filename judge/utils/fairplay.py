@@ -267,6 +267,10 @@ def _hidden_contests(user, now):
     if user.is_authenticated:
         staff = Contest.objects.filter(window).filter(_contest_staff_q(user.profile)).values('id')
         queryset = queryset.exclude(id__in=staff)
+    from judge.utils.fairplay_native_scope import admitted_contest_id
+    admitted_id = admitted_contest_id(user)
+    if admitted_id is not None:
+        queryset = queryset.exclude(pk=admitted_id)
     return queryset
 
 
@@ -288,11 +292,19 @@ def _hidden_problem_ids(user, now=None, contest_ids=None):
                                       .values('problem_id'))
     if user.is_authenticated:
         queryset = queryset.exclude(id__in=Problem.objects.filter(_problem_staff_q(user.profile)).values('id'))
+    from judge.utils.fairplay_native_scope import admitted_contest_id
+    admitted_id = admitted_contest_id(user)
+    if admitted_id is not None:
+        queryset = queryset.exclude(id__in=ContestProblem.objects.filter(contest_id=admitted_id).values('problem_id'))
     return sorted(set(queryset.values_list('id', flat=True)))
 
 
 def _problem_hidden(user, problem, now):
-    from judge.models import Problem
+    from judge.models import Problem, ContestProblem
+    from judge.utils.fairplay_native_scope import admitted_contest_id
+    admitted_id = admitted_contest_id(user)
+    if admitted_id is not None and ContestProblem.objects.filter(contest_id=admitted_id, problem_id=problem.pk).exists():
+        return False
     if _sees_all_problems(user) or _sees_all_contests(user) or not fairplay_hiding_active():
         return False
     if not _hidden_contests(user, now).filter(contest_problems__problem_id=problem.id).exists():
@@ -328,6 +340,9 @@ def fairplay_hidden_for(user, obj):
         raise TypeError('fairplay_hidden_for takes an instance; use fairplay_hidden_q for a model')
     now = timezone.now()
     if isinstance(obj, Contest):
+        from judge.utils.fairplay_native_scope import admitted_contest_id
+        if admitted_contest_id(user) == obj.pk:
+            return False
         if not is_fairplay_exam(obj) or not fairplay_in_window(obj, now):
             return False
         return not _is_contest_staff(user, obj)

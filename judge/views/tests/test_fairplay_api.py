@@ -273,7 +273,10 @@ class FairPlayUploadTestCase(FairPlayAPIMixin, TestCase):
         extra = fp_signed('POST', signed_url, data)
         extra['HTTP_X_SHA256'] = hashlib.sha256(data).hexdigest()
         tampered = signed_url.replace('fp_student', 'fp_other')
-        response = self.client.post(tampered, data, content_type='application/octet-stream', **extra)
+        tampered_extra = dict(extra, QUERY_STRING=extra['QUERY_STRING'].replace('username=fp_student', 'username=fp_other'))
+        self.assertNotEqual(tampered_extra['QUERY_STRING'], extra['QUERY_STRING'])
+        response = self.client.post(tampered, data, content_type='application/octet-stream', **tampered_extra)
+        self.assertEqual(response.wsgi_request.GET['username'], 'fp_other')
         self.assertEqual(response.status_code, 401)
         headers_only = fp_signed('POST', url, data)
         headers_only.update({'HTTP_X_SHA256': hashlib.sha256(data).hexdigest(), 'HTTP_X_USERNAME': 'fp_student',

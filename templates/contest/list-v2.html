@@ -587,16 +587,17 @@
         <li><button type="button" data-sort="{{ sort_value }}"{% if sort_by == sort_value %} class="active"{% endif %}>{{ label }}</button></li>
     {% endmacro %}
     {% macro assignment_row(contest, status, participation=None) %}
+        {% set native_launch = contest.key in fairplay_launch_keys %}
         {% set org_names = contest.organizations.all()|map(attribute='name')|join(',') %}
         {% set class_names = contest.classes.all()|map(attribute='name')|join(',') %}
-        {% set tag_names = contest.tags.all()|map(attribute='name')|join(',') %}
+        {% set tag_names = (fairplay_discovery_map[contest.key].tags|join(',')) if native_launch else (contest.tags.all()|map(attribute='name')|join(',')) %}
         <article class="cl-row{% if can_see_problem_authors %} cl-row--with-author{% endif %}" data-key="{{ contest.key }}" data-status="{{ status }}"
                  data-orgs="{{ org_names }}" data-classes="{{ class_names }}" data-tags="{{ tag_names }}"
                  {% if can_see_problem_authors %}data-authors="{{ contest.authors.all()|map(attribute='id')|join(',') }}" {% endif %}
                  data-search="{{ contest.name }} {{ contest.key }}">
             <div>
                 <div class="cl-primary-line">
-                    <a class="cl-title" href="{{ url('contest_view', contest.key) }}">{{ contest.name }}</a>
+                    <a class="cl-title" href="{{ url('contest_fairplay_launch' if native_launch else 'contest_view', contest.key) }}">{{ contest.name }}</a>
                 </div>
                 <div class="cl-course-line">
                     {% for org in contest.organizations.all() %}
@@ -625,9 +626,12 @@
                     {% if not contest.is_visible %}
                         <span class="badge badge-st-past"><i class="fa fa-eye-slash"></i> {{ _('hidden') }}</span>
                     {% endif %}
-                    {% for tag in contest.tags.all() %}
+                    {% for tag in contest.tags.all() if not tag.name.startswith('fp-aud-') and tag.name != 'fairplay' %}
                         <span class="badge badge-tag" style="background:{{ tag.color }}">{{ tag.name }}</span>
                     {% endfor %}
+                    {% if native_launch or 'fairplay' in contest.tags.all()|map(attribute='name')|list %}
+                        <span class="badge badge-tag" style="background:#2F4BD8">{{ _('FairPlay') }}</span>
+                    {% endif %}
                 </div>
                 <div class="cl-time">
                     {% if status == 'active' %}
@@ -696,7 +700,9 @@
                     {% endif %}
                 </div>
                 <div class="cl-join-actions">
-                    {% if status == 'active' %}
+                    {% if native_launch %}
+                        <a class="button primary" href="{{ url('contest_fairplay_launch', contest.key) }}">{{ _('Start exam') }}</a>
+                    {% elif status == 'active' %}
                         {# Active participations use the same join entry as ongoing:
                            Join re-attaches the existing (unexpired) participation
                            without restarting the timer. #}
@@ -940,7 +946,7 @@
                         {% endif %}
                     </div>
                 {% endif %}
-            {% else %}
+            {% elif not fairplay_discovery %}
                 <div class="cl-empty">{{ _('There are no assignments.') }}</div>
             {% endif %}
         {% else %}
@@ -1018,7 +1024,7 @@
         </div>
 
         {# Nothing matches the current filters. #}
-        {% if not active_participations and not current_contests and not future_contests and not past_contests %}
+        {% if not fairplay_discovery and not active_participations and not current_contests and not future_contests and not past_contests %}
             <div class="cl-empty">{{ _('There are no assignments.') }}</div>
         {% endif %}
         {% endif %}

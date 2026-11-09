@@ -96,6 +96,8 @@
 {% endblock %}
 {% block body %}
 <div class="ws-app" id="workspace"
+     data-native-admitted="{{ '1' if workspace_native_admitted else '0' }}"
+     data-native-user="{{ request.user.pk }}"
      data-mode="{{ workspace_mode }}"
      data-context-id="{{ workspace_context_id|default('') }}"
      data-problem="{{ problem.code }}"

@@ -5,7 +5,7 @@ from unittest import mock
 from django.test import TestCase
 
 from judge.utils.fairplay_client import FairPlayClient
-from judge.views.tests.fairplay_base import FAIRPLAY_ON
+from judge.views.tests.fairplay_base import FAIRPLAY_ON, installation_path
 from judge.views.tests.test_fairplay_pages import PagesMixin, exam, fake_response
 
 
@@ -16,7 +16,7 @@ class SettingsClientTestCase(PagesMixin, TestCase):
                         return_value=fake_response(200, exam())) as call:
             FairPlayClient(acting_user='fp_teacher').set_settings('fpexam', {'review': 'score', 'calculator': 'off'})
         args, kwargs = call.call_args
-        self.assertEqual(args, ('POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/settings'))
+        self.assertEqual(args, ('POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/exams/fpexam/settings')))
         self.assertEqual(json.loads(kwargs['data']), {'review': 'score', 'calculator': 'off'})
         self.assertEqual(kwargs['headers']['X-FP-Acting-User'], 'fp_teacher')
         self.assertIn('X-FP-Signature', kwargs['headers'])

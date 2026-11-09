@@ -500,6 +500,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context['workspace_in_contest'] = False
         context['workspace_mode'] = 'assignment'
         context['workspace_problems'] = ordered
+        from judge.utils.fairplay_native_scope import admitted_contest_id
+        context['workspace_native_admitted'] = admitted_contest_id(self.request.user) is not None
         context['workspace_context_id'] = ''
         context['workspace_current_order'] = next(
             (item.order for item in ordered if item.code == self.object.code),
@@ -567,6 +569,8 @@ class ProblemDetail(ProblemMixin, SolvedProblemMixin, CommentedDetailView):
         context['contest_problem'] = contest_problem
         context['workspace_assignment_preview'] = False
         context['workspace_preview_query'] = ''
+        from judge.utils.fairplay_native_scope import admitted_contest_id
+        context['workspace_native_admitted'] = admitted_contest_id(user) is not None
         # Drawer list follows the active participation, not whether *this* problem
         # happens to be in the assignment. After Join, the solving page always
         # shows the assignment problem set.
@@ -2130,6 +2134,7 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
 
     def _create_submission(self, language, answer, judge_id=None):
         """Hand the validated answer to the shared, request-independent submission path."""
+        from judge.utils.fairplay_native_scope import admitted_contest_id
         contest_problem = self.contest_problem
         # Use the contest object from current_contest.contest because we already use it
         # in profile.update_contest().
@@ -2139,6 +2144,9 @@ class ProblemSubmit(LoginRequiredMixin, ProblemMixin, TitleMixin, SingleObjectFo
             language=language, answer=answer,
             participation=participation, contest_problem=contest_problem,
             judge_id=judge_id,
+            # The native admission middleware holds an outer transaction. The
+            # separate judge process must not see the submission before commit.
+            judge_on_commit=admitted_contest_id(self.request.user) is not None,
         )
         if participation is not None:
             # Only a *successful* submit clears the draft, which is what makes a surviving draft

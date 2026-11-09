@@ -11,7 +11,7 @@ from judge.models.tests.util import create_contest_problem
 from judge.utils import fairplay_sync
 from judge.utils.fairplay_client import FairPlayClient, FairPlayError, FairPlayUnreachable
 from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, \
-    set_fairplay
+    installation_path, set_fairplay
 from judge.views.tests.test_fairplay_pages import fake_response
 
 
@@ -227,20 +227,22 @@ class SyncClientTestCase(TestCase):
     def test_signed_post(self):
         result, (args, kwargs) = self.call(exam_key='mid term', class_id=4)
         self.assertEqual(result, {'ok': True, 'queued': True})
-        self.assertEqual(args, ('POST', 'https://exam.example.edu/api/integrations/dkuoj/v1/sync'))
-        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'mid term', 'class_id': 4})
+        self.assertEqual(args, ('POST', installation_path('https://exam.example.edu/api/integrations/dkuoj/v1/sync')))
+        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'mid term', 'class_id': 4,
+            'event': 'changed', 'exam_keys': ['mid term'], 'class_ids': [4], 'organization_ids': []})
         self.assertEqual(kwargs['headers']['Content-Type'], 'application/json')
         self.assertNotIn('X-FP-Acting-User', kwargs['headers'])
         from judge.utils.fairplay_signing import canonical_string, direction_key, sign, body_sha256, \
             DIRECTION_OJ_TO_FP
         headers = kwargs['headers']
-        canonical = canonical_string('POST', '/api/integrations/dkuoj/v1/sync', int(headers['X-FP-Timestamp']),
+        canonical = canonical_string('POST', installation_path('/api/integrations/dkuoj/v1/sync'), int(headers['X-FP-Timestamp']),
                                      headers['X-FP-Nonce'], '', body_sha256(kwargs['data']))
         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical))
 
     def test_class_id_omitted(self):
         _, (_, kwargs) = self.call(exam_key='fpexam')
-        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'fpexam'})
+        self.assertEqual(json.loads(kwargs['data']), {'exam_key': 'fpexam', 'event': 'changed',
+            'exam_keys': ['fpexam'], 'class_ids': [], 'organization_ids': []})
 
     def test_short_read_timeout(self):
         with mock.patch('judge.utils.fairplay_client.requests.request',

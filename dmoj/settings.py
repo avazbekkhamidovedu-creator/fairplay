@@ -337,6 +337,7 @@ MIDDLEWARE = (
     'judge.timezone.TimezoneMiddleware',
     'impersonate.middleware.ImpersonateMiddleware',
     'judge.middleware.DMOJImpersonationMiddleware',
+    'judge.native_browser_middleware.NativeBrowserAdmissionMiddleware',
     'judge.middleware.ContestMiddleware',
     'django.contrib.flatpages.middleware.FlatpageFallbackMiddleware',
     'judge.social_auth.SocialAuthExceptionMiddleware',
@@ -725,6 +726,11 @@ FAIRPLAY_URL = ''
 FAIRPLAY_PUBLIC_URL = ''
 # Allow a plain http:// FAIRPLAY_URL to another machine; local test set-ups only.
 FAIRPLAY_ALLOW_INSECURE = False
+# Public https:// address of this site, used to build the FairPlay app sign-in done URL (503 until set).
+FAIRPLAY_OJ_PUBLIC_URL = ''
+# FairPlay shared class logins are off on the FairPlay side; keep their DKU OJ controls and bridge calls off too.
+FAIRPLAY_CLASS_LOGIN_ENABLED = False
+FAIRPLAY_INSTALLATION_ID = ''
 
 try:
     with open(os.path.join(os.path.dirname(__file__), 'local_settings.py')) as f:

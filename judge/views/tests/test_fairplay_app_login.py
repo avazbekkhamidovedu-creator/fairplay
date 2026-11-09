@@ -7,7 +7,7 @@ from unittest import mock
 
 from django.core.cache import cache
 from django.db import connection
-from django.test import Client, TestCase, TransactionTestCase
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from judge.models.tests.util import create_user
@@ -18,6 +18,7 @@ STATE = 'S' * 22
 VERIFIER = 'v' * 43
 CHALLENGE = base64.urlsafe_b64encode(hashlib.sha256(VERIFIER.encode()).digest()).rstrip(b'=').decode()
 REDEEM = '/api/fairplay/v1/app-login/redeem'
+PUBLIC_URL = override_settings(FAIRPLAY_OJ_PUBLIC_URL='https://oj.example.edu')
 
 
 def mint(client, state=STATE, challenge=CHALLENGE):
@@ -36,6 +37,7 @@ def redeem(client, ticket, verifier=VERIFIER, signed=True, raw=None):
 
 
 @FAIRPLAY_ON
+@PUBLIC_URL
 class MintTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -79,7 +81,7 @@ class MintTestCase(TestCase):
         self.assertEqual(response['Cache-Control'], 'no-store')
         location = response['Location']
         base, fragment = location.split('#')
-        self.assertEqual(base, 'http://testserver/fairplay/app-login/done')
+        self.assertEqual(base, 'https://oj.example.edu/fairplay/app-login/done')
         self.assertNotIn('?', location)
         ticket = ticket_of(response)
         self.assertEqual(fragment, 'ticket=%s&state=%s' % (ticket, STATE))
@@ -91,6 +93,21 @@ class MintTestCase(TestCase):
         self.login(self.student)
         with self.settings(FAIRPLAY_OJ_PUBLIC_URL='https://oj.example.edu/'):
             self.assertTrue(mint(self.client)['Location'].startswith('https://oj.example.edu/fairplay/app-login/done#'))
+
+    def test_done_url_ignores_request_host(self):
+        self.login(self.student)
+        with self.settings(ALLOWED_HOSTS=['testserver', 'evil.example.com']):
+            response = self.client.get(reverse('fairplay_app_login'), {'state': STATE, 'challenge': CHALLENGE},
+                                       HTTP_HOST='evil.example.com', secure=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response['Location'].startswith('https://oj.example.edu/fairplay/app-login/done#'))
+        self.assertNotIn('evil.example.com', response['Location'])
+
+    def test_unconfigured_public_url_is_refused(self):
+        self.login(self.student)
+        for value in ('', 'http://oj.example.edu'):
+            with self.settings(FAIRPLAY_OJ_PUBLIC_URL=value):
+                self.assertEqual(mint(self.client).status_code, 503)
 
     def test_every_mint_is_a_new_ticket(self):
         self.login(self.student)
@@ -141,6 +158,7 @@ class MintTestCase(TestCase):
 
 
 @FAIRPLAY_ON
+@PUBLIC_URL
 class DonePageTestCase(TestCase):
     def test_page(self):
         response = self.client.get('/fairplay/app-login/done', {'x': 'y'})
@@ -160,6 +178,7 @@ class DonePageTestCase(TestCase):
 
 
 @FAIRPLAY_ON
+@PUBLIC_URL
 class RedeemTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -248,6 +267,7 @@ class RedeemTestCase(TestCase):
 
 
 @FAIRPLAY_ON
+@PUBLIC_URL
 class ConcurrentRedeemTestCase(TransactionTestCase):
     def test_single_success(self):
         user = create_user(username='al_race')

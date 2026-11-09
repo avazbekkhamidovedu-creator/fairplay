@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block media %}
+<style>
+    .fp-launch { max-width: 680px; margin: 40px auto; padding: 0 20px; }
+    .fp-launch-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin: 24px 0; }
+    .fp-launch .fp-launch-button { display: inline-block; border: 1px solid #c9d1db; border-radius: 6px;
+        padding: 12px 18px; box-sizing: border-box; font: inherit; line-height: 1.4; text-align: center; min-width: 210px; color: #243244; background: #f7f9fc; text-decoration: none; cursor: pointer; }
+    .fp-launch .fp-launch-primary { background: #2F4BD8; border-color: #2F4BD8; color: white; font-weight: 600; }
+    .fp-launch-downloads[open] { padding-bottom: 10px; }
+    .fp-launch-downloads a { display: block; margin: 12px 8px 0; }
+    .fp-launch-help { line-height: 1.6; }
+</style>
+{% endblock %}
+
+{% block body %}
+<main class="fp-launch">
+    <p>{{ contest.name }}</p>
+    <p>{{ _('Take this assignment on the DKU OJ website inside the locked FairPlay app.') }}</p>
+    <div class="fp-launch-actions">
+        <a class="fp-launch-button fp-launch-primary" href="{{ launch_url }}">{{ _('Start exam in FairPlay') }}</a>
+        <a class="fp-launch-button" href="https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest" target="_blank" rel="noopener">{{ _('Download FairPlay') }}</a>
+    </div>
+    <div class="fp-launch-help">
+        <ol>
+            <li>{{ _('Install FairPlay if needed, then choose Start exam in FairPlay.') }}</li>
+            <li>{{ _('In FairPlay, use Test my device if needed, then choose Continue with DKU OJ and complete the device checks.') }}</li>
+            <li>{{ _('Sign in with your usual DKU OJ account and open this assignment. Your questions and answers stay on DKU OJ.') }}</li>
+        </ol>
+        <p>{{ _('If the app does not open, open FairPlay manually and choose Continue with DKU OJ.') }}</p>
+        <p>{{ _('Opening the app does not start your exam. Save other work before locking your computer.') }}</p>
+    </div>
+</main>
+{% endblock %}

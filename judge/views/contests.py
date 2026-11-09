@@ -53,9 +53,10 @@ from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status, task_status_url
-from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_visible_problems
+from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_enabled, fairplay_visible_problems, is_fairplay_exam
 from judge.utils.fairplay_editor import FAIRPLAY_EDITOR_FIELDS, apply_fairplay_editor, fairplay_check_edit, \
     fairplay_edit_lock, fairplay_editor_context, parse_fairplay_payload
+from judge.utils.fairplay_modes import fairplay_mode_table
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -66,6 +67,8 @@ from judge.utils.user_search import profile_choice_label
 from judge.utils.views import DiggPaginatorMixin, QueryStringSortMixin, SingleObjectFormView, TitleMixin, \
     generic_message
 from judge.views.fairplay_editor import fairplay_editor_saved
+from judge.views.fairplay_launch import hidden_exam_launch
+from judge.views.fairplay_discovery import discovery_context
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +97,11 @@ def _find_contest(request, key, private_check=True):
 
 
 class ContestListMixin(object):
+    def render_to_response(self, context, **response_kwargs):
+        response = super().render_to_response(context, **response_kwargs)
+        response['Cache-Control'] = 'private, no-store'
+        return response
+
     def get_queryset(self):
         return Contest.get_visible_contests(self.request.user)
 
@@ -162,6 +170,7 @@ class ContestList(ContestInSessionListRedirectMixin, QueryStringSortMixin, DiggP
 
     def get_context_data(self, **kwargs):
         context = super(ContestList, self).get_context_data(**kwargs)
+        context.update(discovery_context(self.request, self._now, filter_rows=True))
         present, active, future = [], [], []
         finished = set()
         for contest in self._get_queryset().exclude(end_time__lt=self._now):
@@ -270,6 +279,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
 
     def get_context_data(self, **kwargs):
         context = super(ContestListV2, self).get_context_data(**kwargs)
+        context.update(discovery_context(self.request, self._now))
         tf = self.time_filter
         finished = set()
         active = []
@@ -311,6 +321,15 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         context['current_contests'] = present
         context['future_contests'] = future
         context['finished_contests'] = finished
+        # Discovery is still roster-gated; render its metadata using the ordinary
+        # assignment rows without admitting a student to protected question routes.
+        context['fairplay_launch_keys'] = {row['key'] for row in context['fairplay_discovery']}
+        context['fairplay_discovery_map'] = {row['key']: row for row in context['fairplay_discovery']}
+        context['past_contests'] = list(context['past_contests'])
+        for row in context['fairplay_discovery']:
+            target = ('future_contests' if row['status'] == 'upcoming' else
+                      'past_contests' if row['status'] == 'past' else 'current_contests')
+            context[target].append(row['contest'])
         context['now'] = self._now
         context['first_page_href'] = '.'
         context['page_suffix'] = '#past-contests' if self.group == 'status' else ''
@@ -321,7 +340,9 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
         # Filter options are scoped to the contests the user can actually see,
         # so private course/class/tag names never leak to unauthorized visitors
         # (the contest rows themselves are gated by get_visible_contests).
-        visible_contests = self._get_queryset()
+        visible_contests = Contest.objects.filter(
+            Q(pk__in=self._get_queryset().values('pk')) |
+            Q(pk__in=context['fairplay_discovery_ids']))
         context['organizations'] = Organization.objects.filter(contest__in=visible_contests).distinct()
         context['classes'] = (
             Class.objects.filter(contest__in=visible_contests)
@@ -329,7 +350,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
             .distinct()
             .order_by('organization__name', 'name')
         )
-        context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).distinct()
+        context['tags'] = ContestTag.objects.filter(contests__in=visible_contests).exclude(name__startswith='fp-aud-').distinct()
         can_see_authors = self._can_see_assignment_authors()
         context['can_see_problem_authors'] = can_see_authors
         selected_authors = []
@@ -359,7 +380,7 @@ class ContestListV2(ContestInSessionListRedirectMixin, QueryStringSortMixin, Dig
             context['contest_authors'] = Profile.objects.none()
             context['selected_author_profiles'] = []
         context['selected_authors'] = selected_authors
-        context['total_count'] = self._total_count(active, present, future)
+        context['total_count'] = self._total_count(active, present, future) + sum(row['status'] == 'past' for row in context['fairplay_discovery'])
         context['sort_by'] = self.order
         context['group'] = self.group
         context['time_filter'] = tf
@@ -936,6 +957,11 @@ class ContestCreate(LoginRequiredMixin, View):
                 ids = [int(v) for v in values if str(v)]
             except (TypeError, ValueError):
                 raise ValidationError(_('Invalid value for "%(field)s".') % {'field': field})
+            if field == 'tags':
+                reserved = ContestTag.objects.filter(Q(name=FAIRPLAY_TAG) | Q(name__startswith='fp-aud-'))
+                if reserved.filter(pk__in=ids).exists():
+                    raise ValidationError(_('FairPlay system tags cannot be changed in the tag selector.'))
+                ids += list(reserved.filter(contests=contest).values_list('id', flat=True))
             getattr(contest, field).set(ids)
 
         # Same org→class rule as ContestForm.clean: classes are a subset of
@@ -1493,7 +1519,7 @@ class ContestCreate(LoginRequiredMixin, View):
                     prefill[field] = [(o.id, o.name) for o in related.all()]
                 elif field == 'tags':
                     # The FairPlay tag is set by the lock option, not the tag picker.
-                    prefill[field] = [(t.id, t.name) for t in related.exclude(name=FAIRPLAY_TAG)]
+                    prefill[field] = [(t.id, t.name) for t in related.exclude(name=FAIRPLAY_TAG).exclude(name__startswith='fp-aud-')]
                 else:
                     prefill[field] = [(p.id, profile_choice_label(p)) for p in related.select_related('user')]
             prefill['authors'] = [
@@ -1553,7 +1579,7 @@ class ContestCreate(LoginRequiredMixin, View):
             'now': timezone.now(),
             'organizations': Organization.objects.all(),
             'classes': Class.objects.all(),
-            'tags': ContestTag.objects.exclude(name=FAIRPLAY_TAG),
+            'tags': ContestTag.objects.exclude(name=FAIRPLAY_TAG).exclude(name__startswith='fp-aud-'),
             'save_url': reverse('contest_edit', args=[contest.key]) if contest else reverse('contest_create'),
             # Only problems this editor may attach — see _visible_problems_for.
             # select_related/prefetch_related feed the library columns (types /
@@ -1635,7 +1661,7 @@ class ContestTagCreateView(LoginRequiredMixin, View):
             return JsonResponse({'error': _('Please enter a tag name.')}, status=400)
         if not re.match(r'^[a-z-]+$', name):
             return JsonResponse({'error': _('Lowercase letters and hyphens only.')}, status=400)
-        if name == FAIRPLAY_TAG:
+        if name == FAIRPLAY_TAG or name.startswith('fp-aud-'):
             return JsonResponse({'error': _('This tag name is reserved for the FairPlay lock option.')}, status=400)
         if len(name) > 20:
             return JsonResponse({'error': _('Tag name must be at most 20 characters.')}, status=400)
@@ -1893,6 +1919,10 @@ class ContestMixin(object):
 class ContestDetail(ContestMixin, TitleMixin, CommentedDetailView):
     template_name = 'contest/contest.html'
 
+    def get(self, request, *args, **kwargs):
+        launch = hidden_exam_launch(request, kwargs.get('contest'))
+        return launch if launch is not None else super().get(request, *args, **kwargs)
+
     def get_comment_page(self):
         return 'c:%s' % self.object.key
 
@@ -2017,7 +2047,7 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         contest = self.object
 
         # A clone is not a FairPlay exam until FairPlay is turned on in its editor.
-        tags = list(contest.tags.exclude(name=FAIRPLAY_TAG))
+        tags = list(contest.tags.exclude(name=FAIRPLAY_TAG).exclude(name__startswith='fp-aud-'))
         organizations = contest.organizations.all()
         private_contestants = contest.private_contestants.all()
         view_contest_scoreboard = contest.view_contest_scoreboard.all()
@@ -2153,6 +2183,9 @@ class ContestAccessCodeForm(forms.Form):
 
 class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
     def get(self, request, *args, **kwargs):
+        launch = hidden_exam_launch(request, kwargs.get('contest'), redirect=True)
+        if launch is not None:
+            return launch
         self.object = self.get_object()
         try:
             self._check_seb(request)
@@ -2161,6 +2194,9 @@ class ContestJoin(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
         return self.ask_for_access_code()
 
     def post(self, request, *args, **kwargs):
+        launch = hidden_exam_launch(request, kwargs.get('contest'), redirect=True)
+        if launch is not None:
+            return launch
         self.object = self.get_object()
         try:
             return self.join_contest(request)
@@ -2302,6 +2338,12 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
                                    _('You are not in contest "%s".') % contest.key, 404)
 
         participation = profile.current_contest
+        # Native FairPlay completion belongs to the existing DKU hand-in action.
+        # Other contests retain their original leave behavior.
+        from judge.views.fairplay_native_session import finish_from_website
+        native_result = finish_from_website(request, participation)
+        if native_result is not None:
+            return native_result
         was_spectating = participation.spectate
         try:
             participation_submit_progress(participation, log_step='leave_post')
@@ -2311,12 +2353,22 @@ class ContestLeave(LoginRequiredMixin, ContestMixin, SingleObjectMixin, View):
         # drafts stay. When harvest is on, one Leave is one harvest; a later deadline sweep
         # still picks up drafts that this call missed or that the student wrote after coming
         # back. When harvest is off, drafts stay drafts.
+        browser_completion_ready = False
         try:
             from judge.utils.assignment_harvest import assignment_harvest_enabled, harvest_participation
             if assignment_harvest_enabled():
                 harvest_participation(participation)
+                browser_completion_ready = True
         except Exception:
             logger.exception('Auto-submit on leave failed for participation %d', participation.pk)
+        from judge.views.fairplay_browser_context import record_browser_completion
+        try:
+            request.session.pop('fairplay_browser_completed', None)
+            if browser_completion_ready and is_fairplay_exam(contest):
+                record_browser_completion(request, participation)
+        except Exception:
+            request.session.pop('fairplay_browser_completed', None)
+            logger.exception('Browser completion could not be confirmed')
         profile.remove_contest()
         if contest.seb_required and not was_spectating and not contest.user_bypasses_seb(request.user):
             return HttpResponseRedirect(contest.seb_effective_quit_url or reverse('seb_quit'))
@@ -2912,7 +2964,17 @@ class ContestRankingBase(ContestMixin, TitleMixin, DetailView):
         context['problems'] = problems
         context['last_msg'] = event.last()
         context['tab'] = self.tab
+        context['fairplay_modes'] = self.fairplay_modes()
+        context['fairplay_native_mode'] = getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is True
         return context
+
+    def fairplay_modes(self):
+        contest = self.object
+        if not (fairplay_enabled() and is_fairplay_exam(contest) and contest.is_editable_by(self.request.user)):
+            return None
+        if getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is True:
+            return {'native': True}
+        return {'table': fairplay_mode_table(contest, self.request.user.username)}
 
 
 class ContestRanking(ContestRankingBase):
@@ -3057,6 +3119,9 @@ class ContestTagDetailAjax(DetailView):
     slug_field = slug_url_kwarg = 'name'
     context_object_name = 'tag'
     template_name = 'contest/tag-ajax.html'
+
+    def get_queryset(self):
+        return super().get_queryset().exclude(name__startswith='fp-aud-')
 
 
 class ContestTagDetail(TitleMixin, ContestTagDetailAjax):

@@ -2,7 +2,7 @@
 import json
 import logging
 from time import monotonic
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import requests
 import urllib3
@@ -12,6 +12,8 @@ from django.utils.translation import gettext as _
 
 from judge.utils.fairplay import fairplay_enabled, fairplay_url_insecure
 from judge.utils.fairplay_signing import signed_headers
+from judge.utils.fairplay_identity import installation_id
+from django.core.exceptions import ImproperlyConfigured
 
 __all__ = ['API_PREFIX', 'CLASS_STATUS_CACHE_SECONDS', 'MAX_RESPONSE_BYTES', 'FairPlayClient', 'FairPlayError',
            'FairPlayUnreachable', 'QUICK_READ_TIMEOUT', 'cached_class_status', 'without_password']
@@ -47,9 +49,26 @@ def _q(value):
     return quote(str(value), safe='')
 
 
+def acting_user_teaches_class(username, class_id):
+    """Live check in the database, never from a cache."""
+    from django.contrib.auth.models import User
+    from judge.models import Class
+    user = User.objects.filter(username=username, is_active=True).first() if username else None
+    return user is not None and Class.get_visible_classes(user).filter(id=class_id).exists()
+
+
 class FairPlayClient:
     def __init__(self, acting_user=None):
         self.acting_user = acting_user or ''
+
+    @staticmethod
+    def _require_class_login():
+        if not getattr(settings, 'FAIRPLAY_CLASS_LOGIN_ENABLED', False):
+            raise FairPlayError(_('Class logins are not available.'), status=404)
+
+    def _require_teacher(self, class_id):
+        if not acting_user_teaches_class(self.acting_user, class_id):
+            raise FairPlayError(_('You do not manage this class.'), status=403)
 
     def request(self, method, path, body=None, read_timeout=None, acting_user=None, binary=False):
         base = (getattr(settings, 'FAIRPLAY_URL', '') or '').rstrip('/')
@@ -58,7 +77,16 @@ class FairPlayClient:
         if fairplay_url_insecure(base):
             # Also a system check (judge.checks); this covers servers started without checks.
             raise FairPlayUnreachable(_('FairPlay cannot be reached: FAIRPLAY_URL must use https://'))
-        url = base + API_PREFIX + path
+        try:
+            identity = installation_id()
+        except ImproperlyConfigured as error:
+            raise FairPlayUnreachable(str(error)) from None
+        parts = urlsplit(base + API_PREFIX + path)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        if any(name == 'installation_id' and value != identity for name, value in query):
+            raise FairPlayUnreachable('FairPlay installation identity does not match.')
+        query = [(name, value) for name, value in query if name != 'installation_id']
+        url = parts._replace(query=urlencode(query + [('installation_id', identity)])).geturl()
         data = b'' if body is None else json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         parts = urlsplit(url)
         sent_path = parts.path + ('?' + parts.query if parts.query else '')
@@ -102,6 +130,8 @@ class FairPlayClient:
         return payload
 
     def create_class_login(self, klass):
+        self._require_class_login()
+        self._require_teacher(klass.id)
         try:
             return self.request('POST', '/classes/%d/login' % klass.id,
                                 {'class_name': klass.name, 'course_name': klass.organization.name})
@@ -109,24 +139,30 @@ class FairPlayClient:
             cache.delete(CLASS_STATUS_CACHE_KEY % klass.id)
 
     def stop_class_login(self, klass):
+        self._require_class_login()
+        self._require_teacher(klass.id)
         try:
             return self.request('DELETE', '/classes/%d/login' % klass.id)
         finally:
             cache.delete(CLASS_STATUS_CACHE_KEY % klass.id)
 
     def class_status(self, class_id, use_cache=True, read_timeout=None):
+        self._require_class_login()
         """Only ``use_cache=False`` returns the class login password; the cached copy never holds it."""
         key = CLASS_STATUS_CACHE_KEY % class_id
         if use_cache:
             cached = cache.get(key)
             if cached is not None:
                 return cached
+        self._require_teacher(class_id)
         status = self.request('GET', '/classes/%d/status' % class_id, read_timeout=read_timeout)
         safe = without_password(status)
         cache.set(key, safe, CLASS_STATUS_CACHE_SECONDS)
         return safe if use_cache else status
 
     def reset_student(self, netid, class_id):
+        self._require_class_login()
+        self._require_teacher(class_id)
         try:
             return self.request('POST', '/students/%s/reset' % _q(netid), {'class_id': class_id})
         finally:
@@ -174,12 +210,19 @@ class FairPlayClient:
         return self.request('POST', '/exams/%s/students/%s/offline-exit' % (_q(key), _q(netid)),
                             {'mac_code': mac_code})
 
+    def native_exit(self, key, netid, mac_code, reason):
+        return self.request('POST', '/exams/%s/students/%s/native-exit' % (_q(key), _q(netid)),
+                            {'mac_code': mac_code, 'reason': reason})
+
     def set_settings(self, key, settings, read_timeout=None):
         """Idempotent; once a student has started only ``review`` may change (409 otherwise)."""
         return self.request('POST', '/exams/%s/settings' % _q(key), settings, read_timeout=read_timeout)
 
-    def sync_ping(self, exam_key=None, class_id=None, read_timeout=None):
-        body = {}
+    def sync_ping(self, exam_key=None, class_id=None, read_timeout=None, event='changed',
+                  exam_keys=None, class_ids=None, organization_ids=None):
+        body = {'event': event, 'exam_keys': sorted(set(exam_keys or ([exam_key] if exam_key else []))),
+                'class_ids': sorted(set(class_ids or ([int(class_id)] if class_id is not None else []))),
+                'organization_ids': sorted(set(organization_ids or []))}
         if exam_key is not None:
             body['exam_key'] = exam_key
         if class_id is not None:

@@ -567,6 +567,21 @@ class LeaveHarvestTestCase(AutoSubmitScheduleMixin, TestCase):
         self.assertIsNone(self.student.profile.current_contest)
         self.assertTrue(ContestParticipation.objects.filter(pk=self.participation.pk).exists())
 
+    @override_settings(FAIRPLAY_BROWSER_SIGNING_KEY='signing-key')
+    def test_leave_writes_no_browser_completion_for_ordinary_contest(self):
+        self._join()
+        self._leave()
+        self.assertNotIn('fairplay_browser_completed', self.client.session)
+
+    @override_settings(FAIRPLAY_BROWSER_SIGNING_KEY='signing-key')
+    def test_leave_writes_browser_completion_for_fairplay_exam(self):
+        from judge.utils.fairplay import set_fairplay_exam
+        set_fairplay_exam(self.contest, True)
+        self.contest.authors.add(self.student.profile)
+        self._join()
+        self._leave()
+        self.assertEqual(self.client.session['fairplay_browser_completed']['contest'], self.contest.key)
+
     def test_leaving_again_without_a_new_draft_does_not_submit_twice(self):
         self._join()
         self._draft()

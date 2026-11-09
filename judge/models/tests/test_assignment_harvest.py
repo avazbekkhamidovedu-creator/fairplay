@@ -432,3 +432,30 @@ class HarvestExamFormatScoringTestCase(HarvestScoringTestMixin, TestCase):
         self._finalize()
 
         self.assertEqual(self._score(), 100)
+
+
+class NativeHarvestCommitTests(HarvestTestMixin, TestCase):
+    def test_native_hand_in_dispatches_only_after_commit(self):
+        self._code_draft()
+        with mock.patch.object(Submission, 'judge') as judge:
+            with self.captureOnCommitCallbacks(execute=True) as callbacks:
+                created = harvest_participation(self.participation, judge_on_commit=True)
+                self.assertEqual(len(created), 1)
+                self.assertTrue(Submission.objects.filter(pk=created[0].pk).exists())
+                judge.assert_not_called()
+            self.assertEqual(len(callbacks), 1)
+            judge.assert_called_once()
+
+    def test_rolled_back_hand_in_never_reaches_judge(self):
+        from django.db import transaction
+        self._code_draft()
+        with mock.patch.object(Submission, 'judge') as judge:
+            with self.captureOnCommitCallbacks(execute=True) as callbacks:
+                with transaction.atomic():
+                    harvest_participation(self.participation, judge_on_commit=True)
+                    transaction.set_rollback(True)
+            self.assertEqual(callbacks, [])
+            judge.assert_not_called()
+            self.assertFalse(self._submissions().exists())
+            self.assertTrue(AssignmentDraft.objects.filter(
+                participation=self.participation, harvested_at__isnull=True).exists())

@@ -55,10 +55,11 @@ def _rate_limited(request):
         return False
 
 
-def _done_url(request):
-    path = reverse('fairplay_app_login_done')
+def _done_url():
     base = (getattr(settings, 'FAIRPLAY_OJ_PUBLIC_URL', '') or '').rstrip('/')
-    return base + path if base else request.build_absolute_uri(path)
+    if not base or not (base.lower().startswith('https://') or settings.DEBUG and base.lower().startswith('http://')):
+        return None
+    return base + reverse('fairplay_app_login_done')
 
 
 @login_required
@@ -71,11 +72,14 @@ def app_login_mint(request):
     user = request.user
     if user.is_superuser or user.is_staff or not user.is_active:
         return _plain(403, 'This account cannot sign in to the FairPlay app.')
+    done_url = _done_url()
+    if done_url is None:
+        return _plain(503, 'FairPlay app sign-in is not configured on this site.')
     if _rate_limited(request):
         return _plain(429, 'Too many sign-in attempts. Wait a minute and try again.')
     ticket = secrets.token_urlsafe(32)
     cache.set(TICKET_KEY % _digest(ticket), {'user': user.id, 'challenge': challenge, 'state': state}, TICKET_TTL)
-    return _no_store(HttpResponseRedirect('%s#ticket=%s&state=%s' % (_done_url(request), ticket, state)))
+    return _no_store(HttpResponseRedirect('%s#ticket=%s&state=%s' % (done_url, ticket, state)))
 
 
 @require_GET
