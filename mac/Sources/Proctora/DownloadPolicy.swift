@@ -1,13 +1,9 @@
 import Foundation
 
 enum DownloadPolicy {
-    static let maxBytes: Int64 = 100 * 1024 * 1024
+    static let maxBytes: Int64 = 1024 * 1024 * 1024
     static let maxNameLength = 120
     static let folderName = "FairPlay Exam Files"
-    static let riskyExtensions: Set<String> = [
-        "app", "dmg", "pkg", "command", "sh", "scpt", "workflow", "jar", "exe", "bat", "ps1", "js", "terminal", "webloc", "iso"
-    ]
-
     enum Verdict: Equatable {
         case save(name: String)
         case refuse(reason: String)
@@ -35,10 +31,6 @@ enum DownloadPolicy {
         return name
     }
 
-    static func isRisky(_ name: String) -> Bool {
-        name.lowercased().split(separator: ".").dropFirst().contains { riskyExtensions.contains(String($0)) }
-    }
-
     static func uniqueName(_ name: String, exists: (String) -> Bool) -> String {
         if !exists(name) { return name }
         let ext = (name as NSString).pathExtension
@@ -53,7 +45,6 @@ enum DownloadPolicy {
 
     static func decide(suggestedName: String?, expectedBytes: Int64) -> Verdict {
         let name = sanitize(suggestedName)
-        if isRisky(name) { return .refuse(reason: "\(name) was not saved: this file type is not allowed.") }
         if expectedBytes > maxBytes { return .refuse(reason: "\(name) was not saved: it is larger than \(maxBytes / 1_048_576) MB.") }
         return .save(name: name)
     }

@@ -137,7 +137,6 @@ import WebKit
         #expect(!p.allows(url("https://x.claude.ai/x"), mainFrame: false))
         let rules = p.contentRules
         #expect(rules.contains("copilot\\\\.microsoft\\\\.com"))
-        #expect(!rules.contains("box\\\\.com"))
     }
 
     @Test func wildcardsInSitesAreNotPages() {
@@ -251,6 +250,7 @@ import WebKit
         #expect(n(true, true, 409, "<html><body><h1>Conflict &amp; more</h1></body></html>", conflict: true) == "DKU OJ answered HTTP 409: Conflict & more.")
         #expect(n(true, true, 404, #"{"error":"Not on the roster."}"#) == "Not on the roster.")
         #expect(n(false, true, 404, nil) == nil)
+        #expect(n(false, true, 403, "<html><title>Forbidden</title></html>") == "DKU OJ answered HTTP 403: Forbidden.")
         #expect(n(true, false, nil, nil)?.contains("could not confirm") == true)
     }
 
@@ -385,5 +385,50 @@ import WebKit
         #expect(try verify(["assets": ["https://cdn.example.org"]])?.assets == ["https://cdn.example.org"])
         #expect(try verify(["assets": (0..<16).map { "https://c\($0).org" }])?.assets?.count == 16)
         #expect(try verify(["assets": (0..<17).map { "https://c\($0).org" }]) == nil)
+    }
+}
+
+@Suite struct OJSubresourcePolicyTests {
+    private let forbidden = URL(string: "https://fairplay.example.edu")!
+    private let oj = URL(string: "https://oj.example.edu/problem/1")!
+    private func policy() -> ProtectedBrowserPolicy {
+        ProtectedBrowserPolicy(start: "https://oj.example.edu", additionalOrigins: "", forbiddenOrigin: forbidden)!
+    }
+
+    @Test func anyHostIsAllowedAsSubresourceOfAnOJPageExceptDeniedOnes() {
+        let p = policy()
+        for raw in ["https://cdn.random-host.net/a.js", "https://img.example.org/x.png", "https://fonts.googleapis.com/css", "http://plain.example.org/a.png"] {
+            #expect(p.allows(URL(string: raw), mainFrame: false, topURL: oj), "\(raw)")
+            #expect(!p.allows(URL(string: raw), mainFrame: false), "\(raw) without an OJ page")
+        }
+        for raw in ["https://chatgpt.com/x", "https://a.openai.com/x", "https://www.google.com/search", "https://github.com/x", "https://www.bing.com/"] {
+            #expect(!p.allows(URL(string: raw), mainFrame: false, topURL: oj), "\(raw)")
+        }
+        #expect(p.allows(URL(string: "https://duke.box.com/x"), mainFrame: false, topURL: oj))
+    }
+
+    @Test func mainFrameRulesAreUnchanged() {
+        let p = policy()
+        #expect(!p.allows(URL(string: "https://cdn.random-host.net/"), mainFrame: true, topURL: oj))
+        #expect(!p.allows(URL(string: "https://cdn.random-host.net/"), mainFrame: true))
+        #expect(p.allows(URL(string: "https://oj.example.edu/x"), mainFrame: true))
+    }
+
+    @Test func aPageOutsideTheOJGetsNoBlanketAllowance() {
+        let p = policy()
+        #expect(!p.allows(URL(string: "https://cdn.random-host.net/a.js"), mainFrame: false, topURL: URL(string: "https://other.example.org/")))
+        #expect(!p.allows(URL(string: "https://cdn.random-host.net/a.js"), mainFrame: false, topURL: nil))
+    }
+
+    @Test func contentRulesScopeTheAllowanceToOJTopPagesAndKeepTheDenyList() throws {
+        let p = policy()
+        let rules = try #require(JSONSerialization.jsonObject(with: Data(p.contentRules.utf8)) as? [[String: Any]])
+        #expect((rules.first?["trigger"] as? [String: Any])?["url-filter"] as? String == ".*")
+        let open = try #require(rules.first { ($0["action"] as? [String: Any])?["type"] as? String == "ignore-previous-rules"
+            && ($0["trigger"] as? [String: Any])?["if-top-url"] != nil })
+        let tops = try #require((open["trigger"] as? [String: Any])?["if-top-url"] as? [String])
+        #expect(tops.contains { $0.contains("oj\\.example\\.edu") })
+        #expect(p.contentRules.contains("chatgpt\\\\.com"))
+        #expect(p.contentRules.contains("www\\\\.google\\\\.com"))
     }
 }

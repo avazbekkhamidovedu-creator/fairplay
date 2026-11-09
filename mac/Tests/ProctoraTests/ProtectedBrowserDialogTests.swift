@@ -6,7 +6,7 @@ import AppKit
     @Test func explicitConfirmationCompletesExactlyOnce() throws {
         let session = ProtectedBrowserDialogSession()
         var results: [ProtectedBrowserDialogSession.Result] = []
-        let id = try #require(session.begin(.confirm) { results.append($0) })
+        let id = session.begin(.confirm) { results.append($0) }
         #expect(results.isEmpty)
         session.finish(id, result: .confirmed(true))
         session.finish(id, result: .confirmed(false))
@@ -20,29 +20,47 @@ import AppKit
                                  (.confirm, .confirmed(false)), (.prompt, .text(nil))] {
             let session = ProtectedBrowserDialogSession()
             var results: [ProtectedBrowserDialogSession.Result] = []
-            let id = try #require(session.begin(kind) { results.append($0) })
+            let id = session.begin(kind) { results.append($0) }
             session.cancel()
             session.finish(id, result: .confirmed(true)) // stale sheet callback after leave/blocker
             #expect(results == [expected])
         }
     }
 
-    @Test func duplicateDialogIsRefusedWithoutReplacingFirst() throws {
+    @Test func secondDialogWaitsInOrderAndIsNeverAutoCancelled() {
         let session = ProtectedBrowserDialogSession()
         var first: [ProtectedBrowserDialogSession.Result] = []
         var second: [ProtectedBrowserDialogSession.Result] = []
-        let id = try #require(session.begin(.prompt) { first.append($0) })
-        #expect(session.begin(.confirm) { second.append($0) } == nil)
-        #expect(second == [.confirmed(false)])
-        #expect(first.isEmpty)
-        session.finish(id, result: .text("student-entered answer"))
+        var activated: [UUID] = []
+        session.onActivate = { activated.append($0) }
+        let a = session.begin(.prompt) { first.append($0) }
+        let b = session.begin(.confirm) { second.append($0) }
+        #expect(session.activeID == a)
+        #expect(second.isEmpty)
+        session.finish(b, result: .confirmed(true))
+        #expect(second.isEmpty)
+        session.finish(a, result: .text("student-entered answer"))
         #expect(first == [.text("student-entered answer")])
+        #expect(activated == [b] && session.activeID == b)
+        session.finish(b, result: .confirmed(true))
+        #expect(second == [.confirmed(true)])
+        #expect(session.activeID == nil)
+    }
+
+    @Test func cancelAnswersEveryQueuedDialogNegatively() {
+        let session = ProtectedBrowserDialogSession()
+        var results: [ProtectedBrowserDialogSession.Result] = []
+        session.begin(.confirm) { results.append($0) }
+        session.begin(.prompt) { results.append($0) }
+        session.cancel()
+        #expect(results == [.confirmed(false), .text(nil)])
+        #expect(session.activeID == nil)
     }
 
     @Test func completionMayStartNextDialogWithoutLosingIt() throws {
         let session = ProtectedBrowserDialogSession()
         var next: UUID?
-        let id = try #require(session.begin(.alert) { _ in next = session.begin(.confirm) { _ in } })
+        let id = session.begin(.alert) { _ in next = session.begin(.confirm) { _ in } }
         session.finish(id, result: .acknowledged)
         #expect(next != nil)
         #expect(session.activeID == next)

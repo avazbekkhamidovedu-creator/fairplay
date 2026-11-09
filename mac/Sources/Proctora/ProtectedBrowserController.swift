@@ -321,15 +321,30 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         #endif
         var request = URLRequest(url: probe.appendingPathComponent("accounts/login/"))
         request.timeoutInterval = LoadTimeouts.request
+        probeOJ(request, attempt: 0)
+    }
+
+    static let preflightRetryDelays: [TimeInterval] = [1, 3, 6]
+
+    private func probeOJ(_ request: URLRequest, attempt: Int) {
         nativeHTTP.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self, self.isOpen, self.flow.state == .setup else { return }
-                self.startButton?.isEnabled = true
                 let status = (response as? HTTPURLResponse)?.statusCode
                 guard Self.ojReachable(status: status, failed: error != nil) else {
+                    if attempt < Self.preflightRetryDelays.count {
+                        self.notice?.stringValue = "Connecting to DKU OJ… (retrying)"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Self.preflightRetryDelays[attempt]) { [weak self] in
+                            guard let self, self.isOpen, self.flow.state == .setup else { return }
+                            self.probeOJ(request, attempt: attempt + 1)
+                        }
+                        return
+                    }
+                    self.startButton?.isEnabled = true
                     self.notice?.stringValue = Self.preLockUnavailableNotice(status: status, failed: error != nil, data: data)
                     return
                 }
+                self.startButton?.isEnabled = true
                 self.prepareDraftStorage(allowInteraction: false)
             }
         }.resume()
@@ -1274,9 +1289,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     static func nativeFailureNotice(sendsLock: Bool, httpAnswered: Bool, status: Int?, data: Data?, recoverAfterConflict: Bool) -> String? {
         if let own = ojErrorText(status: status, data: data) { return own }
         if httpAnswered {
-            guard sendsLock else { return nil }
-            guard let status else { return startNotAcceptedText }
-            return "DKU OJ answered HTTP \(status)" + (OJPage.summary(data).map { ": " + $0 } ?? "") + "."
+            guard let status else { return sendsLock ? startNotAcceptedText : nil }
+            let page = OJPage.summary(data)
+            guard sendsLock || page != nil else { return nil }
+            return "DKU OJ answered HTTP \(status)" + (page.map { ": " + $0 } ?? "") + "."
         }
         return recoverAfterConflict ? claimConflictText
             : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
@@ -1632,7 +1648,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
         if tracked(webView), lockIsOwned, action.shouldPerformDownload, let url = action.request.url,
            let policy, DownloadPolicy.originAllowed(url, trusted: policy.downloadOrigins),
-           policy.allows(url, mainFrame: action.targetFrame?.isMainFrame ?? true) {
+           policy.allows(url, mainFrame: action.targetFrame?.isMainFrame ?? true, topURL: webView.url) {
             decisionHandler(.download); return
         }
         let initialPopupBlank = !parents.isEmpty && webView === browser
@@ -1648,7 +1664,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             return
         }
         guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
-              (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
+              (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true, topURL: webView.url) == true else {
             if webView === browser, lockIsOwned {
                 if action.targetFrame?.isMainFrame == true {
                     policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: action.request.url)
@@ -1760,13 +1776,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         if tracked(webView), lockIsOwned, let policy, let url = response.response.url, (httpStatus ?? 200) < 400,
            AllowedSites.isAttachment(contentDisposition: disposition) || !response.canShowMIMEType,
            DownloadPolicy.originAllowed(url, trusted: policy.downloadOrigins),
-           policy.allows(url, mainFrame: response.isForMainFrame) {
+           policy.allows(url, mainFrame: response.isForMainFrame, topURL: webView.url) {
             decisionHandler(.download); return
         }
         // An HTTP error page is the site's own page: show it, never cancel it for its content type.
         let showable = response.canShowMIMEType || (httpStatus ?? 0) >= 400
         guard tracked(webView), lockIsOwned, showable, !AllowedSites.isAttachment(contentDisposition: disposition),
-              initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
+              initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame, topURL: webView.url) == true else {
             if webView === browser, lockIsOwned {
                 if response.isForMainFrame {
                     policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: response.response.url)

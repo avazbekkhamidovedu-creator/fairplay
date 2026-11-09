@@ -21,12 +21,10 @@ import Foundation
         #expect(p?.downloadOrigins == ["https://10.200.31.64:8443", "https://cdn.example.edu"])
     }
 
-    @Test func dangerousTypesAreRefused() {
-        for n in ["a.app", "a.DMG", "a.pkg", "a.command", "a.sh", "a.scpt", "a.workflow", "a.jar", "a.exe", "a.bat",
-                  "a.ps1", "a.js", "a.terminal", "a.webloc", "a.iso", "report.pdf.sh"] {
-            guard case .refuse = DownloadPolicy.decide(suggestedName: n, expectedBytes: 10) else { Issue.record("\(n) saved"); continue }
+    @Test func courseFilesOfAnyTypeAreSaved() {
+        for n in ["a.js", "run.sh", "tool.jar", "a.app", "a.exe", "a.zip", "report.pdf.sh", "notes.pdf", "data.csv"] {
+            #expect(DownloadPolicy.decide(suggestedName: n, expectedBytes: 10) == .save(name: n), "\(n)")
         }
-        #expect(DownloadPolicy.decide(suggestedName: "notes.pdf", expectedBytes: 10) == .save(name: "notes.pdf"))
         #expect(DownloadPolicy.decide(suggestedName: "data.csv", expectedBytes: -1) == .save(name: "data.csv"))
     }
 
@@ -49,7 +47,8 @@ import Foundation
         #expect(DownloadPolicy.uniqueName("notes") { ["notes"].contains($0) } == "notes (2)")
     }
 
-    @Test func sizeCap() {
+    @Test func sizeCapIsOneGigabyte() {
+        #expect(DownloadPolicy.maxBytes == 1024 * 1024 * 1024)
         #expect(DownloadPolicy.decide(suggestedName: "a.zip", expectedBytes: DownloadPolicy.maxBytes) == .save(name: "a.zip"))
         guard case .refuse = DownloadPolicy.decide(suggestedName: "a.zip", expectedBytes: DownloadPolicy.maxBytes + 1) else {
             Issue.record("oversized saved"); return

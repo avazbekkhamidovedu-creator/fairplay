@@ -37,6 +37,10 @@ enum SiteDenyList {
     /// The university's own Box: exact hosts the server's deny-list lets through.
     private static let exceptions: Set<String> = ["duke.app.box.com", "duke.box.com"]
 
+    static var allSuffixes: [String] { suffixes }
+    static var allExactHosts: [String] { exact.sorted() }
+    static var allowedExceptions: [String] { exceptions.sorted() }
+
     /// Denied domains a wildcard resource suffix could reach (the suffix itself, or one under it).
     static func deniedDomains(under suffix: String) -> [String] {
         suffixes.filter { $0 == suffix || $0.hasSuffix("." + suffix) }

@@ -124,8 +124,17 @@ struct ProtectedBrowserPolicy {
             || host.allSatisfy { $0.isNumber || $0 == "." }
     }
 
-    func allows(_ url: URL?, mainFrame: Bool) -> Bool {
+    /// True when the page (top frame) is on the OJ or one of its login origins, not a signed site.
+    func isOJPage(_ top: URL?) -> Bool {
+        guard let top, let origin = Self.origin(top) else { return false }
+        return baseOrigins.contains(origin)
+    }
+
+    /// `topURL` is the page that owns the request. Everything a page on an OJ origin loads is allowed
+    /// except denied hosts; the main-frame rules below do not depend on it.
+    func allows(_ url: URL?, mainFrame: Bool, topURL: URL? = nil) -> Bool {
         guard let url else { return false }
+        if !mainFrame, isOJPage(topURL), Self.origin(url) != nil, !SiteDenyList.isDenied(host: url.host ?? "") { return true }
         if !mainFrame && ["about:blank", "about:srcdoc"].contains(url.absoluteString.lowercased()) { return true }
         guard let origin = Self.origin(url) else { return false }
         if baseOrigins.contains(origin) { return true }
@@ -241,6 +250,28 @@ struct ProtectedBrowserPolicy {
                 rules.append(["trigger": ["url-filter": "^" + escaped + suffix],
                               "action": ["type": "ignore-previous-rules"]])
             }
+        }
+        // Pages on an OJ origin may load anything but denied hosts; signed sites keep the rules above.
+        var topURLs: [String] = []
+        for origin in baseOrigins.sorted() {
+            let escaped = origin.replacingOccurrences(of: ".", with: "\\.")
+                .replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]")
+            let parsed = URL(string: origin)!
+            let tails = parsed.port == nil ? ["/", parsed.scheme == "https" ? ":443/" : ":80/"] : ["/"]
+            topURLs += tails.map { "^" + escaped + $0 }
+        }
+        rules.append(["trigger": ["url-filter": "^https?://", "if-top-url": topURLs], "action": ["type": "ignore-previous-rules"]])
+        func escape(_ host: String) -> String { host.replacingOccurrences(of: ".", with: "\\.") }
+        for denied in SiteDenyList.allSuffixes {
+            for prefix in ["^https?://", "^https?://[a-z0-9.-]+\\."] {
+                rules.append(["trigger": ["url-filter": prefix + escape(denied) + "[:/]", "if-top-url": topURLs], "action": ["type": "block"]])
+            }
+        }
+        for denied in SiteDenyList.allExactHosts {
+            rules.append(["trigger": ["url-filter": "^https?://" + escape(denied) + "[:/]", "if-top-url": topURLs], "action": ["type": "block"]])
+        }
+        for host in SiteDenyList.allowedExceptions {
+            rules.append(["trigger": ["url-filter": "^https?://" + escape(host) + "[:/]", "if-top-url": topURLs], "action": ["type": "ignore-previous-rules"]])
         }
         // A network-free initial popup document is needed by opener-based SSO.
         // Native navigation policy still rejects arbitrary top-level about:blank navigation.
