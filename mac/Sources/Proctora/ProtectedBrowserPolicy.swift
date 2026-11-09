@@ -130,11 +130,10 @@ struct ProtectedBrowserPolicy {
         return baseOrigins.contains(origin)
     }
 
-    /// `topURL` is the page that owns the request. Everything a page on an OJ origin loads is allowed
-    /// except denied hosts; the main-frame rules below do not depend on it.
-    func allows(_ url: URL?, mainFrame: Bool, topURL: URL? = nil) -> Bool {
+    /// Frame (document) navigations only; subresources of an OJ page are covered by `contentRules`, which
+    /// never applies the OJ-page allowance to documents, so an iframe keeps these strict rules.
+    func allows(_ url: URL?, mainFrame: Bool) -> Bool {
         guard let url else { return false }
-        if !mainFrame, isOJPage(topURL), Self.origin(url) != nil, !SiteDenyList.isDenied(host: url.host ?? "") { return true }
         if !mainFrame && ["about:blank", "about:srcdoc"].contains(url.absoluteString.lowercased()) { return true }
         guard let origin = Self.origin(url) else { return false }
         if baseOrigins.contains(origin) { return true }
@@ -220,6 +219,19 @@ struct ProtectedBrowserPolicy {
         return !allowsMainTab(url)
     }
 
+    static let subresourceTypes = ["image", "style-sheet", "script", "font", "raw", "svg-document", "media", "fetch", "websocket", "ping", "other"]
+
+    /// Loopback, link-local, private-range and local-name hosts. No alternation or groups in WebKit's grammar.
+    static let localNetworkFilters: [String] = {
+        var f = ["127\\.[0-9]+\\.[0-9]+\\.[0-9]+", "10\\.[0-9]+\\.[0-9]+\\.[0-9]+", "0\\.[0-9]+\\.[0-9]+\\.[0-9]+",
+                 "192\\.168\\.[0-9]+\\.[0-9]+", "169\\.254\\.[0-9]+\\.[0-9]+"].map { "^https?://" + $0 + "[:/]" }
+        f += ["1[6-9]", "2[0-9]", "3[01]"].map { "^https?://172\\." + $0 + "\\.[0-9]+\\.[0-9]+[:/]" }
+        f += ["^https?://localhost[:/]", "^https?://\\[::1\\]", "^https?://\\[::\\]", "^https?://\\[::ffff:",
+              "^https?://\\[f[cd][0-9a-f][0-9a-f]:", "^https?://\\[fe[89ab][0-9a-f]:"]
+        for suffix in ["local", "localhost", "internal", "lan"] { f.append("^https?://[a-z0-9.-]+\\." + suffix + "[:/]") }
+        return f
+    }()
+
     /// WebKit content blocker covers resource requests too, not just page navigations.
     /// No wildcard domains or port expansion. Inline/page-generated content remains site-controlled.
     var contentRules: String {
@@ -260,18 +272,37 @@ struct ProtectedBrowserPolicy {
             let tails = parsed.port == nil ? ["/", parsed.scheme == "https" ? ":443/" : ":80/"] : ["/"]
             topURLs += tails.map { "^" + escaped + $0 }
         }
-        rules.append(["trigger": ["url-filter": "^https?://", "if-top-url": topURLs], "action": ["type": "ignore-previous-rules"]])
+        // Never "document": an iframe on an OJ page keeps the strict rules above.
+        let types = Self.subresourceTypes
+        func scoped(_ filter: String, _ action: String, typed: Bool = true) -> [String: Any] {
+            var trigger: [String: Any] = ["url-filter": filter, "if-top-url": topURLs]
+            if typed { trigger["resource-type"] = types }
+            return ["trigger": trigger, "action": ["type": action]]
+        }
+        rules.append(scoped("^https?://", "ignore-previous-rules"))
+        // Userinfo and trailing-dot hosts dodge the host-anchored deny rules below.
+        rules.append(scoped("^https?://[^/]*@", "block", typed: false))
+        rules.append(scoped("^https?://[^/:]*\\.[:/]", "block", typed: false))
+        // The OJ page may not reach this Mac's own network; only the OJ's configured hosts stay reachable.
+        for filter in Self.localNetworkFilters { rules.append(scoped(filter, "block")) }
+        for origin in baseOrigins.union(assetOrigins).union(resourceOrigins).sorted() {
+            let escaped = origin.replacingOccurrences(of: ".", with: "\\.")
+                .replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]")
+            let parsed = URL(string: origin)!
+            let tails = parsed.port == nil ? ["/", parsed.scheme == "https" ? ":443/" : ":80/"] : ["/"]
+            for tail in tails { rules.append(scoped("^" + escaped + tail, "ignore-previous-rules")) }
+        }
         func escape(_ host: String) -> String { host.replacingOccurrences(of: ".", with: "\\.") }
         for denied in SiteDenyList.allSuffixes {
             for prefix in ["^https?://", "^https?://[a-z0-9.-]+\\."] {
-                rules.append(["trigger": ["url-filter": prefix + escape(denied) + "[:/]", "if-top-url": topURLs], "action": ["type": "block"]])
+                rules.append(scoped(prefix + escape(denied) + "[:/]", "block", typed: false))
             }
         }
         for denied in SiteDenyList.allExactHosts {
-            rules.append(["trigger": ["url-filter": "^https?://" + escape(denied) + "[:/]", "if-top-url": topURLs], "action": ["type": "block"]])
+            rules.append(scoped("^https?://" + escape(denied) + "[:/]", "block", typed: false))
         }
         for host in SiteDenyList.allowedExceptions {
-            rules.append(["trigger": ["url-filter": "^https?://" + escape(host) + "[:/]", "if-top-url": topURLs], "action": ["type": "ignore-previous-rules"]])
+            rules.append(scoped("^https?://" + escape(host) + "[:/]", "ignore-previous-rules"))
         }
         // A network-free initial popup document is needed by opener-based SSO.
         // Native navigation policy still rejects arbitrary top-level about:blank navigation.

@@ -1648,7 +1648,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
         if tracked(webView), lockIsOwned, action.shouldPerformDownload, let url = action.request.url,
            let policy, DownloadPolicy.originAllowed(url, trusted: policy.downloadOrigins),
-           policy.allows(url, mainFrame: action.targetFrame?.isMainFrame ?? true, topURL: webView.url) {
+           policy.allows(url, mainFrame: action.targetFrame?.isMainFrame ?? true) {
             decisionHandler(.download); return
         }
         let initialPopupBlank = !parents.isEmpty && webView === browser
@@ -1664,7 +1664,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             return
         }
         guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
-              (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true, topURL: webView.url) == true else {
+              (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
             if webView === browser, lockIsOwned {
                 if action.targetFrame?.isMainFrame == true {
                     policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: action.request.url)
@@ -1776,13 +1776,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         if tracked(webView), lockIsOwned, let policy, let url = response.response.url, (httpStatus ?? 200) < 400,
            AllowedSites.isAttachment(contentDisposition: disposition) || !response.canShowMIMEType,
            DownloadPolicy.originAllowed(url, trusted: policy.downloadOrigins),
-           policy.allows(url, mainFrame: response.isForMainFrame, topURL: webView.url) {
+           policy.allows(url, mainFrame: response.isForMainFrame) {
             decisionHandler(.download); return
         }
         // An HTTP error page is the site's own page: show it, never cancel it for its content type.
         let showable = response.canShowMIMEType || (httpStatus ?? 0) >= 400
         guard tracked(webView), lockIsOwned, showable, !AllowedSites.isAttachment(contentDisposition: disposition),
-              initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame, topURL: webView.url) == true else {
+              initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
             if webView === browser, lockIsOwned {
                 if response.isForMainFrame {
                     policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: response.response.url)
@@ -1998,15 +1998,17 @@ extension ProtectedBrowserController: WKDownloadDelegate {
         case .refuse(let reason):
             finish(download, reason); completionHandler(nil)
         case .save(let name):
-            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
-            let folder = downloads.appendingPathComponent(DownloadPolicy.folderName, isDirectory: true)
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let folder: URL
             do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                folder = try DownloadPolicy.safeFolder(home: home, relative: ["Downloads", DownloadPolicy.folderName])
             } catch {
-                finish(download, "Download failed: the folder \(DownloadPolicy.folderName) could not be created."); completionHandler(nil); return
+                finish(download, "Download refused: the folder \(DownloadPolicy.folderName) is not a plain folder in Downloads."); completionHandler(nil); return
             }
             let unique = DownloadPolicy.uniqueName(name) { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
+            guard DownloadPolicy.reserve(unique, in: folder) else {
+                finish(download, "Download refused: the file could not be created safely."); completionHandler(nil); return
+            }
             let file = folder.appendingPathComponent(unique)
             activeDownloads[ObjectIdentifier(download)]?.file = file
             completionHandler(file)
@@ -2031,6 +2033,7 @@ extension ProtectedBrowserController: WKDownloadDelegate {
 
     func downloadDidFinish(_ download: WKDownload) {
         let name = activeDownloads[ObjectIdentifier(download)]?.file?.lastPathComponent
+        if let file = activeDownloads[ObjectIdentifier(download)]?.file { DownloadPolicy.quarantine(file) }
         finish(download, name.map(DownloadPolicy.statusLine(saved:)), removePartial: false)
     }
 

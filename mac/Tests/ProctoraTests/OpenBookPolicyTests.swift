@@ -395,29 +395,84 @@ import WebKit
         ProtectedBrowserPolicy(start: "https://oj.example.edu", additionalOrigins: "", forbiddenOrigin: forbidden)!
     }
 
-    @Test func anyHostIsAllowedAsSubresourceOfAnOJPageExceptDeniedOnes() {
+    private func rules(_ p: ProtectedBrowserPolicy) throws -> [[String: Any]] {
+        try #require(JSONSerialization.jsonObject(with: Data(p.contentRules.utf8)) as? [[String: Any]])
+    }
+    private func trigger(_ r: [String: Any]) -> [String: Any] { r["trigger"] as? [String: Any] ?? [:] }
+    private func action(_ r: [String: Any]) -> String { (r["action"] as? [String: Any])?["type"] as? String ?? "" }
+
+    @Test func framesKeepTheStrictRulesEvenInsideAnOJPage() {
         let p = policy()
-        for raw in ["https://cdn.random-host.net/a.js", "https://img.example.org/x.png", "https://fonts.googleapis.com/css", "http://plain.example.org/a.png"] {
-            #expect(p.allows(URL(string: raw), mainFrame: false, topURL: oj), "\(raw)")
-            #expect(!p.allows(URL(string: raw), mainFrame: false), "\(raw) without an OJ page")
+        for raw in ["https://cdn.random-host.net/", "https://img.example.org/x", "http://plain.example.org/", "https://example.org/embed"] {
+            #expect(!p.allows(URL(string: raw), mainFrame: false), "\(raw) iframe")
+            #expect(!p.allows(URL(string: raw), mainFrame: true), "\(raw)")
         }
-        for raw in ["https://chatgpt.com/x", "https://a.openai.com/x", "https://www.google.com/search", "https://github.com/x", "https://www.bing.com/"] {
-            #expect(!p.allows(URL(string: raw), mainFrame: false, topURL: oj), "\(raw)")
+        #expect(p.allows(URL(string: "https://oj.example.edu/frame"), mainFrame: false))
+    }
+
+    @Test func theOJAllowanceNeverCoversDocuments() throws {
+        let p = policy()
+        let all = try rules(p)
+        let open = try #require(all.first { action($0) == "ignore-previous-rules" && trigger($0)["if-top-url"] != nil })
+        let types = try #require(trigger(open)["resource-type"] as? [String])
+        #expect(!types.contains("document"))
+        #expect(!types.contains("popup"))
+        for t in ["image", "script", "style-sheet", "font", "raw", "media", "fetch"] { #expect(types.contains(t), "\(t)") }
+        for r in all where action(r) == "ignore-previous-rules" && trigger(r)["if-top-url"] != nil {
+            #expect(trigger(r)["resource-type"] != nil, "\(trigger(r)["url-filter"] ?? "")")
         }
-        #expect(p.allows(URL(string: "https://duke.box.com/x"), mainFrame: false, topURL: oj))
+    }
+
+    @Test func localNetworkHostsAreBlockedForTheOJPageExceptTheOJsOwn() throws {
+        let p = ProtectedBrowserPolicy(start: "https://10.200.31.64:8443", additionalOrigins: "", forbiddenOrigin: forbidden)!
+        let all = try rules(p)
+        let filters = all.filter { trigger($0)["if-top-url"] != nil }.map { (trigger($0)["url-filter"] as? String ?? "", action($0)) }
+        let blocks = filters.filter { $0.1 == "block" }.map(\.0)
+        for probe in ["https://127.0.0.1/", "http://127.9.9.9:8888/", "http://localhost:8888/", "http://[::1]:8000/", "http://10.1.2.3/",
+                      "http://172.16.0.1/", "http://172.31.255.1/", "http://192.168.1.5/", "http://169.254.1.1/", "http://[fd12::1]/",
+                      "http://[fe80::1]/", "http://[::ffff:7f00:1]/", "http://printer.local/", "http://ai.internal:11434/", "http://nas.lan/"] {
+            #expect(blocks.contains { probe.range(of: $0, options: .regularExpression) != nil }, "\(probe)")
+        }
+        for probe in ["http://172.32.0.1/", "http://172.15.0.1/", "https://10.example.com/", "https://cdn.example.org/", "https://[2001:db8::1]/"] {
+            #expect(!blocks.contains { probe.range(of: $0, options: .regularExpression) != nil }, "\(probe)")
+        }
+        let reopen = filters.filter { $0.1 == "ignore-previous-rules" }.map(\.0)
+        #expect(reopen.contains { "https://10.200.31.64:8443/a.png".range(of: $0, options: .regularExpression) != nil })
+        let lastLocalBlock = try #require(all.lastIndex { trigger($0)["url-filter"] as? String == "^https?://10\\.[0-9]+\\.[0-9]+\\.[0-9]+[:/]" })
+        let reopenIndex = try #require(all.firstIndex { trigger($0)["url-filter"] as? String == "^https://10\\.200\\.31\\.64:8443/" && trigger($0)["if-top-url"] != nil })
+        #expect(reopenIndex > lastLocalBlock)
+    }
+
+    @Test func userinfoAndTrailingDotHostsAreBlockedForTheOJPage() throws {
+        let p = policy()
+        let blocks = try rules(p).filter { action($0) == "block" && trigger($0)["if-top-url"] != nil }.compactMap { trigger($0)["url-filter"] as? String }
+        for probe in ["https://u@chatgpt.com/", "https://user:pw@chat.openai.com:443/x", "https://chatgpt.com./a.js", "http://example.org./x", "https://example.org.:8080/"] {
+            #expect(blocks.contains { probe.range(of: $0, options: .regularExpression) != nil }, "\(probe)")
+        }
+        for probe in ["https://cdn.example.org/a@b.js", "https://cdn.example.org/a.b./c"] {
+            #expect(!blocks.contains { probe.range(of: $0, options: .regularExpression) != nil }, "\(probe)")
+        }
     }
 
     @Test func mainFrameRulesAreUnchanged() {
         let p = policy()
-        #expect(!p.allows(URL(string: "https://cdn.random-host.net/"), mainFrame: true, topURL: oj))
         #expect(!p.allows(URL(string: "https://cdn.random-host.net/"), mainFrame: true))
         #expect(p.allows(URL(string: "https://oj.example.edu/x"), mainFrame: true))
     }
 
-    @Test func aPageOutsideTheOJGetsNoBlanketAllowance() {
-        let p = policy()
-        #expect(!p.allows(URL(string: "https://cdn.random-host.net/a.js"), mainFrame: false, topURL: URL(string: "https://other.example.org/")))
-        #expect(!p.allows(URL(string: "https://cdn.random-host.net/a.js"), mainFrame: false, topURL: nil))
+    @Test func actualWebKitCompilesTheOJPageRules() async throws {
+        for start in ["https://oj.example.edu", "https://10.200.31.64:8443"] {
+            let p = ProtectedBrowserPolicy(start: start, additionalOrigins: "https://login.example.edu", forbiddenOrigin: forbidden,
+                                           assetOrigins: ["https://cdn.example.edu"])!
+            let id = "fairplay.oj-rules.test." + UUID().uuidString
+            let list: WKContentRuleList = try await withCheckedThrowingContinuation { c in
+                WKContentRuleListStore.default().compileContentRuleList(forIdentifier: id, encodedContentRuleList: p.contentRules) { list, error in
+                    if let list { c.resume(returning: list) } else { c.resume(throwing: error ?? NSError(domain: "rules", code: 1)) }
+                }
+            }
+            #expect(list.identifier == id)
+            await withCheckedContinuation { c in WKContentRuleListStore.default().removeContentRuleList(forIdentifier: id) { _ in c.resume() } }
+        }
     }
 
     @Test func contentRulesScopeTheAllowanceToOJTopPagesAndKeepTheDenyList() throws {

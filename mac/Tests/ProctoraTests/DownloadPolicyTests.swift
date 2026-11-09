@@ -59,3 +59,67 @@ import Foundation
         #expect(DownloadPolicy.statusLine(saved: "a.pdf") == "Saved a.pdf to FairPlay Exam Files")
     }
 }
+
+@Suite struct DownloadFolderSafetyTests {
+    private func home() throws -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fp-dl-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.resolvingSymlinksInPath()
+    }
+
+    @Test func createsAPlainFolderUnderTheHome() throws {
+        let h = try home(); defer { try? FileManager.default.removeItem(at: h) }
+        let f = try DownloadPolicy.safeFolder(home: h, relative: ["Downloads", DownloadPolicy.folderName])
+        #expect(f.path == h.path + "/Downloads/" + DownloadPolicy.folderName)
+        #expect(try DownloadPolicy.safeFolder(home: h, relative: ["Downloads", DownloadPolicy.folderName]) == f)
+    }
+
+    @Test func aSymlinkedFolderIsRefused() throws {
+        let h = try home(); defer { try? FileManager.default.removeItem(at: h) }
+        let target = h.appendingPathComponent("LaunchAgents")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: h.appendingPathComponent("Downloads"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: h.appendingPathComponent("Downloads/" + DownloadPolicy.folderName), withDestinationURL: target)
+        #expect(throws: DownloadPolicy.FolderError.symlink) { try DownloadPolicy.safeFolder(home: h, relative: ["Downloads", DownloadPolicy.folderName]) }
+    }
+
+    @Test func aSymlinkedParentIsRefused() throws {
+        let h = try home(); defer { try? FileManager.default.removeItem(at: h) }
+        let target = h.appendingPathComponent("elsewhere")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: h.appendingPathComponent("Downloads"), withDestinationURL: target)
+        #expect(throws: DownloadPolicy.FolderError.symlink) { try DownloadPolicy.safeFolder(home: h, relative: ["Downloads", DownloadPolicy.folderName]) }
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(DownloadPolicy.folderName).path))
+    }
+
+    @Test func aFileInPlaceOfTheFolderIsRefused() throws {
+        let h = try home(); defer { try? FileManager.default.removeItem(at: h) }
+        try FileManager.default.createDirectory(at: h.appendingPathComponent("Downloads"), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: h.appendingPathComponent("Downloads/" + DownloadPolicy.folderName).path, contents: Data())
+        #expect(throws: DownloadPolicy.FolderError.notDirectory) { try DownloadPolicy.safeFolder(home: h, relative: ["Downloads", DownloadPolicy.folderName]) }
+    }
+
+    @Test func reserveNeverFollowsOrReplaces() throws {
+        let h = try home(); defer { try? FileManager.default.removeItem(at: h) }
+        let outside = h.appendingPathComponent("victim")
+        FileManager.default.createFile(atPath: outside.path, contents: Data("keep".utf8))
+        try FileManager.default.createSymbolicLink(at: h.appendingPathComponent("a.txt"), withDestinationURL: outside)
+        #expect(!DownloadPolicy.reserve("a.txt", in: h))
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "keep")
+        FileManager.default.createFile(atPath: h.appendingPathComponent("b.txt").path, contents: Data())
+        #expect(!DownloadPolicy.reserve("b.txt", in: h))
+        #expect(DownloadPolicy.reserve("c.txt", in: h))
+        #expect(!FileManager.default.fileExists(atPath: h.appendingPathComponent("c.txt").path))
+    }
+
+    @Test func quarantineMarksRegularFilesAndSkipsLinks() throws {
+        let h = try home(); defer { try? FileManager.default.removeItem(at: h) }
+        let file = h.appendingPathComponent("f.bin")
+        FileManager.default.createFile(atPath: file.path, contents: Data("x".utf8))
+        #expect(DownloadPolicy.quarantine(file))
+        #expect(getxattr(file.path, "com.apple.quarantine", nil, 0, 0, 0) > 0)
+        let link = h.appendingPathComponent("l.bin")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        #expect(!DownloadPolicy.quarantine(link))
+    }
+}
