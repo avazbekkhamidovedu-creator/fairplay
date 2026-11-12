@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ... import app_client as ac
+from ... import device_key
 from ...db import Base, get_session
 from ...routes_auth import client_ip
 from ...store import get_store
@@ -68,6 +69,15 @@ LOCKS_PER_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_IP_HOUR", 2000)
 LOCKS_PER_HOUR_ALL = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_HOUR_ALL", 20000)
 LOCKS_PER_SCHOOL_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_SCHOOL_IP_HOUR", 5000)
 LOCKS_IP_SHARE_PERCENT = min(env_cap("FAIRPLAY_NATIVE_EXIT_IP_SHARE_PERCENT", 50), 100)
+# F-04: a device that proves its device key gets its own per-key cap and its own (large, safety-valve) global bucket,
+# so abuse of the key-less legacy path (apps 0.8.5/0.8.6) cannot starve it. An unknown key is not enrolled anywhere, so
+# first sightings of a key are bounded per IP.
+LOCKS_PER_KEY_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_KEY_HOUR", 60)
+# What the PBKDF2 pool can really serve (each server_secret registration costs ~600k rounds), not a theoretical ceiling.
+LOCKS_PER_HOUR_ALL_KEYED = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_HOUR_ALL_KEYED", 40000)
+# New (never seen this hour) device keys one IP may bring in, far below the per-IP lock cap: a script cannot mint keys.
+NEW_KEYS_PER_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_NEW_KEYS_PER_IP_HOUR", 300)
+NEW_KEYS_PER_SCHOOL_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_NEW_KEYS_PER_SCHOOL_IP_HOUR", 1500)
 ISSUES_PER_STUDENT_HOUR = 20
 ISSUES_PER_EXAM_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_ISSUES_PER_EXAM_HOUR", 300)
 MAX_BODY = 4096
@@ -122,6 +132,9 @@ class LockIn(BaseModel):
     verifier_salt: str | None = Field(default=None, max_length=32)
     verifier_iterations: int | None = None
     verifier_hash: str | None = Field(default=None, max_length=64)
+    # same fields and encoding as ClientProofIn (docs/device-key.md): base64url DER P-256 key, ECDSA-SHA256 signature
+    device_pub: str | None = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9_-]+={0,2}$")
+    device_sig: str | None = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9_-]+={0,2}$")
 
 
 def verifier_message_v2(lock_id: str, device: str, created: int, salt: str, iterations: int, hash_: str) -> bytes:
@@ -187,7 +200,7 @@ async def _compute(lock_id: str, device: str, priv: bytes, signer: Ed25519Privat
         sem.release()
 
 
-async def _register_server_secret(body: "LockIn", request: Request, session: AsyncSession) -> JSONResponse:
+async def _register_server_secret(body: "LockIn", request: Request, session: AsyncSession, proof=None) -> JSONResponse:
     if body.blob is not None or any(v is not None for v in (body.verifier_salt, body.verifier_iterations, body.verifier_hash)):
         raise HTTPException(422, "Bad request", headers=NO_STORE)
     priv, signer = _private_key(), _signing_key()
@@ -209,7 +222,7 @@ async def _register_server_secret(body: "LockIn", request: Request, session: Asy
         if _waiting >= WAITING_PER_CORE * _cores():
             raise HTTPException(503, "Busy. Try again shortly.", headers={**NO_STORE, "Retry-After": "2"})
         task = asyncio.ensure_future(_compute(body.lock_id, body.device, priv, signer,
-                                              lambda: _limit_registrations(request, body)))
+                                              lambda: _limit_registrations(request, body, proof)))
         _inflight[key] = task
 
         def done(t: asyncio.Task) -> None:
@@ -234,16 +247,40 @@ def lock_message(lock_id: str, device: str) -> str:
     return f"nativelock|{lock_id}|{device}"
 
 
-async def _limit_registrations(request: Request, body: "LockIn") -> None:
+async def _limit_registrations(request: Request, body: "LockIn", proof=None) -> None:
     store = get_store()
     ip = client_ip(request)
     school = request.app.state.settings.in_school_net(ip)
-    ip_cap = min(LOCKS_PER_SCHOOL_IP_HOUR if school else LOCKS_PER_IP_HOUR,
-                 max(1, LOCKS_PER_HOUR_ALL * LOCKS_IP_SHARE_PERCENT // 100))
+    per_ip = LOCKS_PER_SCHOOL_IP_HOUR if school else LOCKS_PER_IP_HOUR
+    if proof is not None and proof.pub is not None:
+        # Proof-bearing device: capped per device PUBLIC key; a key seen for the first time this hour also counts against
+        # its IP (a script cannot mint unlimited keys); own global safety valve, never the legacy bucket.
+        admitted_key = f"nexit:keyok:{proof.pub}"
+        if await store.get(admitted_key) is None:
+            # Not admitted yet this hour: it must pass its IP's new-key allowance first. A key that fails here is never
+            # remembered, so retrying the same rejected key stays subject to the IP check (and counts against it).
+            if await store.incr(f"nexit:newkey:{ip}", HOUR_S) > (NEW_KEYS_PER_SCHOOL_IP_HOUR if school else NEW_KEYS_PER_IP_HOUR):
+                raise HTTPException(429, "Too many locks from this computer. Try again later.",
+                                    headers={**NO_STORE, "Retry-After": "3600"})
+            await store.setnx(admitted_key, "1", HOUR_S)
+        if await store.incr(f"nexit:key:{proof.pub}", HOUR_S) > LOCKS_PER_KEY_HOUR:
+            raise HTTPException(429, "Too many locks from this computer. Try again later.",
+                                headers={**NO_STORE, "Retry-After": "3600"})
+        # One IP gets the same share of the keyed bucket as of the legacy one, so two ordinary IPs cannot drain it.
+        keyed_ip_cap = min(per_ip, max(1, LOCKS_PER_HOUR_ALL_KEYED * LOCKS_IP_SHARE_PERCENT // 100))
+        if await store.incr(f"nexit:ipkey:{ip}", HOUR_S) > keyed_ip_cap:
+            raise HTTPException(429, "Too many locks from this computer. Try again later.",
+                                headers={**NO_STORE, "Retry-After": "3600"})
+        if await store.incr("nexit:all:keyed", HOUR_S) > LOCKS_PER_HOUR_ALL_KEYED:
+            raise HTTPException(429, "Too many locks right now. Try again later.",
+                                headers={**NO_STORE, "Retry-After": "3600"})
+        return
+    ip_cap = min(per_ip, max(1, LOCKS_PER_HOUR_ALL * LOCKS_IP_SHARE_PERCENT // 100))
     if await store.incr(f"nexit:dev:{body.device}", HOUR_S) > LOCKS_PER_DEVICE_HOUR \
             or await store.incr(f"nexit:ip:{ip}", HOUR_S) > ip_cap:
         raise HTTPException(429, "Too many locks from this computer. Try again later.",
                             headers={**NO_STORE, "Retry-After": "3600"})
+    # legacy bucket (no device key: apps 0.8.5/0.8.6)
     if await store.incr("nexit:all", HOUR_S) > LOCKS_PER_HOUR_ALL:
         raise HTTPException(429, "Too many locks right now. Try again later.",
                             headers={**NO_STORE, "Retry-After": "3600"})
@@ -256,11 +293,15 @@ async def register_lock(body: LockIn, request: Request, session: AsyncSession = 
         raise HTTPException(413, "Request body too large", headers=NO_STORE)
     if not ac.verify(request.app.state.settings, lock_message(body.lock_id, body.device), body.signature):
         raise HTTPException(403, ac.APP_PROOF_DETAIL, headers=NO_STORE)
+    proof = device_key.verify(body.device, body.device_pub, body.device_sig, lock_message(body.lock_id, body.device))
+    if proof is None:
+        raise HTTPException(403, ac.APP_PROOF_DETAIL, headers=NO_STORE)
+    # Not ac.require_key here: a computer whose device key is unavailable must still be able to lock (legacy bucket).
     _private_key()
     if not LOCK_ID_RE.match(body.lock_id) or not DEVICE_RE.match(body.device):
         raise HTTPException(422, "Bad lock_id or device", headers=NO_STORE)
     if body.server_secret:
-        return await _register_server_secret(body, request, session)
+        return await _register_server_secret(body, request, session, proof)
     if body.blob is None:
         raise HTTPException(422, "Bad blob", headers=NO_STORE)
     try:
@@ -280,7 +321,7 @@ async def register_lock(body: LockIn, request: Request, session: AsyncSession = 
     stored = None
     prior = (await session.execute(select(NativeExitLock.device).where(NativeExitLock.lock_id == body.lock_id))).scalar_one_or_none()
     if prior != body.device:
-        await _limit_registrations(request, body)
+        await _limit_registrations(request, body, proof)
     session.add(NativeExitLock(lock_id=body.lock_id, device=body.device, blob=raw, created_at=utcnow(), verifier=stored))
     try:
         await session.commit()

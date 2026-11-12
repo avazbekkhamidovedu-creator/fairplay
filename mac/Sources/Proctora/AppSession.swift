@@ -28,6 +28,8 @@ final class AppSession {
     private var offlineKeyTries = 0
     let deviceId: String
     private let binding: DeviceBinding
+    /// The device key, or nil when it is unavailable (keychain failure).
+    var deviceKey: DeviceKey? { binding.key }
     /// Short check summary for beats, e.g. "vm=0,disp=1,mir=0,tap=1,inp=1,proc=0".
     var checksProvider: (() -> String)?
     /// Called on the main thread with the attempt status from each beat ("submitted"...).

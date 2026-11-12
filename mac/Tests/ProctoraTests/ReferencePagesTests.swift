@@ -411,7 +411,7 @@ extension ReferencePages {
         #expect(!BoxSignIn.allowsSubframe(target: u("https://api-1.duosecurity.com/frame"), current: box, boxTab: false))
         #expect(!BoxSignIn.allowsSubframe(target: u("https://api-1.duosecurity.com/frame"), current: u("https://docs.python.org/"), boxTab: true))
         #expect(!BoxSignIn.allowsSubframe(target: u("https://duke.account.box.com/settings"), current: box, boxTab: true))
-        for raw in ["https://api.box.com", "https://api.box.com:443", "https://API.box.com.", "api.box.com", "https://*.boxcloud.com", "https://duke.account.box.com/"] {
+        for raw in ["https://api.box.com", "https://api.box.com:443", "https://API.box.com.", "api.box.com", "https://*.boxcloud.com", "https://duke.account.box.com/", "https://duke.box.com", "https://duke.app.box.com:443/"] {
             #expect(BoxSignIn.isChainResource(raw), Comment(rawValue: raw))
         }
         // Duke SSO and Duo are not Box's: other allowed sites keep them as before.

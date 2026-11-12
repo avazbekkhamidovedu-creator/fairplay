@@ -200,6 +200,46 @@ private final class FailingStore: NativeLockStoring {
         #expect(obj["signature"]!.count == 64)
     }
 
+    private final class ProofBacking: DeviceKeyBacking {
+        let priv = P256.Signing.PrivateKey()
+        var fail = false
+        var publicKeyDER: Data { priv.publicKey.derRepresentation }
+        let hardwareBacked = false
+        func signDER(_ message: Data) throws -> Data {
+            if fail { throw DeviceKeyError("sign refused") }
+            return try priv.signature(for: message).derRepresentation
+        }
+    }
+
+    private static func b64urlDecode(_ s: String) -> Data? {
+        Data(base64Encoded: s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+             + String(repeating: "=", count: (4 - s.count % 4) % 4))
+    }
+
+    @Test func escrowBodyCarriesAValidDeviceProof() throws {
+        let backing = ProofBacking()
+        let body = try NativeExit.escrowBody(lockId: "K7QM3XPA", blob: "b", device: "dev-1", deviceKey: DeviceKey(backing))
+        let obj = try JSONSerialization.jsonObject(with: body) as! [String: String]
+        #expect(Set(obj.keys) == ["lock_id", "blob", "device", "signature", "device_pub", "device_sig"])
+        #expect(obj["signature"] == AppSession.sign("nativelock|K7QM3XPA|dev-1"))
+        let pubDER = try #require(Self.b64urlDecode(obj["device_pub"]!))
+        #expect(pubDER == backing.publicKeyDER)
+        let sig = try P256.Signing.ECDSASignature(derRepresentation: try #require(Self.b64urlDecode(obj["device_sig"]!)))
+        let pub = try P256.Signing.PublicKey(derRepresentation: pubDER)
+        #expect(pub.isValidSignature(sig, for: Data("fp-device-v1|nativelock|K7QM3XPA|dev-1".utf8)))
+    }
+
+    @Test func escrowBodyHasNoProofWhenTheKeyIsUnavailableOrCannotSign() throws {
+        let none = try NativeExit.escrowBody(lockId: "K7QM3XPA", blob: "b", device: "dev-1", deviceKey: nil)
+        #expect(Set((try JSONSerialization.jsonObject(with: none) as! [String: String]).keys) == ["lock_id", "blob", "device", "signature"])
+        let backing = ProofBacking()
+        backing.fail = true
+        let failed = try NativeExit.escrowBody(lockId: "K7QM3XPA", blob: "b", device: "dev-1", deviceKey: DeviceKey(backing))
+        let obj = try JSONSerialization.jsonObject(with: failed) as! [String: String]
+        #expect(Set(obj.keys) == ["lock_id", "blob", "device", "signature"])
+        #expect(obj["signature"] == AppSession.sign("nativelock|K7QM3XPA|dev-1"))
+    }
+
     @Test func correctCodeAccepted() {
         let (s, good) = store()
         #expect(att(good, s, t0) == .accepted)

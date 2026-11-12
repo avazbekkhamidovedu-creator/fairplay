@@ -582,19 +582,28 @@ enum NativeExit {
         var blob: String
         var device: String
         var signature: String
+        /// Optional device-key proof over the same message as `signature` (server rate-limits per device key).
+        var device_pub: String? = nil
+        var device_sig: String? = nil
     }
 
     static func escrowSignature(lockId: String, device: String) -> String {
         AppSession.sign("nativelock|\(lockId)|\(device)")
     }
 
-    static func escrowRequest(lockId: String, blob: String, device: String) -> EscrowRequest {
-        EscrowRequest(lock_id: lockId, blob: blob, device: device,
-                      signature: escrowSignature(lockId: lockId, device: device))
+    static func escrowRequest(lockId: String, blob: String, device: String, deviceKey: DeviceKey? = nil) -> EscrowRequest {
+        var request = EscrowRequest(lock_id: lockId, blob: blob, device: device,
+                                    signature: escrowSignature(lockId: lockId, device: device))
+        // A key that cannot sign never blocks locking: the request goes without a proof.
+        if let deviceKey, let sig = try? deviceKey.signatureBase64URL("nativelock|\(lockId)|\(device)") {
+            request.device_pub = deviceKey.publicKeyBase64URL
+            request.device_sig = sig
+        }
+        return request
     }
 
-    static func escrowBody(lockId: String, blob: String, device: String) throws -> Data {
-        try JSONEncoder().encode(escrowRequest(lockId: lockId, blob: blob, device: device))
+    static func escrowBody(lockId: String, blob: String, device: String, deviceKey: DeviceKey? = nil) throws -> Data {
+        try JSONEncoder().encode(escrowRequest(lockId: lockId, blob: blob, device: device, deviceKey: deviceKey))
     }
 
     struct Monotonic: Equatable {

@@ -65,6 +65,8 @@ struct NativeLockSetup {
     var transport: Transport
     /// Like `transport` but also reports Retry-After; the background registration uses it when set.
     var registerTransport: RegisterTransport? = nil
+    /// Device key for the optional proof on the lock registration (nil: no proof is sent).
+    var deviceKey: () -> DeviceKey? = { nil }
     let registrar = NativeLockRegistrar()
     var loginItem: LoginItemRegistering
     var iterations: Int? = nil
@@ -102,6 +104,7 @@ struct NativeLockSetup {
                                     device: { AppSession.shared.deviceId }, transport: serverTransport,
                                     loginItem: Config.isDevBuild ? NoLoginItem() : SystemLoginItem())
         setup.registerTransport = serverRegisterTransport
+        setup.deviceKey = { AppSession.shared.deviceKey }
         #if FAIRPLAY_DEV
         setup.devKey = NativeExit.developmentKey
         #endif
@@ -148,6 +151,7 @@ struct NativeLockSetup {
         let publicKey = self.publicKey, isDev = self.isDev, iterations = self.iterations, newKey = self.newKey
         let devKey = isDev && publicKey == nil ? self.devKey : nil
         let deviceId = device()
+        let proofKey = deviceKey()
         let boot = bootSession()
         nonisolated(unsafe) let work = { [self] in
             var key = devKey ?? newKey()
@@ -159,7 +163,7 @@ struct NativeLockSetup {
             var body: Data?
             let keyOK = publicKey.map { $0.count == 32 } ?? false
             if keyOK, let publicKey, let blob = try? NativeExit.seal(key: key, lockId: lockId, serverPublic: publicKey) {
-                body = try? NativeExit.escrowBody(lockId: lockId, blob: blob, device: deviceId)
+                body = try? NativeExit.escrowBody(lockId: lockId, blob: blob, device: deviceId, deviceKey: proofKey)
             }
             key.resetBytes(in: 0..<key.count)
             nonisolated(unsafe) let sealed = body
@@ -238,6 +242,7 @@ struct NativeLockSetup {
         guard let token = started else { return }
         let originalId = saved.lockId
         let deviceId = device()
+        let proofKey = deviceKey()
         let send = registerTransport ?? { body, done in transport(body) { done($0, $1, nil) } }
 
         func prepare(_ lockId: String, then use: @escaping (Registration?) -> Void) {
@@ -248,7 +253,7 @@ struct NativeLockSetup {
                                                        iterations: iterations ?? NativeExit.calibratedIterations())
                 var made: Registration?
                 if let blob = try? NativeExit.seal(key: key, lockId: lockId, serverPublic: publicKey),
-                   let body = try? NativeExit.escrowBody(lockId: lockId, blob: blob, device: deviceId) {
+                   let body = try? NativeExit.escrowBody(lockId: lockId, blob: blob, device: deviceId, deviceKey: proofKey) {
                     made = Registration(lockId: lockId, verifier: verifier, body: body)
                 }
                 key.resetBytes(in: 0..<key.count)

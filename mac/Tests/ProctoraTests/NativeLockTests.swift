@@ -33,6 +33,24 @@ private final class FailingStore: NativeLockStoring {
         return out!
     }
 
+    @Test func prepareSendsTheDeviceProofWhenAKeyIsSet() throws {
+        final class B: DeviceKeyBacking {
+            let priv = P256.Signing.PrivateKey()
+            var publicKeyDER: Data { priv.publicKey.derRepresentation }
+            let hardwareBacked = false
+            func signDER(_ m: Data) throws -> Data { try priv.signature(for: m).derRepresentation }
+        }
+        let backing = B()
+        var body: Data?
+        var s = setup(store: InMemoryNativeLockStore(), key: serverPrivate.publicKey.rawRepresentation, isDev: false, status: 201, sent: { body = $0 })
+        s.deviceKey = { DeviceKey(backing) }
+        _ = try run(s).get()
+        let req = try JSONDecoder().decode(NativeExit.EscrowRequest.self, from: try #require(body))
+        #expect(req.device_pub == DeviceKey(backing).publicKeyBase64URL)
+        #expect(req.device_sig != nil)
+        #expect(req.signature == AppSession.sign("nativelock|\(req.lock_id)|\(req.device)"))
+    }
+
     @Test func escrowSuccessSealsTheKeyThenSavesTheState() throws {
         let store = InMemoryNativeLockStore()
         var body: Data?

@@ -47,7 +47,9 @@ enum BoxSignIn {
         host = String(host.split(separator: "/").first ?? "")
         if let colon = host.lastIndex(of: ":"), host[host.index(after: colon)...].allSatisfy(\.isNumber) { host = String(host[..<colon]) }
         while host.hasSuffix(".") { host.removeLast() }
-        let boxExact = signInExact.subtracting(["shib.oit.duke.edu"]).union(assetExact)
+        // duke.box.com / duke.app.box.com are the Box page itself (already an approved page); as a plain resource they would be
+        // allowed in every tab, so they are dropped too.
+        let boxExact = signInExact.subtracting(["shib.oit.duke.edu"]).union(assetExact).union(appHosts)
         if host.hasPrefix("*.") {
             let base = String(host.dropFirst(2))
             return assetSubdomainsOf.contains { base == $0 || base.hasSuffix("." + $0) }

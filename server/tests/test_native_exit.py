@@ -9,11 +9,14 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from sqlalchemy import select, update
 
 from app import app_client as ac
+from app import device_key
 from app.integrations.dkuoj import native_exit as ne
 from app.integrations.dkuoj.models import ClassLoginEvent, OjEditor
 from app.models import Exam, User
@@ -554,3 +557,94 @@ def test_two_concurrent_first_requests_count_and_hash_once(synced, server_key, s
     assert len(counted_pbkdf2) == 1
     assert synced.portal.call(get_store().incr, "nexit:ip:testclient", 3600) == 2
     assert synced.portal.call(get_store().incr, "nexit:all", 3600) == 2
+
+
+# F-04: device-key proof, per-key caps, separate legacy bucket
+def dk_body(key, lock_id, device, **over):
+    msg = ne.lock_message(lock_id, device)
+    der = key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    sig = key.sign(device_key.DOMAIN + msg.encode(), ec.ECDSA(hashes.SHA256()))
+    b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    body = {"lock_id": lock_id, "device": device, "server_secret": True, "signature": ac.sign(APP_KEY, msg),
+            "device_pub": b64(der), "device_sig": b64(sig)}
+    body.update(over)
+    return body
+
+
+def new_key():
+    return ec.generate_private_key(ec.SECP256R1())
+
+
+def test_valid_device_proof_gets_201_when_the_legacy_bucket_is_full(synced, server_key, signing, monkeypatch):
+    monkeypatch.setattr(ne, "LOCKS_PER_HOUR_ALL", 2)
+    monkeypatch.setattr(ne, "LOCKS_IP_SHARE_PERCENT", 100)
+    assert [reg_s(synced, lock_id=lid("R", i), device=f"dev-leg-{i:04d}").status_code for i in range(3)] == [201, 201, 429]
+    r = synced.post(LOCKS, json=dk_body(new_key(), lid("R", 9), "dev-keyed-0001"))
+    assert r.status_code == 201
+    assert synced.post(LOCKS, json=dk_body(new_key(), lid("R", 8), "dev-keyed-0002")).status_code == 201
+
+
+def test_one_key_many_device_strings_hits_the_key_cap_not_the_ip_cap(synced, server_key, signing, monkeypatch):
+    monkeypatch.setattr(ne, "LOCKS_PER_KEY_HOUR", 5)
+    k = new_key()
+    codes = [synced.post(LOCKS, json=dk_body(k, lid("M", i), f"dev-self-{i:04d}")).status_code for i in range(7)]
+    assert codes == [201] * 5 + [429, 429]
+    assert synced.portal.call(get_store().incr, "nexit:ip:testclient", 3600) == 1
+    assert synced.post(LOCKS, json=dk_body(new_key(), lid("M", 50), "dev-self-0050")).status_code == 201
+
+
+def test_new_keys_are_bounded_per_ip(synced, server_key, signing, monkeypatch):
+    monkeypatch.setattr(ne, "NEW_KEYS_PER_IP_HOUR", 3)
+    codes = [synced.post(LOCKS, json=dk_body(new_key(), lid("N", i), f"dev-mint-{i:04d}")).status_code for i in range(5)]
+    assert codes == [201, 201, 201, 429, 429]
+
+
+def test_a_rejected_new_key_stays_subject_to_the_ip_limit_when_it_retries(synced, server_key, signing, monkeypatch):
+    # An IP that used up its new-key allowance cannot get a key in by simply retrying the rejected request.
+    monkeypatch.setattr(ne, "NEW_KEYS_PER_IP_HOUR", 2)
+    assert [synced.post(LOCKS, json=dk_body(new_key(), lid("T", i), f"dev-ipfull-{i:03d}")).status_code for i in range(2)] == [201, 201]
+    rejected = new_key()
+    for attempt in range(4):
+        assert synced.post(LOCKS, json=dk_body(rejected, lid("T", 10 + attempt), f"dev-retry-{attempt:03d}")).status_code == 429
+    # A key that was admitted before the limit was reached keeps working (its own per-key cap applies).
+    monkeypatch.setattr(ne, "NEW_KEYS_PER_IP_HOUR", 100)
+    ok = new_key()
+    assert synced.post(LOCKS, json=dk_body(ok, lid("T", 30), "dev-admit-000")).status_code == 201
+    monkeypatch.setattr(ne, "NEW_KEYS_PER_IP_HOUR", 0)
+    assert synced.post(LOCKS, json=dk_body(ok, lid("T", 31), "dev-admit-001")).status_code == 201
+
+
+def test_keyed_global_safety_valve(synced, server_key, signing, monkeypatch):
+    monkeypatch.setattr(ne, "LOCKS_PER_HOUR_ALL_KEYED", 2)
+    monkeypatch.setattr(ne, "LOCKS_IP_SHARE_PERCENT", 100)
+    codes = [synced.post(LOCKS, json=dk_body(new_key(), lid("S", i), f"dev-valve-{i:04d}")).status_code for i in range(3)]
+    assert codes == [201, 201, 429]
+
+
+def test_invalid_device_proof_is_403(synced, server_key, signing):
+    k = new_key()
+    good = dk_body(k, lid("P", 0), "dev-bad-0001")
+    assert synced.post(LOCKS, json={**good, "device_sig": dk_body(new_key(), lid("P", 0), "dev-bad-0001")["device_sig"]}).status_code == 403
+    assert synced.post(LOCKS, json={**good, "device": "dev-bad-0002"}).status_code == 403
+    only_pub = {k_: v for k_, v in good.items() if k_ != "device_sig"}
+    assert synced.post(LOCKS, json=only_pub).status_code == 403
+    assert synced.post(LOCKS, json={**good, "signature": "0" * 64}).status_code == 403
+    assert synced.post(LOCKS, json={k_: v for k_, v in good.items() if k_ != "signature"}).status_code == 422
+
+
+def test_one_ip_cannot_drain_the_keyed_bucket(synced, server_key, signing, monkeypatch):
+    monkeypatch.setattr(ne, "LOCKS_PER_HOUR_ALL_KEYED", 10)
+    monkeypatch.setattr(ne, "LOCKS_IP_SHARE_PERCENT", 50)
+    codes = [synced.post(LOCKS, json=dk_body(new_key(), lid("U", i), f"dev-share-{i:04d}")).status_code for i in range(7)]
+    assert codes == [201] * 5 + [429, 429]          # this IP gets half of the keyed bucket
+    monkeypatch.setattr(ne, "client_ip", lambda request: "10.9.9.9")
+    assert synced.post(LOCKS, json=dk_body(new_key(), lid("U", 20), "dev-share-0020")).status_code == 201
+
+
+def test_legacy_without_proof_still_201_even_when_a_key_is_required(synced, server_key, signing):
+    assert reg_s(synced, lock_id=lid("Q", 0), device="dev-old-0001").status_code == 201
+    assert reg(synced, server_key, lock_id=lid("Q", 1), device="dev-old-0002").status_code == 201
+    synced.app.state.settings.require_device_key = True
+    # Locking is never blocked by a missing device key (a computer whose key is unavailable must still lock).
+    assert reg_s(synced, lock_id=lid("Q", 2), device="dev-old-0003").status_code == 201
+    assert synced.post(LOCKS, json=dk_body(new_key(), lid("Q", 3), "dev-new-0003")).status_code == 201

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from ...box_profiles import checked_link
+from ...box_profiles import APP_HOSTS, BoxProfileError, checked_link, selected_profile, is_box_host
 from ...schemas import WILDCARD_PREFIX, is_shared_suffix, parse_website_entry
 from ...site_companions import companions
 from ..site_policy import filter_sites
@@ -34,6 +34,14 @@ def _origin(host: str, wildcard_ok: bool = False) -> str | None:
     if not h or "*" in h or not _allowed(h):
         return None
     return "https://" + h
+
+
+def _box_hosts() -> list[str]:
+    try:
+        _, prof = selected_profile()
+    except BoxProfileError:
+        return []
+    return [*APP_HOSTS, *(x["host"] for x in prof["sign_in_hosts"]), *prof["asset_hosts"]]
 
 
 def build_lock_sites(websites, links=None, box_link=None) -> dict:
@@ -76,16 +84,18 @@ def build_lock_sites(websites, links=None, box_link=None) -> dict:
         if o and o not in resources:
             resources.append(o)
 
+    # Box chain first: a Box page is useless without it.
+    if any(is_box_host(urlsplit(p).hostname or "") for p in pages):
+        for h in _box_hosts():
+            add_resource(h)
     for group in companions(hosts):
         for site in group["sites"]:
             add_resource(site)
-    # Duke Box's sign-in chain (Box login, Duke SSO, Duo) is NOT emitted: the apps own it (Mac BoxSignIn.swift, Windows
-    # BoxSignIn.cs) and open it only in a tab that started on a Box link. Emitting it here would put those hosts in every
-    # tab of an older client and only crowd out real companion resources.
     if not pages:
         return {"pages": [], "resources": []}
-    # The OJ signs one shared cap of pages + resources and trims resources first, so the pages are cut first here and
-    # the resources get what is left.
+    # Apps 0.8.5 have no Box list of their own and need the Box sign-in chain and asset hosts as resources; 0.8.6+ drops
+    # them client-side (isChainResource; Windows from 0.8.6 on), so emitting them is safe. They never cost a page: pages first,
+    # then the resources within what is left of the shared cap.
     pages = pages[:MAX_LOCK_PAGES_AND_RESOURCES]
     page_origins = {"https://" + (urlsplit(p).hostname or "") for p in pages}
     resources = [r for r in resources if r not in page_origins][:MAX_LOCK_PAGES_AND_RESOURCES - len(pages)]

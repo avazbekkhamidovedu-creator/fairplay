@@ -37,8 +37,36 @@ Drafted on 2026-10-30 from read-only inspection of the VM and the code. The comm
 - Nightly backups (cron pg_dump, copied off the VM).
 - Certificate renewal before 2027-01-26 (a certbot dry run, then a daily cron line with the deploy hook).
 - Redis (sudo) and WEB_CONCURRENCY=2, after the first exams.
-- Port 8200 listens on all interfaces with forwarded-allow-ips=*: bind it to 127.0.0.1 once nothing calls it directly.
+- Port 8200 listens on all interfaces with forwarded-allow-ips=*: see "Do this on the VM: bind port 8200 to localhost" below.
 - The Duke Box host list: record a real Duke Box sign-in as a HAR, run `server/scripts/box_trace.py` on it and update `server/app/box_profiles.py` (the Duke profile is marked "confirm with HAR").
+
+## Do this on the VM: bind port 8200 to localhost
+
+Why: with `--host 0.0.0.0 --forwarded-allow-ips=*` anyone who can reach port 8200 directly can send a fake
+`X-Forwarded-For`, which defeats every per-IP limit (lock registration, logins) and the school-network check.
+
+As user `fairplay`, edit `~/.config/systemd/user/fairplay.service` (the `ExecStart` line):
+
+    --host 0.0.0.0  ...  --forwarded-allow-ips=*
+    -->
+    --host 127.0.0.1  ...  --forwarded-allow-ips=127.0.0.1
+
+then:
+
+    systemctl --user daemon-reload && systemctl --user restart fairplay
+
+Why it is safe: nginx proxies 443 to `127.0.0.1:8200` (same host), and the OJ calls `https://dku.speakupai.uz`
+(through nginx), never `:8200`. Only call sites that use `<vm-ip>:8200` directly stop working; check
+`grep -rn ":8200"` in the OJ settings and the apps' base URL first.
+
+Verify:
+- `ss -ltnp | grep 8200` shows `127.0.0.1:8200`, not `0.0.0.0:8200` or `*:8200`.
+- From another machine, `curl -m 5 http://<vm-ip>:8200/api/health` fails (refused or times out).
+- On the VM, `curl -s http://127.0.0.1:8200/api/health` and `curl -s https://dku.speakupai.uz/api/health` both answer.
+- A signed OJ call and an app start still work.
+
+Revert: put back `--host 0.0.0.0 ... --forwarded-allow-ips=*` in the unit, run the same
+`daemon-reload` and `restart`.
 
 ## Go / no-go
 
