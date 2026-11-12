@@ -170,6 +170,11 @@
 {% endblock %}
 
 {% block users_table %}
-    {% set table_id='ranking-table' %}
-    {% include "contest/ranking-table.html" %}
+    {% if fairplay_block %}
+        {# The FairPlay instructor's own page: one table of every student, in place of the empty participation table. #}
+        {% include "contest/fairplay_participation_table.html" %}
+    {% else %}
+        {% set table_id='ranking-table' %}
+        {% include "contest/ranking-table.html" %}
+    {% endif %}
 {% endblock %}

@@ -15,6 +15,13 @@ from judge.views.fairplay_native_session import native_claim, native_state, nati
 from judge.views.tests.fairplay_base import FairPlayDataMixin, FAIRPLAY_ON
 
 
+def latest_bound_lock(contest, username):
+    """The lock bound on the student's newest computer in this exam (hints are not included), or None."""
+    from judge.utils.fairplay_device_session import _bound_lock_row
+    row = _bound_lock_row(contest, username)
+    return None if row is None else row[0]
+
+
 @FAIRPLAY_ON
 @override_settings(DEBUG=True, FAIRPLAY_NATIVE_BROWSER_ENABLED=True,
     FAIRPLAY_NATIVE_LOOPBACK_FIXTURE=True, FAIRPLAY_NATIVE_PROXY_SECRET='p' * 32,
@@ -77,14 +84,15 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
     def test_teacher_release_is_signed_and_cannot_be_renewed(self):
         payload = self.decode(self.claim())
         instructor_unlock(contest=self.exam, username=self.student.username,
-                          actor=self.teacher, reason='Device troubleshooting')
+                          actor=self.teacher, reason='Device troubleshooting', resumable=True)
         path = '/api/fairplay/native/session/' + payload['session']
         terminal = self.decode(native_state(self.request('GET', path), payload['session']))
         self.assertEqual(terminal['state'], 'released')
         self.assertEqual(terminal['session'], payload['session'])
         renewed = self.decode(native_renew(self.request('POST', path + '/renew'), payload['session']))
         self.assertEqual(renewed['state'], 'released')
-        self.assertEqual(self.claim().status_code, 403)
+        # The unlock did not end the attempt: the student may start again by themselves.
+        self.assertEqual(self.decode(self.claim())['state'], 'active')
 
     def test_invalid_response_nonce_rolls_back_claim(self):
         with self.assertRaises(Http404):
@@ -300,6 +308,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(self.client.post('/contest/fpexam/fairplay-help', data).status_code, 302)
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'released')
         again = self.claim(fingerprint='b' * 64, cookie='new-cookie')
+        # 'Move to another computer' (a plain unlock-device) still ends the attempt: a reopen is needed.
         self.assertEqual((again.status_code, json.loads(again.content)['reason']), (403, 'handed_in'))
         self.client.post('/contest/fpexam/fairplay-help', dict(data, action='reopen', minutes='30', reason='Computer failed'))
         payload = self.decode(self.claim(fingerprint='b' * 64, cookie='new-cookie'))
@@ -433,9 +442,9 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(self.claim(fingerprint='b' * 64).status_code, 403)
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'active')
 
-    def test_joined_session_with_a_new_sign_in_is_not_rebound(self):
-        self.joined()
-        self.assertEqual(self.claim(cookie='new-sign-in').status_code, 403)
+    def test_joined_session_with_a_new_sign_in_is_rebound_to_the_same_session(self):
+        payload = self.joined()
+        self.assertEqual(self.decode(self.claim(cookie='new-sign-in'))['session'], payload['session'])
 
     def test_finished_session_still_in_the_slot_is_detached(self):
         from judge.models import FairPlayDeviceSlot
@@ -848,13 +857,13 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         for origin in payload['assets']:
             self.assertRegex(origin, r'^https://[a-z0-9.-]+(:[0-9]{1,5})?$')
 
-    def test_assets_are_absent_for_hold_and_non_active_states(self):
+    def test_assets_are_absent_for_non_active_states_and_an_unclean_recover_holds_nothing(self):
         payload = self.decode(self.claim())
         self.decode(native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'}), self.exam.key))
-        held = self.decode(native_renew(self.request('POST', '/api/fairplay/native/session/' + payload['session'] + '/renew'),
-                                        payload['session']))
-        self.assertIs(held['hold'], True)
-        self.assertNotIn('assets', held)
+        renewed = self.decode(native_renew(self.request('POST', '/api/fairplay/native/session/' + payload['session'] + '/renew'),
+                                           payload['session']))
+        self.assertNotIn('hold', renewed)  # no hold exists any more
+        self.assertIn('assets', renewed)
         FairPlayDeviceSession.objects.filter(pk=payload['session']).update(state='released')
         self.assertNotIn('assets', self.state_payload(FairPlayDeviceSession.objects.get(pk=payload['session'])))
 
@@ -912,10 +921,11 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         from judge.views.fairplay_native_session import signing_key
         self.assertIs(signing_key(), signing_key())
 
-    def test_same_device_new_sign_in_after_joining_is_a_hold_not_another_computer(self):
-        self.joined()
-        same_device = self.claim(cookie='new-sign-in')
-        self.assertEqual((same_device.status_code, json.loads(same_device.content)['reason']), (403, 'on_hold'))
+    def test_same_device_new_sign_in_after_joining_gets_back_in_but_another_computer_does_not(self):
+        payload = self.joined()
+        same_device = self.decode(self.claim(cookie='new-sign-in'))
+        self.assertEqual((same_device['session'], same_device['state']), (payload['session'], 'active'))
+        self.assertNotIn('hold', same_device)
         other_device = self.claim(fingerprint='b' * 64)
         self.assertEqual((other_device.status_code, json.loads(other_device.content)['reason']), (403, 'other_device'))
 
@@ -1215,10 +1225,10 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
                   'reason': 'Unlocked by instructor fp_teacher', 'confirm': '1'}
         self.assertEqual(self.client.post(self.HELP, legacy).status_code, 302)
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'released')
-        self.assertEqual(list(FairPlayDeviceAudit.objects.values_list('action', flat=True)), ['unlock-device'])
-        self.assertIsNone(Profile.objects.get(pk=self.student.profile.pk).current_contest_id)
+        self.assertEqual(list(FairPlayDeviceAudit.objects.values_list('action', flat=True)), ['unlock-resumable'])
+        self.assertEqual(Profile.objects.get(pk=self.student.profile.pk).current_contest_id, participation.pk)
 
-    def test_unlock_only_ends_the_attempt_and_detaches_the_student(self):
+    def test_unlock_only_does_not_end_the_attempt_and_the_student_may_start_again(self):
         from judge.models import ContestParticipation, FairPlayDeviceAudit, Profile
         payload = self.decode(self.claim())
         participation = ContestParticipation.objects.create(
@@ -1228,8 +1238,9 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         Profile.objects.filter(pk=self.student.profile.pk).update(current_contest=participation)
         self.assertEqual(self.quick(mode='only').status_code, 302)
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'released')
-        self.assertIsNone(Profile.objects.get(pk=self.student.profile.pk).current_contest_id)
-        self.assertEqual(list(FairPlayDeviceAudit.objects.values_list('action', flat=True)), ['unlock-device'])
+        # Unlock does not end the attempt: the student stays attached to the participation.
+        self.assertEqual(Profile.objects.get(pk=self.student.profile.pk).current_contest_id, participation.pk)
+        self.assertEqual(list(FairPlayDeviceAudit.objects.values_list('action', flat=True)), ['unlock-resumable'])
 
     def test_the_next_renew_after_an_unlock_is_a_signed_release_with_no_extra_step(self):
         payload = self.decode(self.claim())
@@ -1301,11 +1312,11 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.client.force_login(self.teacher)
         page = self.client.get('/contest/fpexam/participations').content.decode()
         self.assertIn('In progress', page)
-        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='stuck')
+        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='stuck',
+                          resumable=True)
         page = self.client.get('/contest/fpexam/participations').content.decode()
         self.assertIn('Unlocked', page.split('id="fp-participation"')[1].split('</table>')[0])
-        self.assertIn('data-action="quick-unlock" data-mode="continue" '
-                      'data-states="in_progress completed unlocked reopened"', page)
+        self.assertIn('data-action="quick-unlock" data-mode="continue" data-states="completed unlocked not_locked"', page)
 
     def test_refusals_are_logged_with_a_fixed_code_and_no_secret(self):
         from judge.views import fairplay_native_session as module
@@ -1520,9 +1531,9 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         AssignmentDraft.objects.all().delete()
         body = {'content': '{"text":"x"}'}
         FairPlayDeviceAudit.objects.create(session=session, actor=self.student, action='lease-gap', reason='t')
-        held = self.client_request('POST', '/contest/fpexam/draft/fpshort', body)
-        self.assertEqual(held.status_code, 403, held.content[:200])
-        self.assertFalse(AssignmentDraft.objects.exists())
+        old_gap = self.client_request('POST', '/contest/fpexam/draft/fpshort', body)
+        self.assertEqual(old_gap.status_code, 200, old_gap.content[:200])  # an old lease-gap row holds nothing now
+        AssignmentDraft.objects.all().delete()
         FairPlayDeviceAudit.objects.all().delete()
         ContestParticipation.objects.filter(pk=session.participation_id).update(
             real_start=timezone.now() - timedelta(minutes=100))
@@ -1790,25 +1801,39 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
     def held(self, payload):
         return FairPlayDeviceSession.objects.get(pk=payload['session'])
 
-    def test_unclean_recover_creates_hold_that_blocks_renew_and_claim(self):
+    def test_unclean_recover_notes_a_come_back_and_blocks_nothing(self):
         from judge.models import FairPlayDeviceAudit
-        payload = self.decode(self.claim())
-        self.assertNotIn('hold', payload)
+        payload = self.joined()
         path = '/api/fairplay/native/recover/fpexam'
-        lease = self.held(payload).lease_until
-        result = self.decode(native_recover(self.post_with(path, {'unclean': '1'}), self.exam.key))
-        self.assertIs(result['hold'], True)
-        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='lease-gap').count(), 1)
-        gap_lease = self.held(payload).lease_until
-        self.assertLess(gap_lease, lease)
-        renewed = self.decode(native_renew(self.request('POST', '/api/fairplay/native/session/' + payload['session'] + '/renew'),
-                                            payload['session']))
-        self.assertIs(renewed['hold'], True)
-        self.assertEqual(self.held(payload).lease_until, gap_lease)
-        self.assertEqual(native_claim(self.request(), self.exam.key).status_code, 403)
+        result = self.decode(native_recover(self.post_with(path, {'unclean': '1'}, cookie='new-login'), self.exam.key))
+        self.assertNotIn('hold', result)
+        self.assertEqual(result['state'], 'active')
+        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='came-back').count(), 1)
+        self.assertFalse(FairPlayDeviceAudit.objects.filter(action='lease-gap').exists())
+        renewed = self.decode(native_renew(self.request('POST', '/api/fairplay/native/session/' + payload['session'] + '/renew',
+                                                        cookie='new-login'), payload['session']))
+        self.assertNotIn('hold', renewed)
+        self.assertEqual(self.decode(self.claim(cookie='new-login'))['session'], payload['session'])
         self.assertEqual(FairPlayDeviceSession.objects.count(), 1)
 
-    def test_expired_lease_with_new_digest_creates_hold_but_same_digest_does_not(self):
+    def test_a_same_digest_claim_after_the_lease_expired_is_accepted_and_noted(self):
+        # Windows keeps the DKU OJ cookie across a restart, so the claim arrives with the same certificate and digest.
+        from django.utils import timezone
+        from judge.models import FairPlayDeviceAudit
+        payload = self.joined()
+        FairPlayDeviceSession.objects.filter(pk=payload['session']).update(
+            lease_until=timezone.now() - timezone.timedelta(seconds=30))
+        result = self.decode(self.claim())
+        self.assertEqual((result['session'], result['state']), (payload['session'], 'active'))
+        self.assertNotIn('hold', result)
+        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='came-back').count(), 1)
+        self.assertEqual(self.decode(self.claim())['state'], 'active')  # a lease that is live again adds nothing
+        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='came-back').count(), 1)
+        row = [r for r in __import__('judge.views.fairplay', fromlist=['x']).participation_rows(
+            __import__('types').SimpleNamespace(user=self.teacher), self.exam) if r['netid'] == self.student.username][0]
+        self.assertTrue(any('came back 1 time' in n for n in row['notes']), row['notes'])
+
+    def test_an_expired_lease_never_creates_a_hold_with_a_new_digest_or_the_same_one(self):
         from judge.models import FairPlayDeviceAudit
         from django.utils import timezone
         payload = self.decode(self.claim())
@@ -1816,11 +1841,11 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         FairPlayDeviceSession.objects.filter(pk=payload['session']).update(lease_until=timezone.now() - timezone.timedelta(seconds=5))
         result = self.decode(native_recover(self.request('POST', path), self.exam.key))
         self.assertNotIn('hold', result)
-        self.assertFalse(FairPlayDeviceAudit.objects.filter(action='lease-gap').exists())
         FairPlayDeviceSession.objects.filter(pk=payload['session']).update(lease_until=timezone.now() - timezone.timedelta(seconds=5))
         result = self.decode(native_recover(self.request('POST', path, cookie='new-login'), self.exam.key))
-        self.assertIs(result['hold'], True)
-        self.assertTrue(FairPlayDeviceAudit.objects.filter(action='lease-gap').exists())
+        self.assertNotIn('hold', result)
+        self.assertEqual(result['state'], 'active')
+        self.assertFalse(FairPlayDeviceAudit.objects.filter(action='lease-gap').exists())
 
     def test_digest_change_with_live_lease_does_not_hold_before_join(self):
         payload = self.decode(self.claim())
@@ -1834,14 +1859,14 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.client_request('POST', '/contest/fpexam/join')
         return payload
 
-    def test_digest_change_within_lease_holds_a_joined_session(self):
+    def test_digest_change_within_lease_lets_a_joined_student_back_in_and_notes_it(self):
         from judge.models import FairPlayDeviceAudit
         payload = self.joined()
-        self.assertIsNotNone(self.held(payload).participation_id)
-        self.assertGreater(self.held(payload).lease_until, __import__('django').utils.timezone.now())
         result = self.decode(native_recover(self.request('POST', '/api/fairplay/native/recover/fpexam', cookie='new-login'), self.exam.key))
-        self.assertIs(result['hold'], True)
-        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='lease-gap').count(), 1)
+        self.assertNotIn('hold', result)
+        self.assertEqual(result['state'], 'active')
+        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='came-back', session_id=payload['session']).count(), 1)
+        self.assertFalse(FairPlayDeviceAudit.objects.filter(action='lease-gap').exists())
 
     def test_joined_session_without_digest_change_is_not_held(self):
         payload = self.joined()
@@ -1993,14 +2018,19 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
                                             fresh['session']))
         self.assertNotIn('hold', renewed)
 
-    def test_help_page_shows_hold_note(self):
-        self.decode(self.claim())
+    def test_help_page_shows_the_came_back_note_and_no_hold_note(self):
+        payload = self.joined()
         self.client.force_login(self.teacher)
-        note = ('FairPlay restarted on this device. Choose Reopen exam to let the student continue, '
-                'or Emergency exit to end the attempt.')
-        self.assertNotContains(self.client.get('/contest/fpexam/participations'), note)
-        self.decode(native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'}), self.exam.key))
-        self.assertContains(self.client.get('/contest/fpexam/participations'), note)
+        self.assertNotContains(self.client.get('/contest/fpexam/participations'), 'came back')
+        self.decode(native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'},
+                                                  cookie='new-login'), self.exam.key))
+        page = self.client.get('/contest/fpexam/participations')
+        self.assertContains(page, 'Left and came back 1 time; last at ')
+        self.assertNotContains(page, 'FairPlay restarted')
+        self.decode(native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'},
+                                                  cookie='new-login'), self.exam.key))
+        self.assertContains(self.client.get('/contest/fpexam/participations'), 'Left and came back 2 times; last at ')
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'active')
 
     def bind_exit_lock(self, username=None):
         from django.contrib.auth.models import User
@@ -2145,7 +2175,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             self.assertNotContains(active, 'data-action="reissue"')
             self.assertNotContains(active, 'Start code')
             instructor_unlock(contest=self.exam, username=self.student.username,
-                              actor=self.teacher, reason='Device recovery')
+                              actor=self.teacher, reason='Device recovery', resumable=True)
             closed = self.client.get('/contest/fpexam/participations')
             self.assertContains(closed, self.student.username)
             self.assertContains(closed, 'Unlocked')
@@ -2185,7 +2215,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
         self.assertIn('Reopen exam', menu)
         self.assertIn('Offline exit code', menu)
-        self.assertIn('Emergency exit', menu)
+        self.assertIn('Unlock student device', menu)
         form = html.split('id="fp-part-form"')[1].split('</form>')[0]
         self.assertNotIn('mac_code', form)
         self.assertNotIn('name="back"', form)
@@ -2209,7 +2239,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             # Classic mode: the same table, filled from the FairPlay service (not reachable in this test).
             self.assertIn('FairPlay cannot be reached', self.participation_html())
 
-    def test_emergency_exit_from_participation_unlocks_and_returns_to_participation(self):
+    def test_unlock_student_device_from_participation_unlocks_and_returns_to_participation(self):
         from judge.models import ContestParticipation, Profile
         payload = self.decode(self.claim())
         participation = ContestParticipation.objects.create(
@@ -2221,7 +2251,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response['Location'], self.PARTICIPATION)
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'released')
-        self.assertIsNone(Profile.objects.get(pk=self.student.profile.pk).current_contest_id)
+        self.assertEqual(Profile.objects.get(pk=self.student.profile.pk).current_contest_id, participation.pk)
 
     def test_reopen_from_participation_unlocks_and_lets_the_student_start_again(self):
         payload = self.decode(self.claim())
@@ -2237,8 +2267,11 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         client.native_exit.return_value = {'code': '123456'}
         self.client.force_login(self.teacher)
         with patch('judge.views.fairplay._client', return_value=client):
+            page = self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.student.username,
+                                                'name': 'Avazbek'})
+            self.assertContains(page, 'ABCD-2345')  # the confirm page names the lock; confirming carries it
             response = self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.student.username,
-                                                    'name': 'Avazbek', 'confirm': '1'})
+                                                    'name': 'Avazbek', 'confirm': '1', 'mac_code': 'ABCD2345'})
         self.assertContains(response, '123456')
         client.native_exit.assert_called_once_with(
             'fpexam', self.student.username, 'ABCD2345', 'Exit code requested by instructor fp_teacher')
@@ -2258,7 +2291,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
 
     def test_the_lock_on_record_is_never_one_another_student_owns(self):
         from judge.models import FairPlayDeviceAudit
-        from judge.utils.fairplay_device_session import latest_bound_lock
+        pass
         self.bind_exit_lock()
         self.assertEqual(latest_bound_lock(self.exam, self.student.username), 'ABCD2345')
         session = FairPlayDeviceSession.objects.filter(user=self.student).first()
@@ -2271,7 +2304,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         from datetime import timedelta
         from django.utils import timezone
         from judge.models import FairPlayDeviceAudit
-        from judge.utils.fairplay_device_session import bind_lock, latest_bound_lock
+        from judge.utils.fairplay_device_session import bind_lock
         old = FairPlayDeviceSession.objects.create(
             user=self.student, contest=self.exam, fingerprint='a' * 64, browser_digest='b' * 64,
             lease_until=timezone.now(), state='released')
@@ -2290,7 +2323,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
     def test_a_recover_that_rebinds_an_older_session_is_the_lock_on_record(self):
         from datetime import timedelta
         from django.utils import timezone
-        from judge.utils.fairplay_device_session import bind_lock, latest_bound_lock
+        from judge.utils.fairplay_device_session import bind_lock
         first = FairPlayDeviceSession.objects.create(
             user=self.student, contest=self.exam, fingerprint='a' * 64, browser_digest='b' * 64,
             lease_until=timezone.now(), state='released')
@@ -2305,7 +2338,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
 
     def test_a_session_that_rebinds_an_earlier_code_has_that_code_as_current(self):
         from judge.models import FairPlayDeviceAudit
-        from judge.utils.fairplay_device_session import bind_lock, latest_bound_lock, lock_owner
+        from judge.utils.fairplay_device_session import bind_lock, lock_owner
         from django.utils import timezone
         session = FairPlayDeviceSession.objects.create(user=self.student, contest=self.exam, fingerprint='a' * 64,
                                                        browser_digest='b' * 64, lease_until=timezone.now())
@@ -2326,28 +2359,569 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertIn('data-action="offline-exit-on-record"', menu)
         self.assertNotIn('data-action="offline-exit" ', menu)
 
-    def test_the_on_record_action_ignores_a_posted_code_and_back_field(self):
+    def setUp(self):
+        super().setUp()
+        from django.core.cache import cache
+        cache.clear()  # lock hints live in the cache
+
+    def refused_claim(self, lock, user=None, cookie='new-sign-in', view=None, fingerprint='b' * 64):
+        path = '/api/fairplay/native/%s/fpexam' % ('recover' if view is native_recover else 'claim')
+        return (view or native_claim)(self.post_with(path, {'lock': lock}, user=user, cookie=cookie,
+                                                     fingerprint=fingerprint), self.exam.key)
+
+    def hints(self, user=None):
+        from judge.utils.fairplay_device_session import lock_hints
+        return [code for code, _stamp in lock_hints(self.exam, (user or self.student).pk)]
+
+    def ask_exit(self, action='offline-exit-on-record', user=None, mac_code=None, typed=None, confirm=True,
+                  client=None, netid=None):
         from unittest.mock import Mock, patch
+        if client is None:
+            client = Mock()
+            client.native_exit.return_value = {'code': '123456'}
+        self.client.force_login(user or self.teacher)
+        data = {'action': action, 'netid': netid or self.student.username, 'name': 'Avazbek'}
+        if confirm:
+            data['confirm'] = '1'
+        if mac_code is not None:
+            data['mac_code'] = mac_code
+        if typed is not None:
+            data['mac_code_typed'] = typed
+        with patch('judge.views.fairplay._client', return_value=client):
+            response = self.client.post(self.HELP, data)
+        return response, client
+
+    def exit_audit(self):
+        from judge.models import FairPlayDeviceAudit
+        return list(FairPlayDeviceAudit.objects.filter(action='exit-code-issued')
+                    .values_list('reason', 'actor__username'))
+
+    def test_a_refused_claim_keeps_the_lock_as_a_hint_and_writes_no_audit_row(self):
+        from judge.models import FairPlayDeviceAudit
+        self.joined()
+        refused = self.refused_claim('BBBB2345')  # another computer: other_device
+        self.assertEqual((refused.status_code, json.loads(refused.content)['reason']), (403, 'other_device'))
+        self.refused_claim('CCCC2345')
+        self.assertEqual(self.hints(), ['CCCC2345', 'BBBB2345'])
+        self.assertFalse(FairPlayDeviceAudit.objects.filter(action__startswith='lock').exists())  # cache only
+
+    def test_a_successful_bind_clears_the_hints_and_an_unlock_or_reopen_does_too(self):
+        from judge.utils.fairplay_device_session import clear_lock_hints, instructor_unlock, note_lock_hint
+        self.joined()
+        self.refused_claim('BBBB2345')
+        self.assertEqual(self.hints(), ['BBBB2345'])
+        with self.captureOnCommitCallbacks(execute=True):
+            self.decode(native_claim(self.post_with('/api/fairplay/native/claim/fpexam', {'lock': 'AAAA2345'},
+                                                    cookie=self.client.session.session_key), self.exam.key))
+        self.assertEqual(self.hints(), [])
+        note_lock_hint(self.exam, self.student.pk, 'BBBB2345')
+        with self.captureOnCommitCallbacks(execute=True):
+            instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='x')
+        self.assertEqual(self.hints(), [])
+        clear_lock_hints(self.exam, self.student.pk)  # clearing nothing is fine
+
+    def test_a_recover_answered_with_a_rejected_state_stores_no_hint(self):
+        refused = native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'lock': 'BBBB2345'}),
+                                 self.exam.key)
+        self.assertEqual(refused.status_code, 200)
+        self.assertEqual(self.hints(), [])
+
+    def test_a_successful_claim_keeps_no_hint(self):
+        payload = self.decode(native_claim(self.post_with('/api/fairplay/native/claim/fpexam', {'lock': 'AAAA2345'}),
+                                           self.exam.key))
+        self.assertEqual(payload['lock'], 'AAAA2345')
+        self.assertEqual(self.hints(), [])
+
+    def test_a_student_with_no_session_at_all_still_gets_a_hint_before_the_exam_opens(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from judge.models import Contest
+        self.assertFalse(FairPlayDeviceSession.objects.filter(user=self.student).exists())
+        Contest.objects.filter(pk=self.exam.pk).update(start_time=timezone.now() + timedelta(hours=1))
+        self.exam.refresh_from_db()
+        refused = self.refused_claim('BBBB2345')
+        self.assertEqual(refused.status_code, 403)
+        self.assertEqual(self.hints(), ['BBBB2345'])
+        from judge.utils.fairplay_device_session import lock_candidates
+        self.assertEqual(lock_candidates(self.exam, self.student.username), [('BBBB2345', 'hint')])
+
+    def test_a_claim_of_a_closed_exam_keeps_the_lock_as_a_hint(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from judge.models import Contest
+        Contest.objects.filter(pk=self.exam.pk).update(end_time=timezone.now() - timedelta(minutes=1))
+        self.exam.refresh_from_db()
+        self.refused_claim('CCCC2345')
+        self.assertEqual(self.hints(), ['CCCC2345'])
+
+    def test_hints_are_capped_deduplicated_and_only_for_valid_codes(self):
+        from judge.utils.fairplay_device_session import note_lock_hint
+        for code in ('AAAA2345', 'BBBB2345', 'CCCC2345', 'DDDD2345', 'EEEE2345', 'FFFF2345', 'AAAA2345'):
+            note_lock_hint(self.exam, self.student.pk, code)
+        self.assertFalse(note_lock_hint(self.exam, self.student.pk, 'not a code'))
+        self.assertEqual(self.hints(), ['AAAA2345', 'FFFF2345', 'EEEE2345', 'DDDD2345', 'CCCC2345'])
+
+    def test_instructor_accounts_and_students_off_the_list_keep_no_hint(self):
+        self.refused_claim('HHHH2345', user=self.teacher)
+        with self.assertRaises(Http404):
+            self.refused_claim('HHHH2345', user=self.outsider)
+        self.assertEqual(self.hints(self.teacher) + self.hints(self.outsider), [])
+
+    def test_one_candidate_is_shown_confirmed_and_the_code_is_issued_for_exactly_that_lock(self):
+        self.joined()
+        self.refused_claim('BBBB2345')
+        page, client = self.ask_exit(confirm=False)
+        self.assertContains(page, 'BBBB-2345')
+        self.assertContains(page, "Check that the student")
+        # A hint is what the student's app reported: never pre-filled, offered as an unselected choice and labelled.
+        self.assertContains(page, 'type="radio" name="mac_code" value="hint:BBBB2345"')
+        self.assertNotContains(page, 'checked')
+        self.assertNotContains(page, 'type="hidden" name="mac_code"')
+        self.assertContains(page, "Reported by the student&#39;s app, not verified")
+        self.assertContains(page, 'name="mac_code_typed"')  # a field to type another code is always offered
+        client.native_exit.assert_not_called()
+        response, client = self.ask_exit(mac_code='hint:BBBB2345')
+        self.assertContains(response, '123456')
+        self.assertContains(response, 'Exit code for lock')
+        self.assertContains(response, 'BBBB-2345')
+        self.assertEqual(client.native_exit.call_args[0][2], 'BBBB2345')
+        self.assertEqual(self.exit_audit(), [('BBBB2345|chosen from list', 'fp_teacher')])
+
+    def test_a_confirming_post_without_a_lock_never_issues_a_code(self):
         self.bind_exit_lock()
+        response, client = self.ask_exit()  # confirm=1 but no lock carried
+        self.assertContains(response, 'ABCD-2345')
+        client.native_exit.assert_not_called()
+
+    def test_two_computers_are_both_listed_and_the_instructors_choice_is_honoured(self):
+        from judge.utils.fairplay_device_session import bind_lock, lock_candidates
+        payload = self.joined()
+        self.assertTrue(bind_lock(FairPlayDeviceSession.objects.get(pk=payload['session']), 'AAAA2345'))
+        self.refused_claim('BBBB2345')  # a second computer, refused as other_device
+        self.assertEqual({c: s for c, s in lock_candidates(self.exam, self.student.username)},
+                         {'AAAA2345': 'bound', 'BBBB2345': 'hint'})
+        page, client = self.ask_exit(confirm=False)
+        html = page.content.decode()
+        self.assertIn('AAAA-2345', html)
+        self.assertIn('BBBB-2345', html)
+        self.assertNotIn('checked', html)  # no silent default
+        self.assertIn('name="mac_code_typed"', html)
+        client.native_exit.assert_not_called()
+        self.assertEqual(self.ask_exit(mac_code='')[1].native_exit.call_count, 0)  # nothing chosen: no code
+        response, client = self.ask_exit(mac_code='bound:AAAA2345')
+        self.assertEqual(client.native_exit.call_args[0][2], 'AAAA2345')
+        self.assertEqual(self.exit_audit(), [('AAAA2345|on record', 'fp_teacher')])
+        response, client = self.ask_exit(mac_code='bound:AAAA2345', typed='bbbb-2345')  # a typed code wins over a tick
+        self.assertEqual(client.native_exit.call_args[0][2], 'BBBB2345')
+
+    def test_a_hint_owned_by_another_student_is_not_a_candidate(self):
+        from judge.utils.fairplay_device_session import lock_candidates, note_lock_hint
+        self.bind_exit_lock(self.classmate.username)  # the classmate owns ABCD2345
+        note_lock_hint(self.exam, self.student.pk, 'ABCD2345')
+        self.assertEqual(lock_candidates(self.exam, self.student.username), [])
+        response, client = self.ask_exit(confirm=False)
+        self.assertContains(response, 'No locked computer is on record')
+        client.native_exit.assert_not_called()
+
+    def test_a_hint_blocks_nobody_else_and_no_other_exam(self):
+        from judge.utils.fairplay_device_session import lock_candidates, note_lock_hint
+        from judge.views.tests.fairplay_base import create_contest
+        other = create_contest('otherexam2', fairplay_required=True)
+        note_lock_hint(self.exam, self.student.pk, 'BBBB2345')
+        note_lock_hint(self.exam, self.classmate.pk, 'BBBB2345')
+        note_lock_hint(other, self.student.pk, 'BBBB2345')
+        for contest, user in ((self.exam, self.student), (self.exam, self.classmate), (other, self.student)):
+            self.assertEqual(lock_candidates(contest, user.username), [('BBBB2345', 'hint')])
+        response, client = self.ask_exit(mac_code='BBBB2345', netid=self.classmate.username)
+        self.assertContains(response, '123456')
+
+    def test_the_confirmed_lock_is_issued_even_when_a_hint_changes_meanwhile(self):
+        self.joined()
+        self.refused_claim('BBBB2345')
+        page, _client = self.ask_exit(confirm=False)
+        self.assertContains(page, 'BBBB-2345')
+        self.refused_claim('CCCC2345')  # the instructor is still on the confirm page
+        response, client = self.ask_exit(mac_code='BBBB2345')
+        self.assertEqual(client.native_exit.call_args[0][2], 'BBBB2345')
+
+    def test_the_bound_lock_is_still_offered_when_the_newest_hint_is_not_valid_for_this_student(self):
+        from judge.utils.fairplay_device_session import lock_candidates, note_lock_hint
+        self.bind_exit_lock()  # student bound ABCD2345
+        note_lock_hint(self.exam, self.student.pk, 'not-a-code')
+        self.assertEqual(lock_candidates(self.exam, self.student.username), [('ABCD2345', 'bound')])
+
+    def test_a_typed_unbound_code_works_for_the_editor_and_is_audited(self):
+        self.joined()
+        response, client = self.ask_exit(action='offline-exit', mac_code='wxyz-2345')
+        self.assertContains(response, '123456')
+        self.assertContains(response, 'WXYZ-2345')
+        self.assertEqual(client.native_exit.call_args[0][2], 'WXYZ2345')
+        self.assertEqual(self.exit_audit(), [('WXYZ2345|typed', 'fp_teacher')])
+
+    def test_a_typed_code_for_a_student_with_no_session_is_logged_when_there_is_nothing_to_audit_on(self):
+        with self.assertLogs('judge.fairplay', 'WARNING') as logs:
+            response, client = self.ask_exit(action='offline-exit', mac_code='WXYZ2345')
+        self.assertContains(response, '123456')
+        self.assertEqual(self.exit_audit(), [])
+        self.assertTrue(any('WXYZ2345' in line and 'no session to audit on' in line for line in logs.output))
+
+    def test_an_audit_failure_never_hides_an_issued_code(self):
+        from unittest.mock import patch
+        self.joined()
+        with patch('judge.models.FairPlayDeviceAudit.objects.create', side_effect=RuntimeError('db')), \
+                self.assertLogs('judge.fairplay'):
+            response, client = self.ask_exit(action='offline-exit', mac_code='WXYZ2345')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '123456')
+
+    def test_a_refusal_by_fairplay_writes_no_audit_row(self):
+        from unittest.mock import Mock
+        from judge.utils.fairplay_client import FairPlayError
+        self.joined()
+        client = Mock()
+        client.native_exit.side_effect = FairPlayError('no', 422)
+        self.ask_exit(action='offline-exit', mac_code='WXYZ2345', client=client)
+        self.assertEqual(self.exit_audit(), [])
+
+    def test_a_non_editor_gets_a_404(self):
+        response, client = self.ask_exit(action='offline-exit', mac_code='WXYZ2345', user=self.classmate)
+        self.assertEqual(response.status_code, 404)
+        client.native_exit.assert_not_called()
+
+    def test_a_lock_bound_in_another_exam_is_refused_for_an_instructor(self):
+        from django.utils import timezone
+        from judge.models import FairPlayDeviceAudit
+        from judge.views.tests.fairplay_base import create_contest
+        other = create_contest('otherexam', fairplay_required=True)
+        session = FairPlayDeviceSession.objects.create(user=self.student, contest=other, fingerprint='a' * 64,
+                                                       browser_digest='b' * 64, lease_until=timezone.now())
+        FairPlayDeviceAudit.objects.create(session=session, actor=self.student, action='lock', reason='WXYZ2345')
+        response, client = self.ask_exit(action='offline-exit', mac_code='WXYZ2345')
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any('belongs to another exam or student' in m for m in self.exit_messages(response)))
+        client.native_exit.assert_not_called()
+
+    def test_an_administrator_override_is_labelled_in_the_audit_row(self):
+        from unittest.mock import Mock, patch
+        from django.utils import timezone
+        from judge.views.tests.fairplay_base import create_user
+        self.bind_exit_lock(self.classmate.username)  # the classmate owns ABCD2345
+        FairPlayDeviceSession.objects.create(user=self.student, contest=self.exam, fingerprint='c' * 64,
+                                             browser_digest='d' * 64, lease_until=timezone.now())
+        admin = create_user(username='fp_root_label')
+        admin.is_superuser = True
+        admin.is_staff = True
+        admin.save()
         client = Mock()
         client.native_exit.return_value = {'code': '123456'}
-        self.client.force_login(self.teacher)
-        with patch('judge.views.fairplay._client', return_value=client):
-            self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.student.username,
-                                         'confirm': '1', 'mac_code': 'ZZZZ2345'})
-        self.assertEqual(client.native_exit.call_args[0][2], 'ABCD2345')
+        with patch('judge.views.fairplay.FairPlayClient', return_value=client):
+            response, client = self.ask_exit(action='offline-exit', mac_code='ABCD2345', user=admin, client=client)
+        self.assertContains(response, '123456')
+        self.assertEqual(self.exit_audit(), [('ABCD2345|administrator override', 'fp_root_label')])
 
-    def test_back_participation_alone_never_skips_the_typed_code(self):
-        from unittest.mock import Mock, patch
+    def test_the_stale_lock_404_asks_for_the_code_and_the_typed_code_then_works(self):
+        from unittest.mock import Mock
+        from judge.utils.fairplay_client import FairPlayError
         self.bind_exit_lock()
         client = Mock()
+        client.native_exit.side_effect = [FairPlayError('unknown', 404), {'code': '654321'}]
+        asked, _client = self.ask_exit(mac_code='bound:ABCD2345', client=client)
+        self.assertContains(asked, 'name="mac_code"')
+        self.assertContains(asked, 'not the one FairPlay knows now')
+        typed, _client = self.ask_exit(action='offline-exit', mac_code='QQQQ-2345', client=client)
+        self.assertContains(typed, '654321')
+        self.assertContains(typed, 'QQQQ-2345')
+
+    def test_the_instructors_participation_page_is_one_table_with_every_student(self):
+        from judge.models import ContestParticipation
+        payload = self.joined()
+        participation = ContestParticipation.objects.get(
+            pk=FairPlayDeviceSession.objects.get(pk=payload['session']).participation_id)
         self.client.force_login(self.teacher)
-        with patch('judge.views.fairplay._client', return_value=client):
-            response = self.client.post(self.HELP, {'action': 'offline-exit', 'netid': self.student.username,
-                                                    'name': 'Avazbek', 'confirm': '1', 'back': 'participation'})
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'name="mac_code"')
+        response = self.client.get(self.PARTICIPATION)
+        html = response.content.decode()
+        self.assertEqual(response['Cache-Control'], 'private, no-store')
+        self.assertEqual(html.count('id="ranking-table"'), 1)
+        self.assertEqual(html.count('class="users-table'), 1)  # no second, empty participation table
+        table = html.split('id="ranking-table"')[1].split('</table>')[0]
+        self.assertIn('Username', table)
+        self.assertIn('FairPlay status', table)
+        self.assertIn('Points', table)
+        self.assertIn('contest/fpexam/rank/', table)  # the problem columns of the standard table
+        for student in (self.student, self.classmate):
+            self.assertIn('id="user-%s"' % student.username, table)
+        mine = table.split('id="user-%s"' % self.student.username)[1].split('</tr>')[0]
+        self.assertIn('In progress', mine)
+        self.assertIn('class="user-points"', mine)  # the standard result cell of the live participation
+        self.assertIn('/user/%s' % self.student.username, mine)  # linked like the standard table
+        self.assertIn('data-state="in_progress"', mine)
+        other = table.split('id="user-%s"' % self.classmate.username)[1].split('</tr>')[0]
+        self.assertIn('Not started', other)
+        self.assertIn('<td></td>', other)  # no participation yet: blank problem cells
+        self.assertEqual(participation.contest_id, self.exam.pk)
+
+    def test_the_students_own_participation_page_keeps_the_standard_table(self):
+        self.joined()
+        self.client.force_login(self.student)
+        html = self.client.get(self.PARTICIPATION).content.decode()
+        self.assertNotIn('id="fp-participation"', html)
+        self.assertIn('users-table', html)
+        self.client.force_login(self.teacher)
+        other = self.client.get('/contest/fpexam/participations/%s' % self.student.username).content.decode()
+        self.assertNotIn('id="fp-participation"', other)
+
+    def test_unlock_student_device_for_a_student_with_no_locked_computer_says_so_plainly(self):
+        from django.contrib.messages import get_messages
+        for state in ('completed', 'released'):
+            FairPlayDeviceSession.objects.all().delete()
+            FairPlayDeviceSession.objects.create(user=self.student, contest=self.exam, fingerprint='a' * 64,
+                                                 browser_digest='b' * 64, state=state,
+                                                 lease_until=__import__('django').utils.timezone.now())
+            response = self.quick(mode='only')
+            self.assertEqual(response.status_code, 302)
+            texts = [(m.level_tag, str(m)) for m in get_messages(response.wsgi_request)]
+            self.assertEqual(texts, [('info', "This student's computer is not locked by this exam right now.")], state)
+
+    def test_unlock_student_device_unlocks_and_the_student_starts_again_by_themselves(self):
+        from judge.models import ContestParticipation
+        payload = self.joined()
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        self.assertEqual(self.quick(mode='only').status_code, 302)
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'released')
+        terminal = self.decode(native_state(self.request('GET', '/api/fairplay/native/session/' + payload['session'],
+                                                         cookie=self.client.session.session_key), payload['session']))
+        self.assertEqual(terminal['state'], 'released')  # the app unlocks and returns to its home screen
+        again = self.decode(self.claim(cookie='fresh-start'))
+        self.assertEqual(again['state'], 'active')
+        self.assertNotEqual(again['session'], payload['session'])
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=again['session']).participation_id,
+                         session.participation_id)
+        self.assertEqual(ContestParticipation.objects.filter(contest=self.exam, user=self.student.profile).count(), 1)
+
+    def test_after_a_hand_in_the_student_needs_reopen_and_a_second_computer_never_takes_over(self):
+        payload = self.joined()
+        other = self.claim(fingerprint='c' * 64, cookie='other-computer')
+        self.assertEqual(json.loads(other.content)['reason'], 'other_device')  # one device at a time
+        FairPlayDeviceSession.objects.filter(pk=payload['session']).update(state='completed')
+        FairPlayDeviceSlot.objects.filter(user=self.student).update(session=None)  # as a real hand-in leaves it
+        handed_in = self.claim(cookie='fresh-start')
+        self.assertEqual((handed_in.status_code, json.loads(handed_in.content)['reason']), (403, 'handed_in'))
+        self.client.force_login(self.teacher)
+        self.assertEqual(self.quick(mode='continue', minutes='30').status_code, 302)
+        self.assertEqual(self.decode(self.claim(cookie='fresh-start'))['state'], 'active')
+
+    def test_unlock_then_reopen_still_works_and_reopen_is_not_needed_after_a_plain_unlock(self):
+        payload = self.decode(self.claim())
+        self.quick(mode='only')
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'released')
+        self.assertEqual(self.decode(self.claim(cookie='again'))['state'], 'active')  # no Reopen needed
+
+    def test_a_closed_app_with_an_unjoined_exam_starts_again_on_the_same_computer(self):
+        payload = self.decode(self.claim())
+        again = self.decode(self.claim(cookie='closed-and-reopened'))
+        self.assertEqual((again['session'], again['state']), (payload['session'], 'active'))
+
+    def test_the_source_of_a_chosen_code_comes_from_the_page_and_never_decides_permission(self):
+        self.joined()
+        self.refused_claim('BBBB2345')
+        # A forged label cannot turn a refused code into an allowed one: permission is the ownership lookup alone.
+        self.bind_exit_lock(self.classmate.username)  # the classmate owns ABCD2345
+        response, client = self.ask_exit(mac_code='bound:ABCD2345')
+        self.assertEqual(response.status_code, 302)
         client.native_exit.assert_not_called()
+        response, client = self.ask_exit(mac_code='hint:BBBB2345', typed='cccc2345')
+        self.assertEqual(client.native_exit.call_args[0][2], 'CCCC2345')
+        self.assertEqual(self.exit_audit()[-1][0], 'CCCC2345|typed')
+
+    def test_a_404_for_a_chosen_hint_or_typed_code_says_no_lock_was_registered(self):
+        from unittest.mock import Mock
+        from judge.utils.fairplay_client import FairPlayError
+        self.joined()
+        self.refused_claim('BBBB2345')
+        client = Mock()
+        client.native_exit.side_effect = FairPlayError('unknown', 404)
+        response, _client = self.ask_exit(mac_code='hint:BBBB2345', client=client)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any('No FairPlay lock was registered' in m for m in self.exit_messages(response)))
+
+    def test_every_issued_code_is_audited_including_the_classic_fallback_and_a_failing_override(self):
+        from unittest.mock import Mock, patch
+        from judge.utils.fairplay_client import FairPlayError
+        self.joined()
+        client = Mock()
+        client.native_exit.side_effect = FairPlayError('unknown', 404)
+        client.offline_exit.return_value = {'code': '777777'}
+        with self.settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=False):
+            self.client.force_login(self.teacher)
+            with patch('judge.views.fairplay._client', return_value=client):
+                response = self.client.post(self.HELP, {'action': 'offline-exit', 'netid': self.student.username,
+                                                        'name': 'A', 'confirm': '1', 'mac_code': 'WXYZ2345'})
+        self.assertContains(response, '777777')
+        self.assertEqual(self.exit_audit(), [('WXYZ2345|typed', 'fp_teacher')])
+
+    def test_a_failing_administrator_override_never_hides_the_issued_code(self):
+        from unittest.mock import Mock, patch
+        from django.utils import timezone
+        from judge.views.tests.fairplay_base import create_user
+        self.bind_exit_lock(self.classmate.username)
+        FairPlayDeviceSession.objects.create(user=self.student, contest=self.exam, fingerprint='c' * 64,
+                                             browser_digest='d' * 64, lease_until=timezone.now())
+        admin = create_user(username='fp_root_fail')
+        admin.is_superuser = True
+        admin.is_staff = True
+        admin.save()
+        client = Mock()
+        client.native_exit.return_value = {'code': '123456'}
+        with patch('judge.views.fairplay.FairPlayClient', return_value=client), \
+                patch('judge.utils.fairplay_device_session.override_lock_owner', side_effect=RuntimeError('db')), \
+                self.assertLogs('judge.fairplay'):
+            response, client = self.ask_exit(action='offline-exit', mac_code='ABCD2345', user=admin, client=client)
+        self.assertContains(response, '123456')
+        self.assertEqual(self.exit_audit(), [('ABCD2345|administrator override', 'fp_root_fail')])
+
+    def test_an_editor_may_release_an_unowned_lock_typed_from_a_screen_for_a_student_of_this_exam(self):
+        # Known and accepted: the lock may have been made for another exam. The editor must type the 8 characters
+        # shown on the locked computer; FairPlay decides whether the lock exists; the release is audited.
+        self.joined()
+        response, client = self.ask_exit(action='offline-exit', mac_code='ZZZZ2345')
+        self.assertContains(response, '123456')
+        self.assertEqual(self.exit_audit(), [('ZZZZ2345|typed', 'fp_teacher')])
+
+    def test_the_audience_unconfirmed_branch_stores_a_hint_only_for_a_roster_student(self):
+        from unittest.mock import patch
+        with patch('judge.utils.fairplay_audience.audience_descriptor', return_value={'confirmed': False}), \
+                patch('judge.views.fairplay_launch.student_can_launch', return_value=False):
+            self.refused_claim('BBBB2345', user=self.classmate)
+            self.assertEqual(self.hints(self.classmate), ['BBBB2345'])
+            self.refused_claim('CCCC2345', user=self.student)
+            with patch('judge.utils.fairplay_package.exam_roster') as roster:
+                roster.return_value.filter.return_value.exists.return_value = False
+                self.refused_claim('DDDD2345', user=self.outsider)
+        self.assertEqual(self.hints(self.outsider), [])
+
+    def test_the_hint_cache_failing_degrades_to_typing_the_code(self):
+        from unittest.mock import patch
+        from judge.utils.fairplay_device_session import lock_candidates
+        self.joined()
+        with patch('django.core.cache.cache.get', side_effect=RuntimeError('cache down')):
+            self.assertEqual(lock_candidates(self.exam, self.student.username), [])
+
+    def row_for(self, username):
+        from judge.views.fairplay import participation_rows
+        rows = participation_rows(__import__('types').SimpleNamespace(user=self.teacher), self.exam)
+        return [r for r in rows if r['netid'] == username][0]
+
+    def test_an_earlier_style_unlock_device_row_still_means_the_attempt_ended(self):
+        from judge.utils.fairplay_device_session import instructor_unlock
+        self.joined()
+        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Emergency')
+        again = self.claim(cookie='fresh-start')
+        self.assertEqual((again.status_code, json.loads(again.content)['reason']), (403, 'handed_in'))
+        row = self.row_for(self.student.username)
+        self.assertEqual((row['state'], row['short_status']), ('completed', 'Ended'))  # Reopen is offered
+
+    def test_unlock_student_device_never_lets_a_handed_in_student_back_in(self):
+        from django.contrib.messages import get_messages
+        from judge.models import FairPlayDeviceAudit
+        from judge.utils.fairplay_device_session import explicit_hand_in, instructor_unlock
+        payload = self.joined()
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        FairPlayDeviceSession.objects.filter(pk=session.pk).update(state='finishing')
+        FairPlayDeviceAudit.objects.create(session=session, actor=self.student, action='hand-in-started', reason='x')
+        self.assertTrue(explicit_hand_in(session))
+        row = self.row_for(self.student.username)
+        self.assertEqual(row['state'], 'submitting')
+        self.assertTrue(any('handed in' in n for n in row['notes']))
+        html = self.participation_html()
+        self.assertNotIn('data-states="in_progress completed unlocked reopened not_locked submitting', html)
+        response = self.quick(mode='only')
+        self.assertTrue(any('handed in' in str(m) for m in get_messages(response.wsgi_request)))
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'finishing')  # not released
+        # Even a resumable row on a session with a newer hand-in does not count as "may come back".
+        FairPlayDeviceSession.objects.filter(pk=session.pk).update(state='active')
+        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='x',
+                          resumable=True)
+        FairPlayDeviceAudit.objects.create(session=session, actor=self.student, action='hand-in-started', reason='y')
+        refused = self.claim(cookie='fresh-start')
+        self.assertEqual((refused.status_code, json.loads(refused.content)['reason']), (403, 'handed_in'))
+
+    def test_an_unlocked_student_is_not_refused_after_reopen_and_extra_time_when_the_participation_has_time(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from judge.models import FairPlayDeviceAudit
+        from judge.utils.fairplay_device_session import WINDOW_ACTION, instructor_unlock
+        payload = self.joined()
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        # A reopen window copied onto the session is long over, but the participation (moved by extra time) has time.
+        FairPlayDeviceAudit.objects.create(session=session, actor=self.teacher, action=WINDOW_ACTION,
+                                           reason='until=%s;used=0' % (timezone.now() - timedelta(minutes=5)).isoformat())
+        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='x',
+                          resumable=True)
+        self.assertEqual(self.decode(self.claim(cookie='fresh-start'))['state'], 'active')
+
+    def test_the_one_table_also_lists_live_participants_fairplay_knows_nothing_about(self):
+        from django.utils import timezone
+        from judge.models import ContestParticipation
+        for user in (self.outsider, self.teacher):
+            ContestParticipation.objects.create(contest=self.exam, user=user.profile, real_start=timezone.now(),
+                                                virtual=0)
+        self.client.force_login(self.teacher)
+        table = self.client.get(self.PARTICIPATION).content.decode().split('id="ranking-table"')[1].split('</table>')[0]
+        for user in (self.outsider, self.teacher):
+            self.assertIn('id="user-%s"' % user.username, table)
+        mine = table.split('id="user-%s"' % self.outsider.username)[1].split('</tr>')[0]
+        self.assertIn('—', mine)
+        self.assertIn('data-state="other"', mine)
+
+    def test_the_classic_table_still_shows_ranked_rows_when_fairplay_is_unreachable(self):
+        from unittest.mock import patch
+        from django.utils import timezone
+        from judge.models import ContestParticipation
+        ContestParticipation.objects.create(contest=self.exam, user=self.outsider.profile, real_start=timezone.now(),
+                                            virtual=0)
+        self.client.force_login(self.teacher)
+        with self.settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=False), \
+                patch('judge.views.fairplay.classic_exam', return_value=(None, True, None)):
+            html = self.client.get(self.PARTICIPATION).content.decode()
+        self.assertIn('cannot be reached', html)
+        self.assertIn('id="user-%s"' % self.outsider.username, html)
+
+    def test_a_released_session_with_no_unlock_shows_as_not_locked_and_has_no_reopen(self):
+        from judge.models import FairPlayDeviceAudit
+        payload = self.decode(self.claim())
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        FairPlayDeviceSession.objects.filter(pk=session.pk).update(state='released')
+        FairPlayDeviceAudit.objects.create(session=session, actor=self.student, action='auto-expire', reason='x')
+        row = self.row_for(self.student.username)
+        self.assertEqual((row['state'], row['short_status']), ('not_locked', 'Not locked'))
+        html = self.help_html()
+        self.assertIn('id="fp-part-menu"', html)
+        menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
+        self.assertIn('data-mode="continue" data-states="completed unlocked not_locked"', menu)  # not_locked too: an expired reopened attempt that never joined needs it
+
+    def test_the_classic_code_needed_page_does_not_mention_unlock_student_device(self):
+        self.client.force_login(self.teacher)
+        with self.settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=False):
+            response = self.client.post(self.HELP, {'action': 'offline-exit', 'netid': self.student.username,
+                                                    'name': 'A', 'confirm': '1'})
+        self.assertNotContains(response, 'Unlock student device')
+
+    def test_both_exit_actions_show_the_candidates_and_a_type_field_and_issue_nothing_without_a_carried_code(self):
+        # The consistent rule for 'offline-exit' and 'offline-exit-on-record': with no code in the POST (even with
+        # confirm=1 and a stray 'back' field) the page offers the candidates and a field to type the code; only a
+        # confirming POST that carries the lock issues a code.
+        from unittest.mock import Mock, patch
+        self.bind_exit_lock()
+        for action in ('offline-exit', 'offline-exit-on-record'):
+            client = Mock()
+            self.client.force_login(self.teacher)
+            with patch('judge.views.fairplay._client', return_value=client):
+                response = self.client.post(self.HELP, {'action': action, 'netid': self.student.username,
+                                                        'name': 'Avazbek', 'confirm': '1', 'back': 'participation'})
+            self.assertEqual(response.status_code, 200, action)
+            self.assertContains(response, 'ABCD-2345')
+            self.assertContains(response, 'name="mac_code_typed"')
+            client.native_exit.assert_not_called()
 
     def test_the_on_record_action_is_for_editors_of_a_native_exam_only(self):
         from unittest.mock import Mock, patch
@@ -2372,12 +2946,6 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
                                                     'name': 'Avazbek', 'confirm': '1', 'mac_code': code})
         return response, client
 
-    def test_typed_code_of_an_unbound_lock_is_refused_for_an_instructor(self):
-        response, client = self.typed(self.teacher, 'WXYZ2345')
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(any('not linked to this student' in m for m in self.exit_messages(response)))
-        client.native_exit.assert_not_called()
-
     def test_typed_code_works_for_this_students_own_lock_when_the_record_is_stale(self):
         self.bind_exit_lock()
         response, client = self.typed(self.teacher, 'ABCD-2345')
@@ -2395,7 +2963,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         from unittest.mock import Mock, patch
         menu = self.participation_html().split('id="fp-part-menu"')[1].split('<form')[0]
         self.assertIn('data-action="offline-exit-on-record" data-mode="" '
-                      'data-states="not_started in_progress completed unlocked reopened"', menu)
+                      'data-states="not_started in_progress submitting completed unlocked reopened not_locked"', menu)
         client = Mock()
         self.client.force_login(self.teacher)
         with patch('judge.views.fairplay._client', return_value=client):
@@ -2469,7 +3037,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
                 session = FairPlayDeviceSession.objects.create(
                     user=user, contest=self.exam, fingerprint='a' * 64, browser_digest='b' * 64,
                     lease_until=timezone.now() - timezone.timedelta(minutes=5), participation=participation)
-                FairPlayDeviceAudit.objects.create(session=session, actor=user, action='lease-gap')
+                FairPlayDeviceAudit.objects.create(session=session, actor=user, action='came-back')
 
         add('one', 1)
         participation_rows(request, self.exam)  # warm one-time caches
@@ -2482,7 +3050,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         mine = [r for r in rows if r['netid'].startswith('fp_a')]
         self.assertEqual(len(mine), 5)
         self.assertTrue(all(r['short_status'] == 'In progress' for r in mine))
-        self.assertTrue(all(any('restarted on this device' in n for n in r['notes']) for r in mine))
+        self.assertTrue(all(any('came back' in n for n in r['notes']) for r in mine))
 
     def test_the_on_record_and_the_typed_path_send_the_same_canonical_code(self):
         self.bind_exit_lock()
@@ -2492,17 +3060,18 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         client_b.native_exit.return_value = {'code': '123456'}
         with patch('judge.views.fairplay._client', return_value=client_b):
             self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.student.username,
-                                         'name': 'A', 'confirm': '1'})
+                                         'name': 'A', 'confirm': '1', 'mac_code': 'abcd-2345'})
         self.assertEqual(client_a.native_exit.call_args[0][2], 'ABCD2345')
         self.assertEqual(client_b.native_exit.call_args[0][2], 'ABCD2345')
 
-    def test_the_held_note_names_the_menu_actions_that_exist(self):
-        self.decode(self.claim())
-        self.decode(native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'}),
-                                   self.exam.key))
+    def test_the_menu_names_unlock_student_device_for_every_started_state(self):
         html = self.participation_html()
-        self.assertIn('Choose Reopen exam to let the student continue, or Emergency exit', html)
-        self.assertNotIn('unlock the device, then reopen', html)
+        menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
+        self.assertIn('Unlock student device', menu)
+        self.assertNotIn('Emergency exit', menu)
+        self.assertIn('data-mode="only" data-states="in_progress completed unlocked reopened not_locked"', menu)
+        self.assertIn('data-mode="continue" data-states="completed unlocked not_locked"', menu)  # Reopen after a hand-in, an unlock, or an expired unjoined reopen
+        self.assertIn('data-action="extra-time" data-mode="" data-states="in_progress"', menu)
 
     def test_the_bulk_audit_summary_agrees_with_the_per_session_readers(self):
         from django.utils import timezone
@@ -2520,19 +3089,18 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             FairPlayDeviceAudit.objects.create(session=session, actor=self.teacher, action=action, reason=reason)
 
         held, cleared, reopened = make('fp_sum_a'), make('fp_sum_b'), make('fp_sum_c')
-        audit(held, 'lease-gap')
-        audit(cleared, 'lease-gap')
-        audit(cleared, 'unlock-device')
-        audit(reopened, 'lease-gap')
+        audit(held, 'lease-gap')  # an old row: it holds nothing any more
+        audit(cleared, 'unlock-resumable')
         audit(reopened, 'reopen')
         audit(reopened, 'reopen-window', 'until=%s;used=60' % (now + timezone.timedelta(hours=1)).isoformat())
         audit(reopened, 'reopen-window', 'until=%s;used=90' % (now + timezone.timedelta(hours=2)).isoformat())
         summary = audit_summary([held.pk, cleared.pk, reopened.pk])
         for session in (held, cleared, reopened):
-            self.assertEqual(session.pk in summary['held'], session_on_hold(session), session.user.username)
+            self.assertFalse(session_on_hold(session), session.user.username)
             self.assertEqual(parse_window(summary['windows'].get(session.pk))[0], reopen_until(session),
                              session.user.username)
-        self.assertEqual(summary['held'], {held.pk})
+        self.assertNotIn('held', summary)
+        self.assertEqual(summary['unlocked'], {cleared.pk})
         self.assertEqual(summary['reopened'], {reopened.pk})
 
     def launch_started(self, since):
@@ -2613,7 +3181,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         client.native_exit.side_effect = FairPlayError('Unknown or expired Mac code', status=404)
         self.client.force_login(admin)
         data = {'action': 'offline-exit-on-record', 'netid': self.student.username, 'name': 'A', 'confirm': '1',
-                'reason': 'Locked overnight'}
+                'reason': 'Locked overnight', 'mac_code': 'bound:ABCD2345'}
         with patch('judge.views.fairplay.FairPlayClient', return_value=client), \
                 patch('judge.views.fairplay._client', return_value=client):
             page = self.client.post(self.HELP, data).content.decode()
@@ -2663,8 +3231,8 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             result = self.decode(native_recover(
                 self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'}), self.exam.key))
-        self.assertIs(result.get('hold'), True)
-        self.assertIsNone(self.launch_mark())  # a held session is not the app taking the exam over
+        self.assertNotIn('hold', result)
+        self.assertIsNotNone(self.launch_mark())  # nothing is held: the app took the exam over again
         cache.clear()
 
     def test_a_reopen_may_last_up_to_1440_minutes_and_no_more(self):
@@ -2794,7 +3362,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.client.force_login(self.teacher)
         with patch('judge.views.fairplay._client', return_value=client):
             response = self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.student.username,
-                                                    'name': 'Avazbek', 'confirm': '1'})
+                                                    'name': 'Avazbek', 'confirm': '1', 'mac_code': 'bound:ABCD2345'})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'not the one FairPlay knows now')
         self.assertContains(response, 'name="mac_code"')
@@ -2803,8 +3371,8 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         html = self.participation_html()
         menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
         self.assertIn('data-action="offline-exit-on-record" data-mode="" '
-                      'data-states="not_started in_progress completed unlocked reopened"', menu)
-        self.assertIn('data-mode="only" data-states="in_progress"', menu)
+                      'data-states="not_started in_progress submitting completed unlocked reopened not_locked"', menu)
+        self.assertIn('data-mode="only" data-states="in_progress completed unlocked reopened not_locked"', menu)
         self.assertIn('Get the offline exit code for {who}?', menu)
         self.assertIn('data-state="not_started"', html)
         self.decode(self.claim())

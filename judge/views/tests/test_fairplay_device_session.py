@@ -49,7 +49,7 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         self.assertIsNone(FairPlayDeviceSlot.objects.get(user_id=self.student.pk).session_id)
         self.assertIsNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest='b' * 64))
         self.assertEqual(FairPlayDeviceAudit.objects.get(session=session).actor, self.teacher)
-        with self.assertRaises(DeviceSessionDenied):
+        with self.assertRaises(DeviceSessionDenied):  # a plain unlock-device still ends the attempt
             self.claim()
 
     def test_student_cannot_unlock_or_transfer_another_session(self):
@@ -202,7 +202,7 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         with self.assertRaises(DeviceSessionDenied):
             self.claim()
         instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='End resumed attempt')
-        with self.assertRaises(DeviceSessionDenied):
+        with self.assertRaises(DeviceSessionDenied):  # a plain unlock-device still ends the attempt
             self.claim('c' * 64, 'd' * 64)
 
     def window_of(self, session):
@@ -336,17 +336,19 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         self.assertEqual(recovered.pk, old.pk)
         self.assertEqual(recovered.participation_id, participation.pk)
         self.assertIsNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest='b' * 64))
-        self.assertIsNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest='d' * 64))
+        self.assertIsNotNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest='d' * 64))
         self.assertEqual(FairPlayDeviceSession.objects.count(), 1)
 
-    def test_lease_gap_stops_admission_of_the_new_digest_at_once(self):
+    def test_an_unclean_recover_admits_the_new_digest_at_once_and_holds_nothing(self):
+        # Changed on purpose (owner's re-entry rule): a restart used to leave a lease-gap hold that only an instructor
+        # could clear; now the same computer is simply back in, and only the old sign-in is revoked.
         from judge.utils.fairplay_device_session import recover_device
         session = self.claim()
         recover_device(user_id=self.student.pk, contest=self.exam, fingerprint='a' * 64, browser_digest='d' * 64, unclean=True)
-        self.assertTrue(FairPlayDeviceAudit.objects.filter(session=session, action='lease-gap').exists())
-        self.assertLessEqual(FairPlayDeviceSession.objects.get(pk=session.pk).lease_until, timezone.now())
-        for digest in ('b' * 64, 'd' * 64):
-            self.assertIsNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest=digest))
+        self.assertFalse(FairPlayDeviceAudit.objects.filter(session=session, action='lease-gap').exists())
+        self.assertGreater(FairPlayDeviceSession.objects.get(pk=session.pk).lease_until, timezone.now())
+        self.assertIsNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest='b' * 64))
+        self.assertIsNotNone(admitted_session(user_id=self.student.pk, fingerprint='a' * 64, browser_digest='d' * 64))
 
     def test_recover_without_gap_keeps_the_new_digest_admitted(self):
         from judge.utils.fairplay_device_session import recover_device

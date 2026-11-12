@@ -7,6 +7,7 @@
     <table class="table" style="width:auto">
         <tr><td>{{ _('Student') }}</td><td>{{ name }} ({{ netid }})</td></tr>
         <tr><td>{{ _('Action') }}</td><td>{{ button }}</td></tr>
+        {% if lock_code %}<tr><td>{{ _('Lock code') }}</td><td><span id="fairplay-confirm-lock" style="font-family: monospace">{{ lock_code }}</span>{% if lock_kind %} <small>({{ lock_kind }})</small>{% endif %}<br>{{ _("Check that the student's screen shows this code.") }}</td></tr>{% endif %}
         {% if minutes %}<tr><td>{{ _('Minutes') }}</td><td>{{ minutes }}</td></tr>{% endif %}
         <tr><td>{{ _('Reason') }}</td><td>{{ reason }}</td></tr>
     </table>
@@ -22,9 +23,22 @@
         <p><label for="fp-typed-code">{{ _("Code shown on the student's computer") }}</label>
             <input type="text" id="fp-typed-code" name="mac_code" maxlength="64" required autocomplete="off" autofocus
                    style="font-family: monospace; text-transform: uppercase"></p>
-        {% elif mac_code %}<input type="hidden" name="mac_code" value="{{ mac_code }}">{% endif %}
+        {% elif choices %}
+        <p>{{ _("This student's computer may be showing one of these lock codes. Check that the student's screen shows the code you choose:") }}</p>
+        {% for choice in choices %}
+        <p><label><input type="radio" name="mac_code" value="{{ choice.value }}"> <span style="font-family: monospace">{{ choice.shown }}</span> <small>({{ choice.label }})</small></label></p>
+        {% endfor %}
+        <p><label for="fp-typed-other">{{ _('Or type another code shown on the screen') }}</label>
+            <input type="text" id="fp-typed-other" name="mac_code_typed" maxlength="64" autocomplete="off"
+                   style="font-family: monospace; text-transform: uppercase"></p>
+        {% elif mac_code %}<input type="hidden" name="mac_code" value="{{ mac_code }}">
+        {% if can_type %}
+        <p><label for="fp-typed-other">{{ _("Or type the code shown on the student's screen if it is a different one") }}</label>
+            <input type="text" id="fp-typed-other" name="mac_code_typed" maxlength="64" autocomplete="off"
+                   style="font-family: monospace; text-transform: uppercase"></p>
+        {% endif %}{% endif %}
         <input type="hidden" name="confirm" value="1">
-        <button type="submit" class="button" style="width:auto">{% if need_code %}{{ _('Get exit code') }}{% else %}{{ _('Yes, do it') }}{% endif %}</button>
+        <button type="submit" class="button" style="width:auto">{% if need_code or choices %}{{ _('Get exit code') }}{% else %}{{ _('Yes, do it') }}{% endif %}</button>
         <a class="button" style="width:auto" href="{{ url('contest_participation_own', contest.key) }}">{{ _('Cancel') }}</a>
     </form>
 </div>

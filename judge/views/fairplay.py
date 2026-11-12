@@ -14,6 +14,7 @@ from django.views import View
 from judge.models import Contest
 from judge.utils.fairplay import fairplay_enabled, is_fairplay_exam, native_browser_enabled
 from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
+from judge.utils.fairplay_device_session import format_lock
 
 __all__ = ['ContestAccessCodesPdf', 'ContestStudentHelp']
 
@@ -111,28 +112,56 @@ def _exit_target_problem(request, contest, netid):
 
 
 def _lock_problem(request, contest, netid, mac_code):
-    """A Mac code opens only the Mac its student locked in this exam.
+    """A refusal text, or None when this lock may be released for this student. The caller is an editor of this exam
+    (the view guarantees it). Permission rests on one uncached ownership lookup of the posted code and on nothing the
+    page carried:
 
-    A lock that no session ever claimed (locked before the exam started) can be released only by
-    a site administrator, and that is logged. A lock bound to another exam or student never can.
+    - owned by this student in this exam (the lock on record), or owned by nobody: allowed. An unowned code is one the
+      OJ never bound (a refused claim, a student not yet admitted, a stale hint); it needs the 8 characters only the
+      locked computer shows, and it is audited. Known and accepted: an editor of this exam may issue a code for an
+      unowned lock typed from a screen for a student on this exam's list even if that computer locked for another
+      exam; FairPlay still decides whether the lock exists.
+    - owned by another student or exam: refused; a site administrator may take it over (an override, labelled so).
+    The audit label is `request.fairplay_source`, set from what the page carried, and never affects permission.
     """
-    from judge.utils.fairplay_device_session import lock_bound_to, normalize_mac_code, override_lock_owner
+    from judge.utils.fairplay_device_session import lock_bound_to, normalize_mac_code
     code = normalize_mac_code(mac_code)
     if code is None:
         return _('That is not a Mac code.')
     bound = lock_bound_to(contest, netid, code, use_cache=False)
-    if bound:
-        return None
-    if bound is False and request.user.is_superuser:
-        request.fairplay_override = (contest, netid, code)
-        return None
     if bound is False:
+        if request.user.is_superuser:
+            request.fairplay_override = (contest, netid, code)
+            request.fairplay_source = 'administrator override'
+            return None
         return _('This Mac code belongs to another exam or student. No exit code was issued.')
-    if request.user.is_superuser:
-        logger.warning('FairPlay unbound Mac code %s released by administrator %s for %s in %s',
-                       code, request.user.username, netid, contest.key)
-        return None
-    return _('This Mac is not linked to this student in this exam. Ask a site administrator to release it.')
+    if request.user.is_superuser and request.profile.id not in contest.editor_ids:
+        request.fairplay_source = 'administrator, ' + getattr(request, 'fairplay_source', 'typed')
+    return None
+
+
+def _audit_issued(request, contest, netid, code):
+    """Record every issued offline exit code: an audit row on the student's newest session in this exam (the table
+    needs a session), else only a warning line. Known and accepted: a student with no session at all has nothing to
+    hang a row on, so only the log line records that release. Never raises: the code is already issued and must reach
+    the page."""
+    from judge.utils.fairplay_device_session import EXIT_ISSUED_ACTION
+    source = getattr(request, 'fairplay_source', 'unknown')
+    anchor = None
+    try:
+        from django.db import transaction
+        from judge.models import FairPlayDeviceAudit, FairPlayDeviceSession
+        anchor = FairPlayDeviceSession.objects.filter(contest=contest, user__username=netid) \
+            .order_by('-created_at', '-pk').first()
+        if anchor is not None:
+            with transaction.atomic():
+                FairPlayDeviceAudit.objects.create(session=anchor, actor=request.user, action=EXIT_ISSUED_ACTION,
+                                                   reason=('%s|%s' % (code, source))[:300])
+    except Exception:
+        logger.exception('FairPlay could not write the audit row for an exit code')
+        anchor = None
+    logger.warning('FairPlay offline exit code issued by %s for %s in %s, lock %s (%s)%s', request.user.username,
+                   netid, contest.key, code, source, '' if anchor is not None else ' [no session to audit on]')
 
 
 def _reopen_note(contest, session, minutes):
@@ -170,21 +199,23 @@ def _parse_minutes(request, maximum):
     return minutes, None
 
 
-def _exit_code_to_use(request, contest, netid, name, use_lock_on_record):
-    """(canonical code, None) to send to FairPlay, or ('', note) when the instructor must type the code shown on the
-    student's screen. The lock on record is used only when asked for; a typed code is cleaned to the same canonical form
-    (8 characters, no dash) that the on-record code has, which is also what FairPlay's native-exit route parses."""
-    from judge.utils.fairplay_device_session import latest_bound_lock, normalize_mac_code
-    if use_lock_on_record:
-        code = latest_bound_lock(contest, netid) or ''
-        if code:
-            return code, None
-        return '', _("No locked computer is on record for %(name)s in this exam. Type the code shown on the student's "
-                     "screen, or use Emergency exit if the computer is online.") % {'name': name}
-    typed = request.POST.get('mac_code', '').strip()
-    if not typed:
-        return '', _("Type the code shown on the student's computer.")
-    return normalize_mac_code(typed) or typed, None
+LOCK_SOURCES = (('bound:', 'on record'), ('hint:', 'chosen from list'))
+
+
+def _chosen_lock(request):
+    """(lock the instructor chose or typed, how it was chosen). A typed code wins over a ticked choice. The page marks a
+    listed choice with a prefix ('bound:' or 'hint:'); anything else counts as typed. The label is only for the audit
+    row and never decides permission."""
+    from judge.utils.fairplay_device_session import normalize_mac_code
+    typed = request.POST.get('mac_code_typed', '').strip()
+    if typed:
+        return normalize_mac_code(typed) or typed, 'typed'
+    raw, source = request.POST.get('mac_code', '').strip(), 'typed'
+    for prefix, label in LOCK_SOURCES:
+        if raw.startswith(prefix):
+            raw, source = raw[len(prefix):], label
+            break
+    return normalize_mac_code(raw) or raw, source
 
 
 def _code_needed(request, contest, netid, name, reason, note):
@@ -197,15 +228,24 @@ def _code_needed(request, contest, netid, name, reason, note):
     }))
 
 
-def _session_status(session, reopen_live):
-    """The state key and short label the Participation table shows for a student's latest session."""
+def _session_status(session, reopen_live, flags=None):
+    """The state key and short label the Participation table shows for a student's latest session. `flags` is
+    audit_summary(). Only an attempt that ended (handed in, ended by an instructor unlock or closed by the deadline)
+    needs "Reopen exam"; one that was merely unlocked, or released without a lock, can be started again."""
+    flags = flags or {}
     if session.state in ('active', 'finishing'):
+        if session.state == 'finishing' and session.pk in flags.get('handed_in', ()):
+            return {'state': 'submitting', 'short_status': _('Handed in, finishing')}
         return {'state': 'in_progress', 'short_status': _('In progress')}
     if reopen_live:
         return {'state': 'reopened', 'short_status': _('Reopened')}
     if session.state == 'completed':
         return {'state': 'completed', 'short_status': _('Completed')}
-    return {'state': 'unlocked', 'short_status': _('Unlocked')}
+    if session.pk in flags.get('unlocked', ()):
+        return {'state': 'unlocked', 'short_status': _('Unlocked')}
+    if session.pk in flags.get('ended', ()):
+        return {'state': 'completed', 'short_status': _('Ended')}
+    return {'state': 'not_locked', 'short_status': _('Not locked')}
 
 
 def is_fairplay_instructor(request, contest):
@@ -221,11 +261,12 @@ def participation_rows(request, contest, instructor=None):
         instructor = is_fairplay_instructor(request, contest)
     if not (instructor and native_browser_enabled()):
         return []
-    from judge.models import FairPlayDeviceSession
+    from judge.models import FairPlayDeviceAudit, FairPlayDeviceSession
     from judge.utils.fairplay_device_session import (audit_summary, lease_expired_flagged, parse_window,
                                                      personal_deadline, reopen_minutes_from)
     from judge.utils.fairplay_package import exam_roster
-    from django.db.models import Exists, OuterRef, Q
+    from datetime import timezone as dt_timezone
+    from django.db.models import Count, Exists, Max, OuterRef, Q
     newer = FairPlayDeviceSession.objects.filter(contest=OuterRef('contest'), user=OuterRef('user')).filter(
         Q(created_at__gt=OuterRef('created_at')) | Q(created_at=OuterRef('created_at'), pk__gt=OuterRef('pk')))
     # Only each student's newest session (by -created_at, -pk) is read, not their whole history.
@@ -234,6 +275,9 @@ def participation_rows(request, contest, instructor=None):
             has_newer=False).select_related('user', 'contest', 'participation', 'participation__contest'):
         latest[session.user.username] = session
     flags = audit_summary([s.pk for s in latest.values()])
+    came_back = {username: (count, last) for username, count, last in FairPlayDeviceAudit.objects.filter(
+        session__contest=contest, action='came-back').values('session__user__username')
+        .annotate(count=Count('pk'), last=Max('created_at')).values_list('session__user__username', 'count', 'last')}
     now = timezone.now()
     rows = {}
     for username, label in ((p.user.username, p.user.get_full_name() or p.user.username)
@@ -245,14 +289,14 @@ def participation_rows(request, contest, instructor=None):
         window = parse_window(flags['windows'].get(session.pk))[0]
         ended = session.state not in ('active', 'finishing')
         row.update(_session_status(session, ended and session.pk in flags['reopened']
-                                   and window is not None and window > now))
+                                   and window is not None and window > now, flags))
         deadline = personal_deadline(session, reopen_at=window)
         row['reopen_minutes'] = reopen_minutes_from((deadline - now).total_seconds())
         notes = []
+        if row['state'] == 'submitting':
+            notes.append(_('The student handed in and the hand-in is being completed. Reopen the exam once it is '
+                           'complete if they need to continue.'))
         if session.state == 'active':
-            if session.pk in flags['held']:
-                notes.append(_('FairPlay restarted on this device. Choose Reopen exam to let the student continue, '
-                               'or Emergency exit to end the attempt.'))
             if lease_expired_flagged(session, now=now, deadline=deadline,
                                      recorded=session.pk in flags['expired']):
                 notes.append(_('The FairPlay connection of this device dropped during the exam.'))
@@ -260,6 +304,11 @@ def participation_rows(request, contest, instructor=None):
             notes.append(_('Some answers were saved but not submitted: %(problems)s. Ask the system administrator to '
                            'run the harvest consistency check, or reopen the student.')
                          % {'problems': flags['unsubmitted'][session.pk]})
+        if username in came_back:
+            count, last = came_back[username]
+            notes.append(ngettext('Left and came back %(n)d time; last at %(time)s UTC.',
+                                  'Left and came back %(n)d times; last at %(time)s UTC.', count)
+                         % {'n': count, 'time': last.astimezone(dt_timezone.utc).strftime('%Y-%m-%d %H:%M')})
         row['notes'] = notes
     return sorted(rows.values(), key=lambda row: row['netid'])
 
@@ -381,6 +430,7 @@ def participation_context(request, contest, with_rows=True, instructor=None):
     if instructor is None:
         instructor = is_fairplay_instructor(request, contest)
     context = {'fairplay_instructor': instructor, 'fairplay_students': [], 'fairplay_unreachable': False,
+               'fairplay_ranked': {}, 'fairplay_problems': [],
                'fairplay_exam': {}, 'fairplay_stale': None, 'fairplay_block': instructor and with_rows,
                'fairplay_max_minutes': _minutes_limit(), 'fairplay_max_reopen_minutes': MAX_REOPEN_MINUTES}
     if not (instructor and with_rows):
@@ -390,6 +440,18 @@ def participation_context(request, contest, with_rows=True, instructor=None):
     else:
         (context['fairplay_students'], context['fairplay_exam'], context['fairplay_unreachable'],
          context['fairplay_stale']) = classic_rows(request, contest)
+    # The students' live participations as the standard ranking table builds them (problem cells and points).
+    from judge.views.contests import get_contest_ranking_list
+    users, problems = get_contest_ranking_list(request, contest, show_current_virtual=False)
+    context['fairplay_ranked'] = {ranked.user.username: ranked for _rank, ranked in users}
+    context['fairplay_problems'] = problems
+    # One table of everyone: the FairPlay students plus any live participant FairPlay has no data for (not on the list,
+    # the instructor's own participation, or FairPlay unreachable), shown without a FairPlay status.
+    known = {row['netid'] for row in context['fairplay_students']}
+    extra = [{'netid': name, 'name': ranked.user.get_full_name() or name, 'state': 'other',
+              'short_status': '\u2014', 'notes': [], 'reopen_minutes': 30}
+             for name, ranked in context['fairplay_ranked'].items() if name not in known]
+    context['fairplay_students'] = sorted(list(context['fairplay_students']) + extra, key=lambda row: row['netid'])
     return context
 
 
@@ -455,35 +517,69 @@ class ContestStudentHelp(LoginRequiredMixin, View):
             problem = _('The reason is too long (at most %d characters).') % MAX_REASON
         if problem is None and needs_minutes:
             minutes, problem = _parse_minutes(request, _minutes_limit())
-        mac_code = ''
+        mac_code, lock_field, source, choices, can_type, ask = '', '', 'typed', [], False, False
+        lock_kind = ''
         if problem is None and action == 'offline-exit':
             # Ineligible netids (not a student, an instructor, cannot start the exam) fail now, before a code is asked.
             problem = _exit_target_problem(request, contest, netid)
             if problem is None:
-                mac_code, asked = _exit_code_to_use(request, contest, netid, name, use_lock_on_record)
-                if asked is not None:
-                    return _code_needed(request, contest, netid, name, reason, asked)
+                mac_code, source = _chosen_lock(request)
+                request.fairplay_source = source
+                lock_field = mac_code
                 if len(mac_code) > 64:
                     problem = _('Type the code the student reads from the Mac.')
+                elif not mac_code or request.POST.get('confirm') != '1':
+                    # Nothing is issued without a confirming POST that carries the lock. The page offers the lock on
+                    # record and the hints from refused claims, and always a field to type the code on the screen.
+                    candidates = []
+                    if native_browser_enabled():
+                        from judge.utils.fairplay_device_session import lock_candidates
+                        candidates = lock_candidates(contest, netid)
+                    if not mac_code:
+                        if not candidates:
+                            return _code_needed(request, contest, netid, name, reason, _(
+                                "No locked computer is on record for %(name)s in this exam. Type the code shown on "
+                                "the student's screen.") % {'name': name} + (
+                                    ' ' + _('Or use Unlock student device if the computer is online.')
+                                    if native_browser_enabled() else ''))
+                        can_type = ask = True
+                        if len(candidates) == 1 and candidates[0][1] == 'bound':
+                            # Only the lock DKU OJ itself bound, and only when it is the sole candidate, is pre-filled.
+                            mac_code = candidates[0][0]
+                            lock_field = 'bound:' + mac_code
+                            lock_kind = _('On record (verified by DKU OJ)')
+                        else:
+                            # A hint is what the student's app reported and is never pre-selected.
+                            choices = [{'value': '%s:%s' % ('bound' if kind == 'bound' else 'hint', c),
+                                        'shown': format_lock(c), 'kind': kind,
+                                        'label': _('On record (verified by DKU OJ)') if kind == 'bound'
+                                        else _("Reported by the student's app, not verified")}
+                                       for c, kind in candidates]
         if problem:
             messages.error(request, problem)
             return back
-        if request.POST.get('confirm') != '1':
+        if request.POST.get('confirm') != '1' or ask:
             return _no_store(render(request, 'contest/fairplay_help_confirm.html', {
                 'contest': contest, 'title': _('Participation'), 'action': shown_action, 'button': button,
                 'question': question % {'name': name, 'netid': netid}, 'netid': netid, 'name': name, 'reason': reason,
-                'minutes': minutes, 'mac_code': mac_code, 'mode': mode,
+                'minutes': minutes, 'mac_code': lock_field, 'mode': mode, 'choices': choices, 'can_type': can_type,
+                'lock_kind': lock_kind,
+                'lock_code': format_lock(mac_code) if action == 'offline-exit' else '',
             }))
 
         if action == 'quick-unlock':
-            from judge.utils.fairplay_device_session import (DeviceSessionDenied, default_reopen_minutes,
-                                                             instructor_unlock_and_reopen, instructor_unlock_end)
+            from judge.utils.fairplay_device_session import (DeviceSessionDenied, NoActiveDevice,
+                                                             default_reopen_minutes, instructor_unlock,
+                                                             instructor_unlock_and_reopen)
             try:
                 if mode == 'only':
-                    instructor_unlock_end(contest=contest, username=netid, actor=request.user, reason=reason)
+                    # Unlock student device: the computer unlocks and the app returns to its home screen. The attempt
+                    # is not ended (nothing is detached), so the student may start the exam again by themselves.
+                    instructor_unlock(contest=contest, username=netid, actor=request.user, reason=reason,
+                                      resumable=True)
                     _accepted(request, contest,
-                              _('Device unlocked. %(name)s returns to the start page and the attempt is '
-                                'ended. Saved answers are kept.') % {'name': name})
+                              _('Device unlocked. %(name)s returns to the start page. The attempt is not ended: the '
+                                'student can start the exam again.') % {'name': name})
                 else:
                     minutes = minutes or default_reopen_minutes(contest, netid)
                     reopened = instructor_unlock_and_reopen(contest=contest, username=netid, actor=request.user,
@@ -491,6 +587,8 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                     _accepted(request, contest,
                               _('Device unlocked. %(name)s returns to the start page and can start again. ')
                               % {'name': name} + _reopen_note(contest, reopened, minutes))
+            except NoActiveDevice:
+                messages.info(request, _("This student's computer is not locked by this exam right now."))
             except DeviceSessionDenied as error:
                 messages.error(request, str(error))
             return back
@@ -546,8 +644,7 @@ class ContestStudentHelp(LoginRequiredMixin, View):
 
         if action == 'offline-exit':
             problem = None
-            if native_browser_enabled() and not use_lock_on_record:
-                # The lock on record was already read as owned by this student (uncached) when it was chosen.
+            if native_browser_enabled():
                 problem = _lock_problem(request, contest, netid, mac_code)
             if problem:
                 messages.error(request, problem)
@@ -585,18 +682,21 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                     issued = client.native_exit(contest.key, netid, mac_code, reason)
                     pending = getattr(request, 'fairplay_override', None)
                     if pending is not None:
-                        # Only after the server agreed: a refused request must change nothing here.
-                        from judge.utils.fairplay_device_session import override_lock_owner
-                        override_lock_owner(pending[0], pending[1], pending[2], request.user)
-                        logger.warning('FairPlay Mac code %s rebound by administrator %s to %s in %s',
-                                       pending[2], request.user.username, pending[1], pending[0].key)
+                        # Only after the server agreed: a refused request must change nothing here. A failure here
+                        # must not hide the code that was already issued.
+                        try:
+                            from judge.utils.fairplay_device_session import override_lock_owner
+                            override_lock_owner(pending[0], pending[1], pending[2], request.user)
+                            logger.warning('FairPlay Mac code %s rebound by administrator %s to %s in %s',
+                                           pending[2], request.user.username, pending[1], pending[0].key)
+                        except Exception:
+                            logger.exception('FairPlay Mac code %s could not be rebound to %s', pending[2], pending[1])
                 except FairPlayError as e:
-                    if e.status == 404 and use_lock_on_record:
+                    if e.status == 404 and source == 'on record':
                         return _code_needed(request, contest, netid, name, untagged_reason, _(
                             'The lock on record for %(name)s is not the one FairPlay knows now (the computer may have '
-                            'a newer code). Type the code shown on the student\'s screen, or use Emergency exit if the '
-                            'computer is '
-                            'online.') % {'name': name})
+                            'a newer code). Type the code shown on the student\'s screen, or use Unlock student '
+                            'device if the computer is online.') % {'name': name})
                     if e.status == 404 and native_browser_enabled():
                         messages.error(request, _('No FairPlay lock was registered for that code. The Mac has not registered it yet '
                                                   'and may still be retrying. Ask the student to close and reopen the Leave '
@@ -609,9 +709,11 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                         return back
                     else:
                         raise
+                _audit_issued(request, contest, netid, mac_code)  # every issued code, whichever route issued it
                 return _no_store(render(request, 'contest/fairplay_help_code.html', {
                     'contest': contest, 'title': _('Participation'), 'code': issued.get('code'),
                     'first_name': name, 'last_name': '', 'netid': netid, 'offline': True,
+                    'lock_code': format_lock(mac_code),
                 }))
         except FairPlayError as e:
             _fail(request, e)

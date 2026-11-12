@@ -108,10 +108,13 @@ def native_contest(request, key):
             code = 'fairplay-not-configured'
         elif not audience_descriptor(contest)['confirmed']:
             code = 'audience-unconfirmed'
+            if exam_roster(contest).filter(pk=request.profile.pk).exists():
+                note_lock_hint(request, contest)  # a hint only for a student of this exam
         elif not exam_roster(contest).filter(pk=request.profile.pk).exists():
             raise deny(request, 'not-on-roster', key)
         else:
             code = 'launch-refused'
+            note_lock_hint(request, contest)
         deny(request, code, key)
         return None, refusal_response(reasons[code], 'not_fairplay')
     return contest, None
@@ -219,7 +222,10 @@ def native_claim(request, key):
     extras = prefetch_extras(contest, wait=True)
     owner = known_lock_owner(request.POST.get('lock', ''))
     close_blocking_session(request.user.pk)
-    return _claim_locked(request, contest, fingerprint, digest, extras, owner)
+    response = _claim_locked(request, contest, fingerprint, digest, extras, owner)
+    if response.status_code != 200:
+        note_lock_hint(request, contest)  # refused or held: kept as a hint, after the locked section
+    return response
 
 
 def close_blocking_session(user_id):
@@ -242,6 +248,24 @@ def known_lock_owner(lock):
     return lock_owner(code) if code else None
 
 
+def note_lock_hint(request, contest):
+    """The claim or recover did not end in a bind: keep the lock the device presented as a hint for the instructor's
+    offline exit code (cache only, no database). A failure here never changes the answer the app gets."""
+    try:
+        from judge.utils.fairplay_device_session import note_lock_hint as store
+        store(contest, request.user.pk, request.POST.get('lock', ''))
+    except Exception:
+        logger.exception('FairPlay could not keep the lock a device presented')
+
+
+def forget_lock_hints(request, contest):
+    """A bind makes the bound lock the truth: the student's earlier hints are dropped."""
+    from judge.utils.fairplay_device_session import clear_lock_hints, normalize_mac_code
+    if normalize_mac_code(request.POST.get('lock', '')) is not None:
+        user_id = request.user.pk
+        transaction.on_commit(lambda: clear_lock_hints(contest, user_id))
+
+
 def _note_launch_if_running(request, contest, session):
     """The launch page counts a claim or recover only when it left a running session that is not on hold; a completed,
     released or held one, or one the deadline close just ended, is not the app taking the exam over."""
@@ -262,6 +286,7 @@ def _claim_locked(request, contest, fingerprint, digest, extras=None, owner=None
     if not bind_lock(session, request.POST.get('lock', ''), owner=owner):
         transaction.set_rollback(True)
         return JsonResponse({'error': 'This Mac code belongs to another exam or student.'}, status=409)
+    forget_lock_hints(request, contest)
     session = close_if_due(session)
     _note_launch_if_running(request, contest, session)
     return signed_state(request, session, extras=extras)
@@ -472,7 +497,10 @@ def native_recover(request, key):
         return refusal
     extras = prefetch_extras(contest, wait=True)
     owner = known_lock_owner(request.POST.get('lock', ''))
-    return _recover_locked(request, contest, fingerprint, digest, extras, owner)
+    response = _recover_locked(request, contest, fingerprint, digest, extras, owner)
+    if response.status_code != 200:
+        note_lock_hint(request, contest)  # refused or held; an answer of 200 (even 'rejected') stores nothing
+    return response
 
 
 @transaction.atomic
@@ -501,6 +529,7 @@ def _recover_locked(request, contest, fingerprint, digest, extras=None, owner=No
         if not bind_lock(record, request.POST.get('lock', ''), owner=owner):
             transaction.set_rollback(True)
             return JsonResponse({'error': 'This Mac code belongs to another exam or student.'}, status=409)
+        forget_lock_hints(request, contest)
         record = close_if_due(record)
         _note_launch_if_running(request, contest, record)
     return signed_state(request, record, extras=extras)

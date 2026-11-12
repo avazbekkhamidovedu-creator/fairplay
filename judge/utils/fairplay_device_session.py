@@ -6,7 +6,7 @@ Expired leases deny access but never silently transfer ownership to another devi
 from datetime import timedelta, timezone as dt_timezone
 import re
 from django.db import transaction
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Q
 from django.utils import timezone
 from judge.models import Contest, ContestParticipation, FairPlayDeviceSession, FairPlayDeviceSlot, FairPlayDeviceAudit, Profile
 
@@ -23,18 +23,21 @@ class DeviceSessionDenied(ValueError):
         self.reason = reason
 
 
+class NoActiveDevice(DeviceSessionDenied):
+    """The student has no live device session in this exam: there is nothing to unlock."""
+
+
 class ExamNotOpen(DeviceSessionDenied):
     def __init__(self, message=''):
         super().__init__(message, 'not_open')
 
 
 def session_on_hold(session):
-    """A lease-gap row blocks the session until an instructor unlock or reopen is recorded after it."""
-    cleared = FairPlayDeviceAudit.objects.filter(
-        session=OuterRef('session'), action__in=['unlock-device', 'reopen'], pk__gt=OuterRef('pk'))
-    latest = list(FairPlayDeviceAudit.objects.filter(session=session, action='lease-gap')
-                  .annotate(cleared=Exists(cleared)).order_by('-pk').values_list('cleared', flat=True)[:1])
-    return bool(latest) and not latest[0]
+    """Always False. FairPlay no longer holds a student out of an exam after the app was closed, crashed, lost its lease
+    or the computer restarted: plain DKU OJ lets a student back into an unfinished contest, and the only gates FairPlay
+    adds are the lock and one device at a time. Old 'lease-gap' rows (written before this change) therefore no longer
+    block anything. Kept so the callers that ask stay valid."""
+    return False
 
 
 def flag_expired_lease(session, now=None):
@@ -120,31 +123,53 @@ def app_launch_mark(user_id, contest_id):
     return cache.get(_launch_mark_key(user_id, contest_id))
 
 
+RESUMABLE_UNLOCK_ACTION = 'unlock-resumable'
+RESET_ACTIONS = ('reopen', 'reopen-window', 'deadline-extended')
+
+
 def audit_summary(session_ids):
     """What the audit rows say about many sessions at once, in one query: {'reopened': ids with a reopen row,
     'windows': id -> newest reopen-window reason (what reopen_until reads), 'unsubmitted': id -> newest draft warning,
-    'held': ids still held by a lease gap (no unlock or reopen recorded after it, as session_on_hold reads it),
+    'unlocked': ids unlocked by "Unlock student device" (the attempt goes on, the student may start again),
+    'ended': ids an instructor unlock ('unlock-device') or the deadline failsafe ended,
+    'handed_in': ids with an explicit hand-in newer than any reopen or deadline extension,
     'expired': ids with a lease-expired row}."""
-    summary = {'reopened': set(), 'windows': {}, 'unsubmitted': {}, 'held': set(), 'expired': set()}
+    summary = {'reopened': set(), 'windows': {}, 'unsubmitted': {}, 'expired': set(), 'unlocked': set(),
+               'ended': set(), 'handed_in': set()}
     rows = FairPlayDeviceAudit.objects.filter(
         session_id__in=list(session_ids),
-        action__in=('reopen', WINDOW_ACTION, 'completed-with-unsubmitted-draft', 'lease-gap', 'unlock-device',
+        action__in=('reopen', WINDOW_ACTION, 'completed-with-unsubmitted-draft', 'unlock-device',
+                    RESUMABLE_UNLOCK_ACTION, 'auto-release-after-deadline', 'hand-in-started', 'deadline-extended',
                     'lease-expired'),
     ).order_by('pk').values_list('session_id', 'action', 'reason')
     for session_id, action, reason in rows:
         if action == 'reopen':
             summary['reopened'].add(session_id)
-        if action == 'lease-gap':
-            summary['held'].add(session_id)
-        elif action in ('unlock-device', 'reopen'):
-            summary['held'].discard(session_id)
-        elif action == WINDOW_ACTION:
+        if action == RESUMABLE_UNLOCK_ACTION:
+            summary['unlocked'].add(session_id)
+        elif action in ('unlock-device', 'auto-release-after-deadline'):
+            summary['ended'].add(session_id)
+        if action == 'hand-in-started':
+            summary['handed_in'].add(session_id)
+        elif action in RESET_ACTIONS:
+            summary['handed_in'].discard(session_id)
+        if action == WINDOW_ACTION:
             summary['windows'][session_id] = reason
         elif action == 'lease-expired':
             summary['expired'].add(session_id)
         elif action == 'completed-with-unsubmitted-draft':
             summary['unsubmitted'][session_id] = reason
     return summary
+
+
+def explicit_hand_in(session):
+    """The student handed in by hand and no reopen or deadline extension came after it."""
+    last = None
+    for action in FairPlayDeviceAudit.objects.filter(
+            session=session, action__in=('hand-in-started',) + RESET_ACTIONS).order_by('pk').values_list(
+            'action', flat=True):
+        last = action
+    return last == 'hand-in-started'
 
 
 def parse_window(reason):
@@ -302,6 +327,19 @@ def undo_deadline_close(session, now):
     return True
 
 
+def _left_by_unlock(previous):
+    """The previous attempt was only unlocked with "Unlock student device" (a 'unlock-resumable' row), not ended and
+    not handed in: the student may start again by themselves. 'unlock-device' rows (Emergency exit of the earlier
+    version, Move to another computer) keep meaning the attempt ended. A reopen recorded on it means the
+    instructor's window rules apply instead, and an explicit hand-in never counts."""
+    if previous.state != 'released':
+        return False
+    actions = set(FairPlayDeviceAudit.objects.filter(
+        session=previous, action__in=('unlock-device', RESUMABLE_UNLOCK_ACTION, 'reopen'))
+        .values_list('action', flat=True))
+    return actions == {RESUMABLE_UNLOCK_ACTION} and not explicit_hand_in(previous)
+
+
 def deadline_closed_may_reopen(previous, now):
     """A completed or released session that only the deadline closed, while the live deadline is in the future
     again, the student is not disqualified and never handed in by hand."""
@@ -314,6 +352,19 @@ def deadline_closed_may_reopen(previous, now):
     if FairPlayDeviceAudit.objects.filter(session=previous, action='unlock-device').exists():
         return False
     return deadline_close_may_be_undone(previous)
+
+
+def _barred(session):
+    participation = session.participation if session.participation_id else None
+    return participation is not None and (participation.is_disqualified or participation.spectate)
+
+
+CAME_BACK_ACTION = 'came-back'
+
+
+def _note_came_back(session, user_id):
+    FairPlayDeviceAudit.objects.create(session=session, actor_id=user_id, action=CAME_BACK_ACTION,
+                                      reason='The student came back to a running exam on the same device')
 
 
 @transaction.atomic
@@ -330,24 +381,34 @@ def claim_device(*, user_id, contest, fingerprint, browser_digest):
     if current is not None and slot.session_id and current.contest_id == contest.pk:
         undo_deadline_close(current, timezone.now())
     if current is not None and slot.session_id:
+        rebound = False
         if (current.state == 'active' and current.contest_id == contest.pk and current.fingerprint == fingerprint
-                and current.browser_digest != browser_digest and current.participation_id is None
-                and not session_on_hold(current) and current.contest.end_time > timezone.now()):
+                and current.browser_digest != browser_digest and not _barred(current)
+                and personal_deadline(current) > timezone.now()):
+            # The same computer started again from a new sign-in (the app was closed, crashed or restarted): the
+            # student is back in by themselves, whether or not the exam was joined. A joined attempt notes it.
             current.browser_digest = browser_digest
             current.save(update_fields=['browser_digest'])
             FairPlayDeviceAudit.objects.create(session=current, actor_id=user_id, action='recover',
-                                              reason='Same device started again from a new sign-in before the exam was joined')
-        if current.state == 'active' and session_on_hold(current):
-            raise DeviceSessionDenied('FairPlay restarted on this device. Ask the instructor to unlock and reopen the exam.', 'on_hold')
+                                              reason='Same device started again from a new sign-in')
+            rebound = True
+            if current.participation_id is not None:
+                _note_came_back(current, user_id)
         if (current.state == 'active' and current.contest_id == contest.pk
                 and current.fingerprint == fingerprint and current.browser_digest == browser_digest):
             # A repeated start must renew admission before the client posts join.
             # Returning an expired lease redirects that join back to the launch page.
+            if (not rebound and current.participation_id is not None and current.lease_until < timezone.now()
+                    and current.lease_until < personal_deadline(current)):
+                # The same device (same certificate and sign-in, as on Windows after a restart) is back after its
+                # lease ran out: noted for the instructor, never a hold.
+                _note_came_back(current, user_id)
             return renew_device(session_id=current.pk, user_id=user_id,
                                 fingerprint=fingerprint, browser_digest=browser_digest)
         if (current.state == 'active' and current.participation_id is not None and current.contest_id == contest.pk
                 and current.fingerprint == fingerprint):
-            raise DeviceSessionDenied('FairPlay restarted on this device. Ask the instructor to unlock and reopen the exam.', 'on_hold')
+            # Only a disqualified or spectating participation, or one past its deadline, still reaches here.
+            raise DeviceSessionDenied('This exam cannot be continued on this device. Ask your instructor.', 'on_hold')
         raise DeviceSessionDenied('This account already has an exam session on another computer or browser. '
                                   'Ask your instructor to choose Unlock device for you, then try again.', 'other_device')
     previous = FairPlayDeviceSession.objects.filter(user_id=user_id, contest=contest,
@@ -355,7 +416,8 @@ def claim_device(*, user_id, contest, fingerprint, browser_digest):
         participation__isnull=True, fairplaydeviceaudit__action__in=['auto-expire', 'abort']).order_by('-created_at', '-pk').first()
     now = timezone.now()
     deadline_reopen = False
-    if previous and not FairPlayDeviceAudit.objects.filter(session=previous, action='reopen').exists():
+    unlocked = previous is not None and _left_by_unlock(previous)
+    if previous and not unlocked and not FairPlayDeviceAudit.objects.filter(session=previous, action='reopen').exists():
         deadline_reopen = deadline_closed_may_reopen(previous, now)
         if not deadline_reopen:
             raise DeviceSessionDenied('This exam was already handed in. Ask your instructor to reopen it if you need to continue.', 'handed_in')
@@ -365,11 +427,15 @@ def claim_device(*, user_id, contest, fingerprint, browser_digest):
     if now >= contest.end_time:
         raise ExamNotOpen('This exam has ended.')
     window = reopen_until(previous) if previous and not deadline_reopen else None
-    if previous and not deadline_reopen and (window is None or window <= now):
+    # Only unlocked (the attempt goes on): a joined student's time is the participation's own end (extra time moves
+    # it), so the copied reopen window is not consulted; the participation checks below decide.
+    skip_window = unlocked and previous.participation_id is not None
+    if (previous and not deadline_reopen and not skip_window and (window is None or window <= now)
+            and not (unlocked and window is None)):
         raise DeviceSessionDenied('The reopened exam window has ended. Ask your instructor to reopen it again.', 'handed_in')
     session = FairPlayDeviceSession.objects.create(user_id=user_id, contest=contest,
         fingerprint=fingerprint, browser_digest=browser_digest, lease_until=min(contest.end_time, now + timedelta(seconds=LEASE_SECONDS)))
-    if previous and not deadline_reopen:
+    if previous and not deadline_reopen and window is not None and not skip_window:
         _write_window(session, user_id, window, reopen_used_seconds(previous))
     if deadline_reopen:
         FairPlayDeviceAudit.objects.create(session=session, actor_id=user_id, action='deadline-extended',
@@ -559,7 +625,10 @@ def confirm_completed(*, session_id, user_id, fingerprint, browser_digest, keep_
 
 
 @transaction.atomic
-def instructor_unlock(*, contest, username, actor, reason):
+def instructor_unlock(*, contest, username, actor, reason, resumable=False):
+    """Revoke the live device session. `resumable` is "Unlock student device": the attempt is not ended and the
+    student may start again by themselves, so it writes 'unlock-resumable'; every other unlock writes 'unlock-device',
+    which keeps meaning that the attempt ended (a reopen is needed)."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may unlock a device.')
     reason = reason.strip()
@@ -567,20 +636,25 @@ def instructor_unlock(*, contest, username, actor, reason):
         raise DeviceSessionDenied('A reason of at most 300 characters is required.')
     profile = Profile.objects.select_for_update().filter(user__username=username).first()
     if profile is None:
-        raise DeviceSessionDenied('No active device for this student.')
+        raise NoActiveDevice('No active device for this student.')
     slot = FairPlayDeviceSlot.objects.filter(user_id=profile.user_id).first()
     if slot is None or slot.session_id is None:
-        raise DeviceSessionDenied('No active device for this student.')
+        raise NoActiveDevice('No active device for this student.')
     session = FairPlayDeviceSession.objects.select_for_update().get(pk=slot.session_id)
     if session.contest_id != contest.pk or session.state not in ('active', 'finishing'):
-        raise DeviceSessionDenied('No active device for this exam.')
+        raise NoActiveDevice('No active device for this exam.')
+    if resumable and session.state == 'finishing' and explicit_hand_in(session):
+        raise DeviceSessionDenied('This student has handed in and the hand-in is being completed. Reopen the exam '
+                                  'once it is complete if they need to continue.')
     session.state = 'released'
     session.ended_at = timezone.now()
     session.lease_until = session.ended_at
     session.save(update_fields=['state', 'ended_at', 'lease_until'])
     slot.session = None
     slot.save(update_fields=['session'])
-    FairPlayDeviceAudit.objects.create(session=session, actor=actor, action='unlock-device', reason=reason)
+    FairPlayDeviceAudit.objects.create(session=session, actor=actor,
+                                      action=RESUMABLE_UNLOCK_ACTION if resumable else 'unlock-device', reason=reason)
+    transaction.on_commit(lambda: clear_lock_hints(contest, profile.user_id))
     return session
 
 
@@ -669,6 +743,7 @@ def instructor_reopen(*, contest, username, actor, minutes, reason):
         extend_participation(participation, until)
     _write_window(previous, actor.pk, until, used)
     FairPlayDeviceAudit.objects.create(session=previous, actor=actor, action='reopen', reason=reason.strip())
+    transaction.on_commit(lambda: clear_lock_hints(contest, profile.user_id))
     return previous
 
 
@@ -724,19 +799,14 @@ def recover_device(*, user_id, contest, fingerprint, browser_digest, unclean=Fal
     digest_changed = session.browser_digest != browser_digest
     flag_expired_lease(session)
     joined = session.participation_id is not None
-    expired = session.lease_until < timezone.now()
-    if session.state == 'active' and (unclean or (digest_changed and (joined or expired))):
-        if not session_on_hold(session):
-            FairPlayDeviceAudit.objects.create(session=session, actor_id=user_id, action='lease-gap',
-                                              reason='FairPlay restarted on this device during the exam')
-            session.lease_until = timezone.now()
-            session.save(update_fields=['lease_until'])
+    if session.state == 'active' and joined and (unclean or digest_changed):
+        _note_came_back(session, user_id)  # a note for the instructor; it holds nothing
     if digest_changed:
         session.browser_digest = browser_digest
         session.save(update_fields=['browser_digest'])
         FairPlayDeviceAudit.objects.create(session=session, actor_id=user_id, action='recover',
                                           reason='Same device reauthenticated after browser interruption')
-    if session.state == 'active' and not session_on_hold(session):
+    if session.state == 'active':
         deadline = personal_deadline(session)
         session.lease_until = min(deadline, timezone.now() + timedelta(seconds=LEASE_SECONDS))
         session.save(update_fields=['lease_until'])
@@ -753,6 +823,12 @@ MAC_CODE_RE = re.compile(r'[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}')
 def normalize_mac_code(raw):
     code = ''.join(ch for ch in (raw or '').upper() if ch.isalnum())
     return code if MAC_CODE_RE.fullmatch(code) else None
+
+
+def format_lock(raw):
+    """The lock as the student's screen shows it (ABCD-2345), or '' when it is not a lock code."""
+    code = normalize_mac_code(raw)
+    return '' if code is None else code[:4] + '-' + code[4:]
 
 
 LOCK_OWNER_CACHE = 600
@@ -830,22 +906,109 @@ def lock_bound_to(contest, username, code, use_cache=True):
     return None if owner is None else owner == (contest.pk, username)
 
 
-def latest_bound_lock(contest, username):
-    """The Mac/PC lock code most recently registered by this student's computer in this exam, or None. Every bind or
-    rebind of a different code writes an audit row, so the newest row across all of the student's sessions is the
-    computer that last said it was locked (a recover can rebind a lock on an older session), provided the student's
-    newest session has registered a lock at all. A code another student
-    or exam owns (for example after an administrator override) is never returned: ownership is read uncached."""
+LOCK_HINT_TTL = 48 * 3600
+LOCK_HINT_MAX = 5
+EXIT_ISSUED_ACTION = 'exit-code-issued'
+
+
+def lock_hint_key(contest_id, user_id):
+    return 'fp-lock-hints:%s:%s' % (contest_id, user_id)
+
+
+def note_lock_hint(contest, user_id, lock):
+    """Remember, as a HINT, the lock a student's computer presented on a claim or recover that was refused or held. It
+    lives only in the cache (a few newest codes per student and exam, 48 hours), so it needs no session row and works
+    for a student who never had one. A hint grants nothing and blocks nothing: it only becomes one of the choices the
+    instructor is shown, and the instructor confirms which one.
+
+    The native routes only run on the shared Redis cache (request_identity refuses any other backend outside the local
+    fixture), so every web process sees the same hints. Were the cache per process, a hint would simply be missing and
+    the instructor types the code. A short `cache.add` lock keeps two simultaneous claims from overwriting
+    each other."""
+    import time
+    from django.core.cache import cache
+    code = normalize_mac_code(lock)
+    if code is None:
+        return False
+    key = lock_hint_key(contest.pk, user_id)
+    mutex = key + ':busy'
+    held = False
+    for _attempt in range(10):
+        if cache.add(mutex, 1, 2):
+            held = True
+            break
+        time.sleep(0.01)
+    try:
+        hints = [h for h in (cache.get(key) or []) if isinstance(h, (list, tuple)) and len(h) == 2 and h[0] != code]
+        cache.set(key, [(code, time.time())] + hints[:LOCK_HINT_MAX - 1], LOCK_HINT_TTL)
+    finally:
+        if held:
+            cache.delete(mutex)
+    return True
+
+
+def clear_lock_hints(contest, user_id):
+    """Forget the hints of this student in this exam: a bind, an unlock or a reopen makes the bound lock the truth."""
+    from django.core.cache import cache
+    try:
+        cache.delete(lock_hint_key(contest.pk, user_id))
+    except Exception:
+        pass
+
+
+def lock_hints(contest, user_id):
+    """[(code, time)] newest first, as stored (not yet checked against ownership). Empty when the cache fails."""
+    from django.core.cache import cache
+    try:
+        hints = cache.get(lock_hint_key(contest.pk, user_id)) or []
+    except Exception:
+        return []
+    return [(h[0], h[1]) for h in hints if isinstance(h, (list, tuple)) and len(h) == 2]
+
+
+def _bound_lock_row(contest, username):
+    """(code, time) of the lock bound on this student's computer in this exam, or None. Every bind or rebind of a
+    different code writes an audit row, so the newest row across all of the student's sessions is the computer that
+    last said it was locked (a recover can rebind a lock on an older session), provided the student's newest session
+    has registered a lock at all. A code another student or exam owns (for example after an administrator override)
+    is never returned: ownership is read uncached."""
     newest = FairPlayDeviceSession.objects.filter(contest=contest, user__username=username) \
         .order_by('-created_at', '-pk').values_list('pk', flat=True).first()
     if newest is None or not FairPlayDeviceAudit.objects.filter(action='lock', session_id=newest).exists():
         return None  # the newest computer has not registered a lock: the older one's code is not offered
-    code = FairPlayDeviceAudit.objects.filter(
+    row = FairPlayDeviceAudit.objects.filter(
         action='lock', session__contest=contest, session__user__username=username
-    ).order_by('-pk').values_list('reason', flat=True).first()
-    if code and normalize_mac_code(code) == code and lock_bound_to(contest, username, code, use_cache=False):
-        return code
+    ).order_by('-pk').values_list('reason', 'created_at').first()
+    if row and normalize_mac_code(row[0]) == row[0] and lock_bound_to(contest, username, row[0], use_cache=False):
+        return row[0], row[1].timestamp()
     return None
+
+
+def lock_candidates(contest, username):
+    """[(code, 'bound' | 'hint')], newest first, without duplicates: the locks the instructor may be offered for this
+    student. The bound lock (see _bound_lock_row) plus the cached hints that are valid codes and not owned by another
+    student or exam. Nothing here is a permission by itself: the instructor confirms which lock is on the screen."""
+    from django.contrib.auth.models import User
+    user_id = User.objects.filter(username=username).values_list('pk', flat=True).first()
+    found = []
+    bound = _bound_lock_row(contest, username)
+    if bound is not None:
+        found.append((bound[1], bound[0], 'bound'))
+    if user_id is not None:
+        mine = (contest.pk, username)
+        for code, stamp in lock_hints(contest, user_id):
+            if normalize_mac_code(code) != code:
+                continue
+            owner = lock_owner(code, use_cache=False)
+            if owner is None or owner == mine:
+                found.append((stamp, code, 'hint'))
+    result = []
+    for _, code, source in sorted(found, key=lambda item: -item[0]):
+        if code not in [c for c, _ in result]:
+            result.append((code, source))
+    # A bound code that was also presented as a hint is still "on record".
+    bound_code = bound[0] if bound else None
+    return [(c, 'bound' if c == bound_code else s) for c, s in result]
 
 
 def override_lock_owner(contest, username, code, actor):

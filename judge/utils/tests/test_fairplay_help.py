@@ -51,7 +51,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
     def test_classic_participation_table_has_the_classic_actions(self):
         participation = reverse('contest_participation_own', args=['fpexam'])
         html = self.login(self.teacher).get(participation).content.decode()
-        table = html.split('id="fp-participation"')[1]
+        table = html.split('id="fp-participation-head"')[1]
         for text in ('fp_student', 'Avazbek Khamidov', 'Waiting for approval', 'Class Mate', 'Submitted', 'K7M2QX',
                      '918273', 'Sync now'):
             self.assertIn(text, table)
@@ -74,7 +74,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
     def test_classic_block_is_shown_with_codes_and_sync_even_without_students(self):
         self.fp.exam.return_value = exam(students=[], start_code='K7M2QX', invigilator_code='918273')
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
-        table = html.split('id="fp-participation"')[1]
+        table = html.split('id="fp-participation-head"')[1]
         for text in ('K7M2QX', '918273', 'Sync now', 'No students yet'):
             self.assertIn(text, table)
 
@@ -89,7 +89,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
 
     def test_classic_rows_keep_the_swap_request_reopen_code_and_hand_in_count(self):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
-        table = html.split('id="fp-participation"')[1].split('</table>')[0]
+        table = html.split('id="fp-participation-head"')[1].split('</table>')[0]
         for text in ('Asks to move to another computer.', 'Hand-in reopened.', 'Code: bound. Hand-ins: 0.',
                      'Code: unused. Hand-ins: 2.'):
             self.assertIn(text, table)
@@ -434,11 +434,16 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertIn('135790', self.ask(self.teacher).content.decode())
 
     @override_settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=True)
-    def test_unclaimed_lock_needs_an_administrator_and_is_logged(self):
+    def test_unclaimed_lock_is_released_for_the_exams_instructor_and_logged(self):
+        # Changed on purpose: an instructor of the exam may now release a lock no one owns (it used to need a site
+        # administrator); the lock is logged and a site administrator still can.
         from judge.models.tests.util import create_user
         self.fp.native_exit.return_value = {'code': '654321'}
-        self.ask(self.teacher)
-        self.fp.native_exit.assert_not_called()
+        with self.assertLogs('judge.fairplay', 'WARNING') as logs:
+            response = self.ask(self.teacher)
+        self.assertIn('fp_teacher', logs.output[0])
+        self.assertIn('654321', response.content.decode())
+        self.fp.native_exit.reset_mock()
         admin = create_user(username='fp_admin')
         admin.is_superuser = True
         admin.is_staff = True
