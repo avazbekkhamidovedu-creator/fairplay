@@ -88,13 +88,17 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard let self else { return }
         guard !LockdownController.shared.isLocked, AppSession.shared.exam == nil,
               !self.deviceTest.isRunning else { return }
+        DebugLog.log("devicetest", "test my device pressed: loading the preview page")
         self.releasedDeviceTestVisible = true
         self.protectedBrowser.setReleasedPracticeVisible(true)
-        self.webView.isHidden = false
+        // The web view stays hidden until didFinish confirms /student/device-test: no other web page can show, even briefly.
+        self.webView.isHidden = true
+        self.watchPreviewRoute()
         self.webView.load(URLRequest(url: Config.serverURL.appendingPathComponent("student/device-test").appending(queryItems: [URLQueryItem(name: "nativeEntry", value: "1")])))
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self, self.releasedDeviceTestVisible, !self.deviceTest.isRunning else { return }
-            self.restoreReleasedDeviceTest()
+            DebugLog.log("devicetest", "preview did not start within 15 s")
+            self.restoreReleasedDeviceTest("start-timeout")
         }
     }, stopDeviceTest: { [weak self] in self?.deviceTest.end(.leave) })
 
@@ -586,6 +590,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         if !fromExamPage {
             if let body = message.body as? [String: Any], body["action"] as? String == "deviceTestStart" {
                 send(DeviceTestSession.message(state: "ended", reason: .refused, remaining: 0))
+                if releasedDeviceTestVisible { restoreReleasedDeviceTest("refused-origin") }
             }
             return
         }
@@ -935,8 +940,14 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         if protectedBrowser.isOpen && !releasedDeviceTestVisible { decisionHandler(.cancel); return }
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
         if releasedDeviceTestVisible, navigationAction.targetFrame?.isMainFrame != false,
-           (!isServerURL(url) || !["/student/device-test", "/student/login"].contains(url.path)) {
-            decisionHandler(.cancel); return
+           (!isServerURL(url) || url.path != "/student/device-test") {
+            decisionHandler(.cancel)
+            // Never leave the web start-code page (or a blank page) on screen: back to the native home.
+            if !deviceTest.isRunning {
+                DebugLog.log("devicetest", "navigation away from the preview refused: \(url.path)")
+                restoreReleasedDeviceTest("navigation-refused")
+            }
+            return
         }
         // 2026-10-23: the bundled files are never a page or a frame (only subresources).
         if url.scheme?.lowercased() == AssetPack.scheme {
@@ -1232,17 +1243,29 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         applyFileAccess()
         external.canvasPageLoaded(webView)
         external.externalDonePageLoaded(webView.url)
-        if releasedDeviceTestVisible, !deviceTest.isRunning,
+        if releasedDeviceTestVisible,
            let url = webView.url, isServerURL(url), url.path == "/student/device-test" {
-            let lock = LockdownController.shared
-            deviceTest.start(seconds: 60, context: .init(
-                examActive: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil,
-                fromExamPage: true, websiteExam: external.isActive))
+            self.webView.isHidden = false
+            if !deviceTest.isRunning {
+                let lock = LockdownController.shared
+                deviceTest.start(seconds: 60, context: .init(
+                    examActive: lock.isLocked || lock.isPreLock || AppSession.shared.exam != nil,
+                    fromExamPage: true, websiteExam: external.isActive))
+            }
+        } else if releasedDeviceTestVisible, !deviceTest.isRunning {
+            DebugLog.log("devicetest", "preview page did not load as expected (\(webView.url?.path ?? "none"))")
+            restoreReleasedDeviceTest("wrong-page")
         }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if external.isPopup(webView) { external.closePopup(ifView: webView); return }
+        if releasedDeviceTestVisible {
+            DebugLog.log("crash", "preview page process crashed: back to the native home")
+            deviceTest.end(.error)
+            restoreReleasedDeviceTest("page-crashed")
+            return
+        }
         DebugLog.log("crash", "exam page process crashed; reloading")
         deviceTest.end(.error)
         eventsReady = false                  // review 2026-10-24: no page listens until the reload asks
@@ -1255,7 +1278,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }   // interrupted by policy
         if releasedDeviceTestVisible {
             deviceTest.end(.error)
-            restoreReleasedDeviceTest()
+            restoreReleasedDeviceTest("page-failed")
             return
         }
         deviceTest.end(.error)
@@ -1495,7 +1518,9 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     }
 
     func exitLockedMode() {
-        protectedBrowser.lockEnded()
+        // The device-test preview is not a lock: the native home stays where it is (hidden) and is shown again by
+        // restoreReleasedDeviceTest(). Closing and rebuilding it here left a gap in which the web page could show.
+        if !releasedDeviceTestVisible { protectedBrowser.lockEnded() }
         allowedSites = []                       // the next exam sends its own
         lastStartExamId = nil                   // 2026-10-23 (review): the next pre-exam lock sets its own
         lastPreLockPage = nil
@@ -1601,7 +1626,11 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         deviceTestTapOn = EventTap.isTrusted && EventTap.shared.start()
         NSApp.presentationOptions = LockdownController.previewOptions
         enterLockedMode()
-        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.deviceTest.tick() }
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.deviceTest.tick()
+            // Every screen, the menu bar and the Dock area, also after a display is added or moved during the preview.
+            if self?.deviceTest.isRunning == true { self?.coverAllScreens() }
+        }
         RunLoop.main.add(t, forMode: .common)
         deviceTestTimer = t
     }
@@ -1621,12 +1650,32 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func deviceTestNotify(_ message: [String: Any]) {
         send(message)
         if releasedDeviceTestVisible {
-            if message["state"] as? String == "ended" { restoreReleasedDeviceTest() }
+            if message["state"] as? String == "ended" {
+                restoreReleasedDeviceTest("ended reason=\(message["reason"] as? String ?? "?")")
+            }
         } else { protectedBrowser.deviceTestChanged(message) }
     }
 
-    private func restoreReleasedDeviceTest() {
+    private var previewRouteWatch: NSKeyValueObservation?
+
+    /// A client-side route change (no navigation) away from the preview page, for example to the 6-digit start page,
+    /// ends the preview or restores the native home at once.
+    private func watchPreviewRoute() {
+        previewRouteWatch?.invalidate()
+        previewRouteWatch = webView.observe(\.url, options: [.new]) { [weak self] view, _ in
+            guard let self, self.releasedDeviceTestVisible, let url = view.url, self.isServerURL(url),
+                  url.path != "/student/device-test" else { return }
+            DebugLog.log("devicetest", "route changed away from the preview: \(url.path)")
+            view.isHidden = true
+            if self.deviceTest.isRunning { self.deviceTest.end(.leave) }
+            self.restoreReleasedDeviceTest("route-change")
+        }
+    }
+
+    private func restoreReleasedDeviceTest(_ why: String = "ended") {
         guard releasedDeviceTestVisible else { return }
+        DebugLog.log("devicetest", "native home restored (\(why))")
+        previewRouteWatch?.invalidate(); previewRouteWatch = nil
         releasedDeviceTestVisible = false
         webView.isHidden = true
         protectedBrowser.setReleasedPracticeVisible(false)

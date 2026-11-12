@@ -37,6 +37,24 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var renewCancel: (() -> Void)?
     private var holdCancel: (() -> Void)?
     private var handInCancels: [() -> Void] = []
+    private var handIn = HandInVerification()
+    private var handInTickCancel: (() -> Void)?
+    private var handInPanel: NSView?
+    private var handInSpinner: NSProgressIndicator?
+    private var handInLabel: NSTextField?
+    private var handInDetail: NSTextField?
+    private var handInRetryButton: NSButton?
+    private var handInBackButton: NSButton?
+    /// When the last full renew went out; the light state reads in between do not extend the lease.
+    private var lastRenewSent: Date?
+    private var lastLoggedState: String?
+    /// The state the OJ answered before this one: only an ENTRY into finishing starts a check by itself.
+    private var lastSeenState: String?
+    /// The student's deadline when the check began: a later one is the evidence of an instructor reopen.
+    private var handInDeadline: Int?
+    private var handInIgnoreUntil: Date?
+    var handInPhase: HandInVerification.Phase { handIn.phase }
+    var hasHandInPanel: Bool { handInPanel != nil }
     private lazy var renewSchedule = NativeRenewSchedule(random: effects.random)
     private var contextInFlight = false
     /// A different account or exam invalidates what was already opened for the previous one.
@@ -861,7 +879,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
         if nativeExam.requiresTerminalReceipt {
             var started = false
-            if let session = nativeExam.binding?.session { started = requestNative("session/" + session + "/renew") }
+            if let session = nativeExam.binding?.session {
+                let now = effects.now()
+                let renewDue = lastRenewSent.map { now.timeIntervalSince($0) >= NativeRenewSchedule.renewInterval * (1 - NativeRenewSchedule.jitterFraction) } ?? true
+                if renewDue {
+                    started = requestNative("session/" + session + "/renew")
+                } else {
+                    started = requestNative("session/" + session, stateOnly: true)
+                }
+            }
             else if let contest = nativeExam.contest { started = requestNative("claim/" + contest, joining: true) }
             if !started { scheduleNext(.other) }
             return
@@ -981,12 +1007,31 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         staggerCancel?(); staggerCancel = nil; pendingAuto.removeAll(); autoQueue.removeAll()
     }
 
+    private func openTabKeys() -> Set<String> {
+        var open: Set<String> = []
+        for tab in orderedTabs {
+            if let url = tab.url, let key = ReferencePages.key(url) { open.insert(key) }
+            if let url = referenceURLs[ObjectIdentifier(tab)], let key = ReferencePages.key(url) { open.insert(key) }
+        }
+        return open
+    }
+
+    /// For tests: the page keys currently open (loaded or intended).
+    var openReferenceKeys: Set<String> { openTabKeys() }
+    var pickerSiteCount: Int { pickerSites.count }
+
     private func openNext() {
         guard holdLabel == nil, !held, !autoQueue.isEmpty else { return }
         let raw = autoQueue.removeFirst()
         pendingAuto.remove(ReferencePages.key(raw))
-        if lockIsOwned, isOpen, activeExamBinding != nil, let url = ProtectedBrowserPolicy.normalizedURL(raw), openReferenceTab(url, select: false) {
-            referencePages.opened(raw)
+        if lockIsOwned, isOpen, activeExamBinding != nil, let url = ProtectedBrowserPolicy.normalizedURL(raw) {
+            // The student may have opened this page by hand while it waited in the queue: no second tab.
+            if openTabKeys().contains(ReferencePages.key(raw)) {
+                diagnostic("auto-open-skipped-already-open", url: url)
+                referencePages.opened(raw)
+            } else if openReferenceTab(url, select: false) {
+                referencePages.opened(raw)
+            }
         }
         guard !autoQueue.isEmpty else { return }
         staggerCancel = effects.schedule(Self.staggerDelay) { [weak self] in self?.staggerCancel = nil; self?.openNext() }
@@ -1020,7 +1065,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     /// True when the tab was really created.
     @discardableResult
-    private func openReferenceTab(_ url: URL, select: Bool = true) -> Bool {
+    func openReferenceTab(_ url: URL, select: Bool = true) -> Bool {
         guard lockIsOwned, let root = orderedTabs.first, let current = browser,
               policy?.allows(url, mainFrame: true) == true else { return false }
         guard orderedTabs.count < ReferencePages.maxTabs else {
@@ -1289,12 +1334,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     /// release, the lock code and a field for the instructor's offline exit code, checked here with no network.
     /// It also gives a paused registration its next try.
     @objc private func leavePressed() {
+        diagnostic("leave-pressed owns-lock=\(flow.ownsLock) hand-in=\(handIn.phase)", url: nil)
         guard flow.ownsLock else { close(release: false); return }
         let setup = effects.setup
         setup.background { [weak self] in
             let snapshot = setup.leaveSnapshot()
             setup.onMain {
                 guard let self, self.flow.ownsLock else { return }
+                // A page's own alert/confirm sheet must never keep Leave from opening.
+                self.dialogs.cancel()
                 self.effects.presentLeave(setup.leavePrompt(snapshot,
                                                             submitAsync: { [weak self] typed, done in
                                                                 guard let self else { done(.stale); return }
@@ -1418,6 +1466,18 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             : "DKU OJ could not confirm this exam request. Your Mac remains locked. Retry or ask your instructor for help."
     }
 
+    /// The light signed-state read: GET with the nonce in the query; it never renews the lease.
+    static func nativeStateRequest(endpoint: URL, origin: URL, nonce: String, cookies: [HTTPCookie]) -> URLRequest {
+        let matching = matchingCookies(cookies, origin: origin, endpoint: endpoint)
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "nonce", value: nonce)]
+        var request = URLRequest(url: components?.url ?? endpoint)
+        request.httpMethod = "GET"
+        request.setValue(origin.absoluteString, forHTTPHeaderField: "Referer")
+        for (name, value) in HTTPCookie.requestHeaderFields(with: matching) { request.setValue(value, forHTTPHeaderField: name) }
+        return request
+    }
+
     static func nativeRequest(endpoint: URL, origin: URL, nonce: String, unclean: Bool, lockId: String? = nil, cookies: [HTTPCookie]) -> URLRequest {
         let matching = matchingCookies(cookies, origin: origin, endpoint: endpoint)
         var request = URLRequest(url: endpoint)
@@ -1433,7 +1493,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     /// False when nothing was sent and nothing is pending, so the caller must schedule the next try.
     @discardableResult
-    private func requestNative(_ path: String, joining: Bool = false) -> Bool {
+    private func requestNative(_ path: String, joining: Bool = false, stateOnly: Bool = false) -> Bool {
         guard lockIsOwned else { return false }
         if nativeRequestInFlight { return true }
         guard let cookieStore = (orderedTabs.first?.configuration.websiteDataStore ?? retainedWebsiteStore)?.httpCookieStore,
@@ -1452,8 +1512,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         cookieStore.getAllCookies { [weak self, weak page] cookies in
             guard let self, self.lockIsOwned, generation == self.nativeGeneration else { return }
             let matching = Self.matchingCookies(cookies, origin: self.selection.url, endpoint: endpoint)
-            let request = Self.nativeRequest(endpoint: endpoint, origin: self.selection.url, nonce: nonce,
-                                             unclean: reportsUnclean, lockId: lockId, cookies: cookies)
+            let request = stateOnly
+                ? Self.nativeStateRequest(endpoint: endpoint, origin: self.selection.url, nonce: nonce, cookies: cookies)
+                : Self.nativeRequest(endpoint: endpoint, origin: self.selection.url, nonce: nonce,
+                                     unclean: reportsUnclean, lockId: lockId, cookies: cookies)
             self.nativeHTTP.dataTask(with: request) { [weak self, weak page] data, response, error in
                 DispatchQueue.main.async {
                     guard let self, generation == self.nativeGeneration else { return }
@@ -1518,6 +1580,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                         self.effects.setup.markRecovered()
                     }
                     self.persistNativeProgress()
+                    if path.hasSuffix("/renew") { self.lastRenewSent = self.effects.now() }
+                    if self.lastLoggedState != context.state {
+                        self.lastLoggedState = context.state
+                        self.effects.diagnostic("native-state-received state=\(context.state) via=\(stateOnly ? "state" : path.hasSuffix("/renew") ? "renew" : "other")")
+                    }
                     if self.nativeExam.permitsUnlock {
                         if joining && !hadBinding {
                             // A closed previous attempt is not a finish command for this browser.
@@ -1526,7 +1593,18 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                             self.scheduleNext(.success)
                             return
                         }
+                        self.effects.diagnostic("unlock-received state=\(context.state)")
                         self.close(release: true); return
+                    }
+                    let previous = self.lastSeenState
+                    self.lastSeenState = context.state
+                    if HandInVerification.startsOnState(previous: previous, current: context.state, phase: self.handIn.phase) {
+                        self.startHandInCheck(reason: "state-finishing")
+                    } else if self.handIn.phase != .idle,
+                              HandInVerification.isReopen(state: context.state, deadline: context.deadline, startDeadline: self.handInDeadline) {
+                        // An active answer alone is not a reopen: a failed hand-in rolls back to active. A later deadline is.
+                        self.effects.diagnostic("hand-in-check-cancelled reason=reopened")
+                        self.endHandInCheck()
                     }
                     let entered = path.hasPrefix("claim/") || path.hasPrefix("recover/")
                     self.refusedContest = nil
@@ -1559,9 +1637,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     /// One pending request at a time: every answer decides when the next one is sent.
     private func scheduleNext(_ outcome: NativeRenewSchedule.Outcome, immediate: Bool = false) {
         guard lockIsOwned, isOpen else { return }
-        let pace: NativeRenewSchedule.Pace = holdLabel != nil ? .hold : .renew
+        let pace: NativeRenewSchedule.Pace = holdLabel != nil ? .hold : handIn.phase == .checking ? .handIn : .watch
         let computed = renewSchedule.next(after: outcome, pace: pace)
-        let delay = immediate && pace == .renew ? 0 : computed
+        let delay = immediate && pace != .hold ? 0 : computed
         if pace == .hold {
             holdCancel?()
             holdCancel = effects.schedule(delay) { [weak self] in self?.holdCancel = nil; self?.refreshExamContext() }
@@ -1571,24 +1649,182 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
     }
 
-    /// The OJ hand-in answer page only asks the OJ sooner; unlocking still needs its signed completed state.
+    /// The OJ hand-in answer page only asks the OJ sooner; unlocking still needs its signed completed state. Only the exam
+    /// tab on the OJ origin at /contest/<bound contest>/leave counts (the caller checks the tab and origin); the title is a
+    /// second signal on that URL. The app never sends a hand-in request itself: it only watches.
     func handInPageFinished(url: URL?, title: String?) {
-        guard lockIsOwned, handInCancels.isEmpty, nativeExam.requiresTerminalReceipt,
-              NativeRenewSchedule.looksLikeHandIn(url: url, title: title, contest: nativeExam.contest) else { return }
-        diagnostic("hand-in-page", url: url)
-        for delay in NativeRenewSchedule.completionFollowUps {
-            handInCancels.append(effects.schedule(delay) { [weak self] in
-                guard let self else { return }
-                if delay == NativeRenewSchedule.completionFollowUps.last { self.handInCancels.removeAll() }
-                self.refreshExamContext()
-            })
+        guard lockIsOwned, nativeExam.requiresTerminalReceipt,
+              HandInVerification.isHandInPage(url: url, origin: nil, contest: nativeExam.contest) else { return }
+        if let until = handInIgnoreUntil, effects.now() < until {
+            diagnostic("hand-in-page-ignored-after-back", url: url)
+            return
         }
-        refreshExamContext()
+        if handInCancels.isEmpty {
+            diagnostic("hand-in-page", url: url)
+            for delay in NativeRenewSchedule.completionFollowUps {
+                handInCancels.append(effects.schedule(delay) { [weak self] in
+                    guard let self else { return }
+                    if delay == NativeRenewSchedule.completionFollowUps.last { self.handInCancels.removeAll() }
+                    self.refreshExamContext()
+                })
+            }
+            refreshExamContext()
+        }
+        guard holdLabel == nil, isOpen else { return }
+        let now = effects.now().timeIntervalSince1970
+        if HandInVerification.isIncompletePage(title: title) {
+            if handIn.phase == .idle { handInDeadline = nativeExam.context?.deadline; handIn.begin(at: now) }
+            if handIn.phase != .failed || !handIn.refused {
+                handIn.pageRefused()
+                diagnostic("hand-in-check-failed reason=oj-not-complete-page", url: nil)
+            }
+            handIn.onCheckingPage = false
+        } else if HandInVerification.isCheckingPage(title: title) {
+            handIn.onCheckingPage = true
+            if handIn.phase == .idle { handInDeadline = nativeExam.context?.deadline; handIn.begin(at: now) }
+            else if handIn.phase == .failed { handIn.restart(at: now); diagnostic("hand-in-check-restart reason=oj-checking-page", url: nil) }
+            handIn.receiving = false
+        } else {
+            handIn.onCheckingPage = false
+            if handIn.phase == .idle { handInDeadline = nativeExam.context?.deadline; handIn.begin(at: now) }
+        }
+        diagnostic("hand-in-check-page phase=\(handIn.phase) refused=\(handIn.refused)", url: nil)
+        showHandInPanel()
+        if handIn.phase == .checking, handInTickCancel == nil { scheduleHandInTick() }
     }
 
     private func cancelHandIn() {
         handInCancels.forEach { $0() }
         handInCancels.removeAll()
+        handInTickCancel?(); handInTickCancel = nil
+        handIn.reset()
+        removeHandInPanel()
+        handInDeadline = nil; lastSeenState = nil; handInIgnoreUntil = nil
+        lastRenewSent = nil; lastLoggedState = nil
+    }
+
+    // MARK: - Hand-in verification (watch only: progress, then failure after the OJ's final page or 60 s)
+
+    /// A state poll starts a progress check from nothing only (entry into finishing); it never sends anything.
+    private func startHandInCheck(reason: String) {
+        guard lockIsOwned, isOpen, holdLabel == nil, handIn.phase == .idle else { return }
+        handInDeadline = nativeExam.context?.deadline
+        handIn.begin(at: effects.now().timeIntervalSince1970)
+        handIn.receiving = true
+        diagnostic("hand-in-check-start reason=\(reason)", url: nil)
+        showHandInPanel()
+        scheduleHandInTick()
+    }
+
+    private func scheduleHandInTick() {
+        handInTickCancel?()
+        handInTickCancel = effects.schedule(1) { [weak self] in self?.handInTick() }
+    }
+
+    private func handInTick() {
+        handInTickCancel = nil
+        guard lockIsOwned, isOpen, handIn.phase == .checking else { return }
+        if handIn.tick(at: effects.now().timeIntervalSince1970) == .failed {
+            diagnostic("hand-in-check-failed after=\(Int(HandInVerification.window))s", url: nil)
+            showHandInPanel()
+        }
+        if handIn.phase == .checking { scheduleHandInTick() }
+    }
+
+    private func endHandInCheck() {
+        handInTickCancel?(); handInTickCancel = nil
+        handIn.reset()
+        removeHandInPanel()
+    }
+
+    @objc private func handInTryAgainPressed() {
+        guard lockIsOwned, isOpen else { return }
+        diagnostic("hand-in-check-try-again", url: nil)
+        handIn.restart(at: effects.now().timeIntervalSince1970)
+        handIn.receiving = false
+        showHandInPanel()
+        scheduleHandInTick()
+        refreshExamContext()
+        // The website owns the hand-in: load its own page again so it re-posts and shows its answer.
+        if let view = orderedTabs.first { effects.reload(view, false) }
+    }
+
+    @objc private func handInBackPressed() {
+        diagnostic("hand-in-check-dismissed", url: nil)
+        endHandInCheck()
+        handInIgnoreUntil = effects.now().addingTimeInterval(HandInVerification.backQuiet)
+        // The OJ's checking page re-posts by itself: go to the contest page and ignore its signals for a few seconds.
+        if let contest = nativeExam.contest, let view = orderedTabs.first,
+           AppSession.isSafeToken(contest, min: 1, max: 128) {
+            effects.load(view, selection.url.appendingPathComponent("contest/" + contest))
+        }
+    }
+
+    private func removeHandInPanel() {
+        handInPanel?.removeFromSuperview()
+        handInPanel = nil; handInSpinner = nil; handInLabel = nil; handInDetail = nil
+        handInRetryButton = nil; handInBackButton = nil
+    }
+
+    /// Covers the page area only: the tab strip and the Emergency exit button stay above it and keep working.
+    private func showHandInPanel() {
+        guard let root = overlay else { return }
+        if handInPanel != nil, handInPanel?.superview == nil { removeHandInPanel() }
+        if handInPanel == nil {
+            let panel = NSView(frame: NSRect(x: 0, y: 0, width: root.bounds.width, height: max(0, root.bounds.height - 100)))
+            panel.autoresizingMask = [.width, .height]
+            panel.wantsLayer = true
+            panel.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            panel.identifier = NSUserInterfaceItemIdentifier("browser.handin")
+            let spinner = NSProgressIndicator()
+            spinner.style = .bar
+            spinner.isIndeterminate = true
+            spinner.controlSize = .regular
+            spinner.identifier = NSUserInterfaceItemIdentifier("browser.handin.progress")
+            spinner.widthAnchor.constraint(equalToConstant: 320).isActive = true
+            let title = NSTextField(wrappingLabelWithString: "")
+            title.font = .systemFont(ofSize: 22, weight: .semibold)
+            title.alignment = .center
+            title.identifier = NSUserInterfaceItemIdentifier("browser.handin.title")
+            let detail = NSTextField(wrappingLabelWithString: "")
+            detail.font = .systemFont(ofSize: 14)
+            detail.textColor = .secondaryLabelColor
+            detail.alignment = .center
+            detail.preferredMaxLayoutWidth = 480
+            let retry = NSButton(title: HandInVerification.tryAgainTitle, target: self, action: #selector(handInTryAgainPressed))
+            retry.bezelStyle = .rounded; retry.controlSize = .large
+            retry.identifier = NSUserInterfaceItemIdentifier("browser.handin.retry")
+            let back = NSButton(title: HandInVerification.backTitle, target: self, action: #selector(handInBackPressed))
+            back.bezelStyle = .rounded; back.controlSize = .large
+            back.identifier = NSUserInterfaceItemIdentifier("browser.handin.back")
+            let buttons = NSStackView(views: [retry, back])
+            buttons.spacing = 12
+            let stack = NSStackView(views: [spinner, title, detail, buttons])
+            stack.orientation = .vertical; stack.alignment = .centerX; stack.spacing = 18
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            panel.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.centerXAnchor.constraint(equalTo: panel.centerXAnchor),
+                stack.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
+                stack.widthAnchor.constraint(lessThanOrEqualTo: panel.widthAnchor, constant: -80)
+            ])
+            root.addSubview(panel)
+            handInPanel = panel; handInSpinner = spinner; handInLabel = title; handInDetail = detail
+            handInRetryButton = retry; handInBackButton = back
+        }
+        // Above every page view (reference tabs sit beneath the exam tab), below the browser controls.
+        if let panel = handInPanel {
+            let top = orderedTabs.compactMap { root.subviews.firstIndex(of: $0) }.max()
+            if let top { root.addSubview(panel, positioned: .above, relativeTo: root.subviews[top]) }
+        }
+        let failed = handIn.phase == .failed
+        handInLabel?.stringValue = handIn.text
+        handInDetail?.stringValue = handIn.detail
+        handInRetryButton?.isHidden = !failed
+        handInBackButton?.isHidden = !failed
+        handInSpinner?.isHidden = failed
+        if failed { handInSpinner?.stopAnimation(nil) } else { handInSpinner?.startAnimation(nil) }
+        notice?.stringValue = handIn.text
     }
 
     /// A refused start (instructor, not FairPlay, not on the roster ...) with no claim ever accepted: forget the exam
@@ -1665,6 +1901,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func discardBrowser() {
         renewCancel?(); renewCancel = nil
+        endHandInCheck()
         contextInFlight = false; approvedSites = []; approvedResources = []; approvedAssets = []; pickerSites = []; sitePicker = nil
         referencePages.reset()
         policyRevision = UUID(); policyExpires = nil
@@ -1697,9 +1934,11 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func close(release: Bool, deadlineOver: Bool = false) {
         if release, !deadlineOver, !nativeExam.permitsUnlock {
+            diagnostic("release-refused reason=no-signed-terminal-state", url: nil)
             notice?.stringValue = "DKU OJ must confirm the end of this exam before unlocking."
             return
         }
+        diagnostic("release-start release=\(release) deadline=\(deadlineOver)", url: nil)
         // A release arriving under the Leave sheet or the VPN prompt closes it with the rest of the screen.
         if let window = overlay?.window, let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
         nativeGeneration = UUID(); nativeRequestInFlight = false
@@ -1733,6 +1972,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 self.discardSavedLock()
             }
         })
+        diagnostic("release-finished release=\(release); home screen requested", url: nil)
         didClose()
     }
 
@@ -1853,7 +2093,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         if let url = webView.url, ProtectedBrowserPolicy.origin(url) == ProtectedBrowserPolicy.origin(selection.url) { hostAnsweredAt = effects.now() }
         LockdownController.shared.endVPNYield()
         updateNavigation()
-        handInPageFinished(url: webView.url, title: webView.title)
+        if webView === orderedTabs.first, let url = webView.url,
+           ProtectedBrowserPolicy.origin(url) == ProtectedBrowserPolicy.origin(selection.url) {
+            handInPageFinished(url: url, title: webView.title)
+        }
     }
 
     private func dialogOrigin(_ webView: WKWebView, frame: WKFrameInfo) -> String? {

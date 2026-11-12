@@ -35,7 +35,9 @@ enum BoxSignIn {
     /// while the tab is still on the chain (or has not shown a page yet), so leaving for another site ends it.
     static func allowsTopLevel(target: URL?, current: URL?, boxTab: Bool) -> Bool {
         guard boxTab, allowsSignIn(target) else { return false }
-        return current == nil || onChain(current)
+        // A popup of a Box tab commits about:blank before it is sent to sign in: that never-navigated page counts as no page.
+        let blank = current?.scheme?.lowercased() == "about" && current?.absoluteString.lowercased() == "about:blank"
+        return current == nil || blank || onChain(current)
     }
 
     /// A host a list sent as a plain resource that only Box tabs may use: Box's own hosts (account, sso, api, cdn, boxcloud).

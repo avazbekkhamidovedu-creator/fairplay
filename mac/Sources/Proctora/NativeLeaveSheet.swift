@@ -143,7 +143,10 @@ final class NativeLeavePanel: NSObject, NSTextFieldDelegate {
     static let codeChangedText = "The Mac code changed. Read the new code above to your instructor, then enter the code you get for it."
 
     func show(reason: String?) {
-        guard let window, window.attachedSheet == nil else { return }
+        guard let window, window.attachedSheet == nil else {
+            DebugLog.log("leave", "Emergency exit sheet not shown: \(window == nil ? "no window" : "another sheet is attached")")
+            return
+        }
         status.stringValue = reason ?? ""
         keepStatus = !(reason ?? "").isEmpty; hintText = reason ?? ""
         Self.active = self
@@ -267,7 +270,10 @@ enum NativeLeaveSheet {
     }
 
     static func present(_ prompt: NativeLeavePrompt, in window: NSWindow?, reason: String? = nil) {
-        guard let window, window.attachedSheet == nil else { return }
+        guard let window, window.attachedSheet == nil else {
+            DebugLog.log("leave", "Emergency exit sheet not shown: \(window == nil ? "no window" : "another sheet is attached")")
+            return
+        }
         NativeLeavePanel(prompt: prompt, window: window).show(reason: reason)
     }
 }

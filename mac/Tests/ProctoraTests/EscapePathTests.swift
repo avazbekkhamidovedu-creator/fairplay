@@ -58,8 +58,20 @@ enum Source {
 
     @Test func leaveHasNoFreeOrHelpOnlyRoute() throws {
         let browser = try Source.text("Sources/Proctora/ProtectedBrowserController.swift")
-        for gone in ["confirmLeave", "showHelp", "helpText", "leaveRoute", "Restarting the Mac", "Cancel attempt", "/finish\""] {
+        for gone in ["confirmLeave", "showHelp", "helpText", "leaveRoute", "Restarting the Mac", "Cancel attempt"] {
             #expect(!browser.contains(gone), "\(gone)")
+        }
+        // The app never starts a hand-in itself: no finish route in ANY source file, however the string is written.
+        let dir = Source.root.appendingPathComponent("Sources/Proctora")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
+        #expect(files.count > 20)
+        let forms = ["/finish\"", "finishPath", "finishSuffix", "/finish\\(", "finish\" +"]
+        let split = try NSRegularExpression(pattern: #"["']\s*/?\s*fin["']\s*\+|["']fin["']\s*\+\s*["']ish|\+\s*["']/?finish["']|session/[^"\n]*finish"#)
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for form in forms { #expect(!text.contains(form), "\(file.lastPathComponent): \(form)") }
+            let range = NSRange(text.startIndex..., in: text)
+            #expect(split.firstMatch(in: text, range: range) == nil, "\(file.lastPathComponent): split finish route")
         }
         let abort = try #require(browser.range(of: "/abort\""))
         let accepted = try #require(browser.range(of: "NativeExit.settle(result, ticket: ticket, store: effects.setup.store, canRelease: true)"))

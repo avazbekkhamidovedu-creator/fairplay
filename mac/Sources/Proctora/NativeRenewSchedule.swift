@@ -5,6 +5,11 @@ import Foundation
 struct NativeRenewSchedule {
     static let renewInterval: TimeInterval = 20
     static let holdPollInterval: TimeInterval = 10
+    /// The light signed-state read (GET) sent between renews, so an instructor release shows up in seconds.
+    /// 300 students: about 60 requests/s in all (15 renews + 45 light reads), against 15 with renews alone.
+    static let watchInterval: TimeInterval = 5
+    /// While a hand-in is being verified.
+    static let handInPollInterval: TimeInterval = 2
     static let jitterFraction = 0.2
     static let backoffSteps: [TimeInterval] = [2, 4, 8, 16]
     static let backoffCap: TimeInterval = 30
@@ -24,7 +29,7 @@ struct NativeRenewSchedule {
         case refused(after: TimeInterval)
     }
 
-    enum Pace { case renew, hold }
+    enum Pace { case renew, hold, watch, handIn }
 
     /// A late renew must not flicker the allowed sites; an OJ silent for the whole window still removes them.
     static func policyExpiry(signedExpires: TimeInterval, receivedAt: Date) -> Date {
@@ -76,7 +81,12 @@ struct NativeRenewSchedule {
     }
 
     func interval(_ pace: Pace) -> TimeInterval {
-        jittered(pace == .renew ? Self.renewInterval : Self.holdPollInterval)
+        switch pace {
+        case .renew: return jittered(Self.renewInterval)
+        case .hold: return jittered(Self.holdPollInterval)
+        case .watch: return jittered(Self.watchInterval)
+        case .handIn: return jittered(Self.handInPollInterval)
+        }
     }
 
     /// Records the answer and returns the wait before the next request.
@@ -99,13 +109,10 @@ struct NativeRenewSchedule {
 
     mutating func reset() { failures = 0 }
 
-    /// The OJ hand-in answer is the page for the contest's leave POST; the title is a second signal.
+    /// The OJ hand-in answer is the page for the contest's leave POST; the title is only a second signal on that URL.
     /// Either only asks the OJ sooner. It never unlocks anything.
     static func looksLikeHandIn(url: URL?, title: String?, contest: String?) -> Bool {
-        if let title, title.hasPrefix(completionTitle) { return true }
-        guard let url, let contest, !contest.isEmpty else { return false }
-        let path = url.path.hasSuffix("/") ? String(url.path.dropLast()) : url.path
-        return path == "/contest/" + contest + "/leave"
+        HandInVerification.isHandInPage(url: url, origin: nil, contest: contest)
     }
 }
 
