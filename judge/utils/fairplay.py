@@ -20,8 +20,14 @@ __all__ = [
     'fairplay_public_list', 'fairplay_public_problems', 'fairplay_released', 'fairplay_shared_problems',
     'fairplay_tag', 'fairplay_tags_changed', 'fairplay_template_problem', 'fairplay_token', 'fairplay_tokens',
     'fairplay_url_insecure', 'fairplay_visible_breakdown', 'fairplay_visible_problems', 'fairplay_window_start',
-    'is_fairplay_exam', 'set_fairplay_exam',
+    'is_fairplay_exam', 'native_browser_enabled', 'set_fairplay_exam',
 ]
+
+
+def native_browser_enabled():
+    """True when the native FairPlay browser mode is on (the setting must be exactly True)."""
+    return getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is True
+
 
 FAIRPLAY_MIN_TOKEN_LENGTH = 32
 # FairPlay may download the package this long before the start.

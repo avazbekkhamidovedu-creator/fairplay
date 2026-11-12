@@ -137,7 +137,6 @@
 {% endblock %}
 
 {% block before_users_table %}
-    {% set fp_tools = tab == 'participation' and fairplay_enabled() and is_fairplay_exam(contest) and contest.is_editable_by(request.user) %}
     <style>
         .ranking-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5em 1em; margin-bottom: .5em; }
         .ranking-toolbar #search-contest, .ranking-toolbar #search-contest + .select2 { margin-top: 0; }
@@ -156,15 +155,17 @@
             <input id="show-organizations-checkbox" type="checkbox" style="vertical-align: bottom">
             <label for="show-organizations-checkbox" style="vertical-align: bottom">{{ _('Show organizations') }}</label>
         </span>
-        {% if fp_tools %}
+        {% if fairplay_instructor and not fairplay_native_mode %}
             <span class="fp-tools">
-                {% if not fairplay_native_mode %}<a class="fp-tool" href="{{ url('contest_access_codes_pdf', contest.key) }}"><i class="fa fa-download" aria-hidden="true"></i> {{ _('Download access codes (PDF)') }}</a>{% endif %}
-                <a class="fp-tool" href="{{ url('contest_fairplay_help', contest.key) }}">{{ _('FairPlay student help') }}</a>
+                <a class="fp-tool" href="{{ url('contest_access_codes_pdf', contest.key) }}"><i class="fa fa-download" aria-hidden="true"></i> {{ _('Download access codes (PDF)') }}</a>
             </span>
         {% endif %}
     </div>
     {% if fairplay_modes %}
         {% include "contest/fairplay_modes_summary.html" %}
+    {% endif %}
+    {% if fairplay_block %}
+        {% include "contest/fairplay_participation.html" %}
     {% endif %}
 {% endblock %}
 

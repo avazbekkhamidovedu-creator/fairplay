@@ -5,12 +5,12 @@ has a session row; hiding stays for everything else. Admitted writes hold the sa
 finish/revoke. A write that began first must finish before revocation; a later write cannot inherit admission.
 Streaming responses are excluded from the locked write path because their work outlives this transaction.
 """
-from django.conf import settings
 from django.db import transaction
 from django.http import Http404, HttpResponse
 from django.urls import Resolver404, resolve
 from judge.models import ContestProblem, Profile
 from django.utils import timezone
+from judge.utils.fairplay import native_browser_enabled
 from judge.utils.fairplay_device_session import (admitted_session, served_session, attach_participation,
                                                  DeviceSessionDenied, personal_deadline, session_on_hold)
 from judge.utils.fairplay_native_scope import device_scope
@@ -33,8 +33,7 @@ class NativeBrowserAdmissionMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        if (getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is not True
-                or not request.user.is_authenticated):
+        if not native_browser_enabled() or not request.user.is_authenticated:
             return self.get_response(request)
         try:
             route = resolve(request.path_info, getattr(request, 'urlconf', None))

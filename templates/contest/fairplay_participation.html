@@ -1,0 +1,166 @@
+{# FairPlay students on the instructor's Participation tab: NetID, name, a short status and a menu of the three
+   things an instructor needs during an exam. Each item posts to the FairPlay actions endpoint and comes back here. #}
+<style>
+#fp-participation { margin: 0 0 1.5em; }
+#fp-participation .fp-status { white-space: nowrap; }
+#fp-participation .fp-status-in-progress { color: #2a7a2a; font-weight: bold; }
+#fp-participation .fp-sync { padding: .3em .8em; border: 1px solid #ccc; border-radius: 4px; background: #fff; color: #333; cursor: pointer; }
+#fp-participation .fp-sync:hover { background: #eee; }
+#fp-participation .fp-cell { width: 1%; text-align: center; white-space: nowrap; }
+#fp-participation .fp-kebab { width: 2em; height: 2em; line-height: 1; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #555; font-size: 1.3em; cursor: pointer; }
+#fp-participation .fp-kebab:hover, #fp-participation .fp-kebab[aria-expanded="true"] { background: #eee; border-color: #ccc; }
+.fp-part-menu { position: fixed; z-index: 1000; min-width: 13em; margin: 0; padding: .25em 0; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.15); text-align: left; }
+.fp-part-menu[hidden] { display: none; }
+.fp-part-menu button { display: block; width: 100%; box-sizing: border-box; padding: .45em .9em; border: 0; background: none; text-align: left; color: #333; cursor: pointer; font: inherit; }
+.fp-part-menu button:hover, .fp-part-menu button:focus { background: #f0f4f8; outline: none; }
+.fp-part-menu button.fp-danger { color: #b94a48; }
+.fp-part-menu button[hidden] { display: none; }
+</style>
+<div id="fp-participation">
+    <h3>{{ _('FairPlay students') }}</h3>
+    {% if not fairplay_native_mode %}
+        {% if fairplay_unreachable %}
+            <p class="fp-note">{{ _('FairPlay cannot be reached, so the students cannot be shown. Try again in a minute.') }}</p>
+        {% else %}
+            {% if fairplay_stale %}
+                <p class="fp-note" role="status">{% if fairplay_stale.failed %}{{ _('FairPlay could not be reached; showing data from %(age)s.', age=fairplay_stale.age) }}{% else %}{{ _('Showing data from %(age)s; refreshing.', age=fairplay_stale.age) }}{% endif %}</p>
+            {% endif %}
+            <p>
+                {{ _('Start code') }}: <strong style="font-family: monospace">{{ fairplay_exam.start_code or '-' }}</strong>
+                &nbsp; {{ _('Invigilator code') }}: <strong style="font-family: monospace">{{ fairplay_exam.invigilator_code or '-' }}</strong>
+            </p>
+        {% endif %}
+        <form method="post" action="{{ url('contest_fairplay_help', contest.key) }}" style="margin: 0 0 1em">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="sync">
+            <button type="submit" class="fp-sync">{{ _('Sync now') }}</button>
+        </form>
+    {% endif %}
+    <table class="table">
+        <thead>
+            <tr>
+                <th>{{ _('NetID') }}</th><th>{{ _('Name') }}</th><th>{{ _('Status') }}</th>
+                <th><span style="position:absolute;left:-9999px">{{ _('Actions') }}</span></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for s in fairplay_students %}
+            <tr>
+                <td>{{ s.netid }}</td>
+                <td>{{ s.name }}</td>
+                <td class="fp-status{% if s.state == 'in_progress' %} fp-status-in-progress{% endif %}">{{ s.short_status }}{% for note in s.notes %}<br><small class="fp-note">{{ note }}</small>{% endfor %}</td>
+                <td class="fp-cell">
+                    <button type="button" class="fp-kebab" aria-label="{{ _('Actions') }}" aria-haspopup="menu" aria-expanded="false"
+                            data-netid="{{ s.netid }}" data-name="{{ s.name or s.netid }}" data-state="{{ s.state }}" data-reopen-minutes="{{ s.reopen_minutes or 30 }}">&#8943;</button>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4">{{ _('No students yet.') }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="fp-part-menu" id="fp-part-menu" role="menu" hidden>
+{% if fairplay_native_mode %}
+    <button type="button" role="menuitem" data-action="quick-unlock" data-mode="continue" data-states="in_progress completed unlocked reopened"
+            data-minutes="1" data-minutes-default="row" data-reason-default="{{ _('Reopened by the instructor') }}"
+            data-question="{{ _('Reopen the exam for {who}? If the computer is locked it is unlocked first, then the student can start the exam again.') }}">{{ _('Reopen exam') }}</button>
+    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="in_progress" data-minutes="1" data-reason="1"
+            data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
+    <button type="button" role="menuitem" data-action="offline-exit-on-record" data-mode="" data-states="not_started in_progress completed unlocked reopened"
+            data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ. If no lock is on record you can type the code shown on their screen.') }}">{{ _('Offline exit code') }}</button>
+    <button type="button" role="menuitem" class="fp-danger" data-action="quick-unlock" data-mode="only" data-states="in_progress"
+            data-question="{{ _('Emergency exit for {who}? Their computer is unlocked and returns to the start page. The attempt ends; saved answers are kept.') }}">{{ _('Emergency exit') }}</button>
+{% else %}
+    <button type="button" role="menuitem" data-action="approve" data-mode="" data-states="waiting" data-reason="1"
+            data-question="{{ _('Approve {who} to resume the exam?') }}">{{ _('Approve resume') }}</button>
+    <button type="button" role="menuitem" data-action="reopen" data-mode="" data-states="completed" data-minutes="1" data-reason="1"
+            data-question="{{ _('Reopen the exam for {who}, who has handed in?') }}">{{ _('Reopen exam') }}</button>
+    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="not_started in_progress waiting" data-minutes="1" data-reason="1"
+            data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
+    <button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed" data-reason="1"
+            data-question="{{ _('Let {who} sign in again from another computer?') }}">{{ _('Move to another computer') }}</button>
+    <button type="button" role="menuitem" data-action="reissue" data-mode="" data-states="not_started in_progress waiting completed" data-reason="1"
+            data-question="{{ _('Issue a new access code to {who}? The old code stops working.') }}">{{ _('Issue new code') }}</button>
+    <button type="button" role="menuitem" data-action="offline-exit" data-mode="" data-states="not_started in_progress waiting completed"
+            data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ.') }}">{{ _('Offline exit code') }}</button>
+{% endif %}
+    <p class="fp-none" style="margin:.45em .9em;color:#777" hidden>{{ _('Nothing to do for this student.') }}</p>
+</div>
+
+<form method="post" action="{{ url('contest_fairplay_help', contest.key) }}" id="fp-part-form" hidden>
+    {% csrf_token %}
+    <input type="hidden" name="action" value="">
+    <input type="hidden" name="mode" value="">
+    <input type="hidden" name="netid" value="">
+    <input type="hidden" name="name" value="">
+    <input type="hidden" name="reason" value="">
+    <input type="hidden" name="minutes" value="">
+    <input type="hidden" name="confirm" value="1">
+</form>
+
+<script>
+(function () {
+    var menu = document.getElementById('fp-part-menu'), form = document.getElementById('fp-part-form'), current = null;
+    if (!menu || !form) { return; }
+    function close() {
+        menu.hidden = true;
+        if (current) { current.setAttribute('aria-expanded', 'false'); current = null; }
+    }
+    document.querySelectorAll('#fp-participation .fp-kebab').forEach(function (kebab) {
+        kebab.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (current === kebab) { close(); return; }
+            close();
+            current = kebab;
+            kebab.setAttribute('aria-expanded', 'true');
+            var r = kebab.getBoundingClientRect(), state = kebab.dataset.state, shown = 0;
+            menu.querySelectorAll('button').forEach(function (item) {
+                // Only what applies now: a computer that is not locked has nothing to unlock or exit.
+                item.hidden = (' ' + item.dataset.states + ' ').indexOf(' ' + state + ' ') < 0;
+                if (!item.hidden) { shown++; }
+            });
+            menu.querySelector('.fp-none').hidden = shown > 0;
+            menu.hidden = false;
+            menu.style.top = Math.min(r.bottom + 2, window.innerHeight - menu.offsetHeight - 4) + 'px';
+            menu.style.left = Math.max(4, r.right - menu.offsetWidth) + 'px';
+            var first = menu.querySelector('button:not([hidden])');
+            if (first) { first.focus(); }
+        });
+    });
+    menu.querySelectorAll('button').forEach(function (item) {
+        item.addEventListener('click', function () {
+            if (!current) { return; }
+            var who = current.dataset.name + ' (' + current.dataset.netid + ')', question = item.dataset.question;
+            if (question && !window.confirm(question.replace('{who}', who))) { close(); return; }
+            var minutes = '', reason = '';
+            if (item.dataset.minutes) {
+                var suggested = item.dataset.minutesDefault === 'row' ? current.dataset.reopenMinutes : '15';
+                var limit = item.dataset.minutesDefault === 'row' ? {{ fairplay_max_reopen_minutes }} : {{ fairplay_max_minutes }};
+                minutes = window.prompt({{ _('Minutes (1 to {max}) for {who}?')|tojson }}.replace('{max}', limit).replace('{who}', who), suggested);
+                if (minutes === null) { close(); return; }
+            }
+            if (item.dataset.reason || item.dataset.reasonDefault) {
+                // A reason with a suggested text may be left as suggested; one without must be written.
+                reason = window.prompt({{ _('Reason for this action on {who}?')|tojson }}.replace('{who}', who),
+                                       item.dataset.reasonDefault || '');
+                if (reason === null) { close(); return; }
+                if (!reason.trim() && item.dataset.reasonDefault) { reason = item.dataset.reasonDefault; }
+                if (!reason.trim()) { close(); return; }
+            }
+            form.elements.minutes.value = minutes;
+            form.elements.reason.value = reason;
+            form.elements.action.value = item.dataset.action;
+            form.elements.mode.value = item.dataset.mode;
+            form.elements.netid.value = current.dataset.netid;
+            form.elements.name.value = current.dataset.name;
+            close();
+            form.submit();
+        });
+    });
+    document.addEventListener('click', function (e) { if (!menu.contains(e.target)) { close(); } });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { close(); } });
+    window.addEventListener('scroll', close, true);
+})();
+</script>

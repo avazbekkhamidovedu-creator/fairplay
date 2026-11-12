@@ -10,6 +10,19 @@
     .fp-launch-downloads[open] { padding-bottom: 10px; }
     .fp-launch-downloads a { display: block; margin: 12px 8px 0; }
     .fp-launch-help { line-height: 1.6; }
+    .fp-launch-progress { margin: 0 0 24px; padding: 14px 16px; border: 1px solid #c9d1db; border-radius: 6px; background: #f7f9fc; }
+    .fp-launch-progress[hidden], .fp-launch-fallback[hidden] { display: none; }
+    .fp-launch-status { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+    .fp-launch-spinner { flex: none; width: 18px; height: 18px; border: 3px solid #c9d1db; border-top-color: #2F4BD8; border-radius: 50%; animation: fp-launch-spin 0.9s linear infinite; }
+    .fp-launch-progress.is-open .fp-launch-spinner { animation: none; border-color: #2a7a2a; }
+    .fp-launch-bar { height: 4px; margin-top: 10px; background: #e3e8ef; border-radius: 2px; overflow: hidden; }
+    .fp-launch-bar span { display: block; width: 35%; height: 100%; background: #2F4BD8; animation: fp-launch-slide 1.4s ease-in-out infinite; }
+    .fp-launch-progress.is-open .fp-launch-bar { display: none; }
+    .fp-launch-fallback { margin-top: 12px; line-height: 1.6; }
+    .fp-launch-fallback ul { margin: 6px 0 0 20px; }
+    @keyframes fp-launch-spin { to { transform: rotate(360deg); } }
+    @keyframes fp-launch-slide { from { margin-left: -35%; } to { margin-left: 100%; } }
+    @media (prefers-reduced-motion: reduce) { .fp-launch-spinner, .fp-launch-bar span { animation: none; } }
 </style>
 {% endblock %}
 
@@ -18,8 +31,23 @@
     <p>{{ contest.name }}</p>
     <p>{{ _('Take this assignment on the DKU OJ website inside the locked FairPlay app.') }}</p>
     <div class="fp-launch-actions">
-        <a class="fp-launch-button fp-launch-primary" href="{{ launch_url }}">{{ _('Start exam in FairPlay') }}</a>
+        <a class="fp-launch-button fp-launch-primary" id="fp-launch-start" href="{{ launch_url }}">{{ _('Start exam in FairPlay') }}</a>
         <a class="fp-launch-button" href="https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest" target="_blank" rel="noopener">{{ _('Download FairPlay') }}</a>
+    </div>
+    <div class="fp-launch-progress" id="fp-launch-progress" hidden>
+        <div class="fp-launch-status" role="status" aria-live="polite">
+            <span class="fp-launch-spinner" aria-hidden="true"></span>
+            <span id="fp-launch-message">{{ _('Opening FairPlay…') }}</span>
+        </div>
+        <div class="fp-launch-bar" aria-hidden="true"><span></span></div>
+        <div class="fp-launch-fallback" id="fp-launch-fallback" hidden>
+            <strong>{{ _("FairPlay didn't open?") }}</strong>
+            <ul>
+                <li>{{ _('Click Start exam in FairPlay again.') }}</li>
+                <li>{{ _('Make sure FairPlay is installed.') }} <a href="https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/latest" target="_blank" rel="noopener">{{ _('Download FairPlay') }}</a></li>
+                <li>{{ _('Or open FairPlay manually and choose Continue with DKU OJ.') }}</li>
+            </ul>
+        </div>
     </div>
     <div class="fp-launch-help">
         <ol>
@@ -31,4 +59,47 @@
         <p>{{ _('Opening the app does not start your exam. Save other work before locking your computer.') }}</p>
     </div>
 </main>
+<script>
+(function () {
+    var start = document.getElementById('fp-launch-start'), box = document.getElementById('fp-launch-progress');
+    if (!start || !box) { return; }
+    var message = document.getElementById('fp-launch-message'), fallback = document.getElementById('fp-launch-fallback');
+    var statusUrl = {{ url('contest_fairplay_launch_status', contest.key)|tojson }};
+    var text = {
+        opening: {{ _('Opening FairPlay…')|tojson }},
+        waiting: {{ _('Waiting for FairPlay to start your exam…')|tojson }},
+        switching: {{ _('Switching to FairPlay…')|tojson }},
+        started: {{ _('FairPlay is open and your exam has started.')|tojson }}
+    };
+    var timers = [], poll = null, done = false, clickedAt = 0;
+    // The page's clock may differ from the server's: the click time sent to the status view is on the server's clock.
+    var skew = {{ server_now_ms }} - Date.now();
+    function say(t) { message.textContent = t; }
+    function stop() { timers.forEach(clearTimeout); timers = []; if (poll) { clearInterval(poll); poll = null; } }
+    function confirmed() {
+        // Only the server says FairPlay took the exam over: stop the spinner and the fallback.
+        done = true; say(text.started); box.classList.add('is-open'); fallback.hidden = true; stop();
+    }
+    function check() {
+        fetch(statusUrl + '?since=' + clickedAt, {credentials: 'same-origin', cache: 'no-store'})
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) { if (d && d.started && !done) { confirmed(); } }).catch(function () {});
+    }
+    // Losing focus is only a hint that the app may be opening (it also happens when the browser asks permission, or the
+    // student clicks elsewhere): it changes the wording but never stops the polling or hides the help.
+    function hint() { if (clickedAt && !done) { say(text.switching); } }
+    start.addEventListener('click', function () {
+        stop();
+        done = false; clickedAt = Date.now() + skew;
+        box.classList.remove('is-open'); box.hidden = false; fallback.hidden = true; say(text.opening);
+        timers.push(setTimeout(function () { if (!done) { say(text.waiting); } }, 1500));
+        timers.push(setTimeout(function () { if (!done) { fallback.hidden = false; } }, 10000));
+        poll = setInterval(check, 3000);
+        timers.push(setTimeout(function () { if (poll) { clearInterval(poll); poll = null; } }, 300000));
+    });
+    document.addEventListener('visibilitychange', function () { if (document.hidden) { hint(); } });
+    window.addEventListener('blur', hint);
+    window.addEventListener('pagehide', hint);
+})();
+</script>
 {% endblock %}

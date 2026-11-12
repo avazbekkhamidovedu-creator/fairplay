@@ -2,11 +2,11 @@
 
 {% block body %}
 <div class="fairplay-help">
-    <h2>{{ _('FairPlay student help') }}: {{ contest.name }}</h2>
+    <h2>{{ _('Participation') }}: {{ contest.name }}</h2>
     <p>{{ first_name }} {{ last_name }} ({{ netid }})</p>
     <p>{% if offline %}{{ _('Offline exit code') }}{% else %}{{ _('New access code') }}{% endif %}:</p>
     <p id="fairplay-help-code" style="font-family: monospace; font-size: 2em; letter-spacing: 0.15em; font-weight: bold">{{ code }}</p>
     <p><strong>{{ _('Write this down now. It is shown only once and is not kept in DKU OJ. Do not reload this page: that would issue another code.') }}</strong></p>
-    <p><a href="{{ url('contest_fairplay_help', contest.key) }}">{{ _('Back to FairPlay student help') }}</a></p>
+    <p><a href="{{ url('contest_participation_own', contest.key) }}">{{ _('Back to Participation') }}</a></p>
 </div>
 {% endblock %}

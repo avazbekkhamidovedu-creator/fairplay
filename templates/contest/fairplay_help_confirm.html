@@ -2,7 +2,7 @@
 
 {% block body %}
 <div class="fairplay-help">
-    <h2>{{ _('FairPlay student help') }}: {{ contest.name }}</h2>
+    <h2>{{ _('Participation') }}: {{ contest.name }}</h2>
     <p><strong>{{ question }}</strong></p>
     <table class="table" style="width:auto">
         <tr><td>{{ _('Student') }}</td><td>{{ name }} ({{ netid }})</td></tr>
@@ -17,10 +17,15 @@
         <input type="hidden" name="name" value="{{ name }}">
         <input type="hidden" name="reason" value="{{ reason }}">
         {% if minutes %}<input type="hidden" name="minutes" value="{{ minutes }}">{% endif %}
-        {% if mac_code %}<input type="hidden" name="mac_code" value="{{ mac_code }}">{% endif %}
+        {% if mode %}<input type="hidden" name="mode" value="{{ mode }}">{% endif %}
+        {% if need_code %}
+        <p><label for="fp-typed-code">{{ _("Code shown on the student's computer") }}</label>
+            <input type="text" id="fp-typed-code" name="mac_code" maxlength="64" required autocomplete="off" autofocus
+                   style="font-family: monospace; text-transform: uppercase"></p>
+        {% elif mac_code %}<input type="hidden" name="mac_code" value="{{ mac_code }}">{% endif %}
         <input type="hidden" name="confirm" value="1">
-        <button type="submit" class="button" style="width:auto">{{ _('Yes, do it') }}</button>
-        <a class="button" style="width:auto" href="{{ url('contest_fairplay_help', contest.key) }}">{{ _('Cancel') }}</a>
+        <button type="submit" class="button" style="width:auto">{% if need_code %}{{ _('Get exit code') }}{% else %}{{ _('Yes, do it') }}{% endif %}</button>
+        <a class="button" style="width:auto" href="{{ url('contest_participation_own', contest.key) }}">{{ _('Cancel') }}</a>
     </form>
 </div>
 {% endblock %}

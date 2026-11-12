@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from urllib.parse import urlencode
 
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -45,6 +46,7 @@ def _page(request, contest):
         'contest': contest,
         'title': _('Open exam in FairPlay'),
         'launch_url': 'fairplay://launch?' + urlencode({'v': 1, 'exam': contest.key}),
+        'server_now_ms': int(time.time() * 1000),
         'launch_file_url': reverse('contest_fairplay_launch_file', args=[contest.key]),
     }))
 
@@ -90,3 +92,39 @@ class ContestFairPlayLaunchFile(LoginRequiredMixin, View):
         response['Content-Disposition'] = 'attachment; filename="%s.fairplay"' % contest.key
         response['X-Content-Type-Options'] = 'nosniff'
         return _private(response)
+
+
+class ContestFairPlayLaunchStatus(LoginRequiredMixin, View):
+    """Whether this user's FairPlay app took the exam over since the Start button was clicked. The launch page polls it
+    with the click time (on the server's clock, see the page). The app's claim and recover calls (never heartbeats)
+    leave a timestamp in the cache; a session created after the click counts too. It reveals nothing beyond the
+    user's own state."""
+
+    ELIGIBLE_SECONDS = 60
+
+    def get(self, request, contest):
+        from datetime import datetime, timezone as dt_timezone
+        from django.core.cache import cache
+        from judge.models import FairPlayDeviceSession
+        from judge.utils.fairplay_device_session import app_launch_mark
+        # A light gate for a poll: the full launch gate runs once a minute per user and exam, and its answer (the
+        # contest's pk) is cached, so a poll does no second lookup. Every query also filters on request.user.
+        import hashlib
+        # the URL text is never used as a cache key itself
+        key = 'fp-launch-eligible:%s:%s' % (request.user.pk, hashlib.sha1(contest.encode('utf-8')).hexdigest())
+        contest_id = cache.get(key)
+        if not isinstance(contest_id, int):
+            contest_id = _contest(request, contest).pk
+            cache.set(key, contest_id, self.ELIGIBLE_SECONDS)
+        try:
+            since_ms = float(request.GET.get('since', ''))
+            since = datetime.fromtimestamp(since_ms / 1000.0, tz=dt_timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            since_ms = since = None
+        started = False
+        if since is not None:
+            mark = app_launch_mark(request.user.pk, contest_id)
+            started = (mark is not None and mark >= since_ms) or FairPlayDeviceSession.objects.filter(
+                contest_id=contest_id, user=request.user, state__in=('active', 'finishing'),
+                created_at__gte=since).exists()
+        return _private(HttpResponse(json.dumps({'started': started}), content_type='application/json'))

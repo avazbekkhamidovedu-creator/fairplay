@@ -1,17 +1,8 @@
 """Per-student FairPlay mode for the teacher tables of a FairPlay exam, from the batch exam response."""
-import logging
-
-from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _l
 
-from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
+__all__ = ['mode_table_from_exam']
 
-__all__ = ['MODES_CACHE_SECONDS', 'fairplay_mode_table']
-
-logger = logging.getLogger('judge.fairplay')
-
-MODES_CACHE_KEY = 'fpb:modes:%s'
-MODES_CACHE_SECONDS = 5
 
 MODE_LABELS = {
     'on': _l('ON'), 'off': _l('OFF'), 'not_started': _l('NOT STARTED'), 'submitted': _l('SUBMITTED'),
@@ -63,18 +54,6 @@ def _build(exam):
     }
 
 
-def fairplay_mode_table(contest, acting_username):
-    """None when FairPlay cannot be reached; callers then show '-' everywhere."""
-    key = MODES_CACHE_KEY % contest.key
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    try:
-        exam = FairPlayClient(acting_user=acting_username).exam(contest.key, read_timeout=QUICK_READ_TIMEOUT)
-    except FairPlayError:
-        return None
-    if not isinstance(exam, dict):
-        return None
-    table = _build(exam)
-    cache.set(key, table, MODES_CACHE_SECONDS)
-    return table
+def mode_table_from_exam(exam):
+    """The mode table for an exam answer the caller already has (None when there is none)."""
+    return _build(exam) if isinstance(exam, dict) and exam else None

@@ -53,10 +53,10 @@ from judge.models.profile import Class, Organization
 from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status, task_status_url
-from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_enabled, fairplay_visible_problems, is_fairplay_exam
+from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_visible_problems, is_fairplay_exam, native_browser_enabled
 from judge.utils.fairplay_editor import FAIRPLAY_EDITOR_FIELDS, apply_fairplay_editor, fairplay_check_edit, \
     fairplay_edit_lock, fairplay_editor_context, parse_fairplay_payload
-from judge.utils.fairplay_modes import fairplay_mode_table
+from judge.utils.fairplay_modes import mode_table_from_exam
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
     user_completed_ids
@@ -2964,17 +2964,33 @@ class ContestRankingBase(ContestMixin, TitleMixin, DetailView):
         context['problems'] = problems
         context['last_msg'] = event.last()
         context['tab'] = self.tab
-        context['fairplay_modes'] = self.fairplay_modes()
-        context['fairplay_native_mode'] = getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is True
+        from judge.views.fairplay import is_fairplay_instructor
+        instructor = is_fairplay_instructor(self.request, self.object)  # the FairPlay instructor gate, computed once
+        context['fairplay_modes'] = self.fairplay_modes(instructor)
+        context['fairplay_native_mode'] = native_browser_enabled()
+        if self.tab == 'participation':
+            from judge.views.fairplay import participation_context
+            context.update(participation_context(self.request, self.object, instructor=instructor,
+                                                 with_rows=getattr(self, 'profile', None) == self.request.profile))
         return context
 
-    def fairplay_modes(self):
+    def render_to_response(self, context, **response_kwargs):
+        response = super().render_to_response(context, **response_kwargs)
+        if context.get('fairplay_block'):
+            # The block shows the start and invigilator codes: it must never be stored or shared.
+            response['Cache-Control'] = 'private, no-store'
+        return response
+
+    def fairplay_modes(self, instructor):
         contest = self.object
-        if not (fairplay_enabled() and is_fairplay_exam(contest) and contest.is_editable_by(self.request.user)):
+        if not instructor:
             return None
-        if getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is True:
+        if native_browser_enabled():
             return {'native': True}
-        return {'table': fairplay_mode_table(contest, self.request.user.username)}
+        # One FairPlay fetch for the page: the Participation table's cached exam answer also builds the mode table.
+        from judge.views.fairplay import classic_exam
+        exam, unreachable, stale = classic_exam(contest, self.request.user.username)
+        return {'table': None if unreachable else mode_table_from_exam(exam), 'stale': stale}
 
 
 class ContestRanking(ContestRankingBase):

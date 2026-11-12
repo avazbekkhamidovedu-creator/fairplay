@@ -51,13 +51,17 @@ def flag_expired_lease(session, now=None):
     return True
 
 
-def lease_expired_flagged(session, now=None):
-    """Read-only: an expiry recorded earlier, or a lease that has run out right now."""
+def lease_expired_flagged(session, now=None, deadline=None, recorded=None):
+    """Read-only: an expiry recorded earlier, or a lease that has run out right now. A bulk caller passes the
+    session's deadline and whether an expiry row exists, so nothing is queried per session."""
     if session.state != 'active' or session.participation_id is None:
         return False
     now = now or timezone.now()
-    if session.lease_until < now and session.lease_until < personal_deadline(session):
+    ends = deadline if deadline is not None else personal_deadline(session)
+    if session.lease_until < now and session.lease_until < ends:
         return True
+    if recorded is not None:
+        return recorded
     return FairPlayDeviceAudit.objects.filter(session=session, action='lease-expired').exists()
 
 
@@ -94,10 +98,58 @@ def _write_window(session, actor_id, until, used_seconds):
                                       reason='until=%s;used=%d' % (_utc(until), used_seconds))
 
 
-def _window(session):
+LAUNCH_MARK_SECONDS = 3600
+
+
+def _launch_mark_key(user_id, contest_id):
+    return 'fp-launch-mark:%s:%s' % (user_id, contest_id)
+
+
+def note_app_launch(user_id, contest_id):
+    """Remember, once the transaction commits, that this user's FairPlay app just claimed or recovered this exam. The
+    launch page compares it with the click time. Heartbeat renews and state reads never call this."""
+    import time
+    from django.core.cache import cache
+    now_ms = int(time.time() * 1000)
+    transaction.on_commit(lambda: cache.set(_launch_mark_key(user_id, contest_id), now_ms, LAUNCH_MARK_SECONDS))
+
+
+def app_launch_mark(user_id, contest_id):
+    """Milliseconds since the epoch of the user's last claim or recover for this exam, or None."""
+    from django.core.cache import cache
+    return cache.get(_launch_mark_key(user_id, contest_id))
+
+
+def audit_summary(session_ids):
+    """What the audit rows say about many sessions at once, in one query: {'reopened': ids with a reopen row,
+    'windows': id -> newest reopen-window reason (what reopen_until reads), 'unsubmitted': id -> newest draft warning,
+    'held': ids still held by a lease gap (no unlock or reopen recorded after it, as session_on_hold reads it),
+    'expired': ids with a lease-expired row}."""
+    summary = {'reopened': set(), 'windows': {}, 'unsubmitted': {}, 'held': set(), 'expired': set()}
+    rows = FairPlayDeviceAudit.objects.filter(
+        session_id__in=list(session_ids),
+        action__in=('reopen', WINDOW_ACTION, 'completed-with-unsubmitted-draft', 'lease-gap', 'unlock-device',
+                    'lease-expired'),
+    ).order_by('pk').values_list('session_id', 'action', 'reason')
+    for session_id, action, reason in rows:
+        if action == 'reopen':
+            summary['reopened'].add(session_id)
+        if action == 'lease-gap':
+            summary['held'].add(session_id)
+        elif action in ('unlock-device', 'reopen'):
+            summary['held'].discard(session_id)
+        elif action == WINDOW_ACTION:
+            summary['windows'][session_id] = reason
+        elif action == 'lease-expired':
+            summary['expired'].add(session_id)
+        elif action == 'completed-with-unsubmitted-draft':
+            summary['unsubmitted'][session_id] = reason
+    return summary
+
+
+def parse_window(reason):
+    """(until, used seconds) from a 'reopen-window' audit reason, or (None, 0)."""
     from datetime import datetime
-    reason = FairPlayDeviceAudit.objects.filter(session=session, action=WINDOW_ACTION) \
-        .order_by('-pk').values_list('reason', flat=True).first()
     if not reason:
         return None, 0
     fields = dict(part.split('=', 1) for part in reason.split(';') if '=' in part)
@@ -105,6 +157,12 @@ def _window(session):
         return datetime.fromisoformat(fields['until']), int(fields.get('used', 0))
     except (KeyError, ValueError):
         return None, 0
+
+
+def _window(session):
+    reason = FairPlayDeviceAudit.objects.filter(session=session, action=WINDOW_ACTION) \
+        .order_by('-pk').values_list('reason', flat=True).first()
+    return parse_window(reason)
 
 
 def reopen_until(session):
@@ -139,16 +197,20 @@ def extend_participation(participation, until):
     return True
 
 
-def personal_deadline(session):
+_QUERY = object()
+
+
+def personal_deadline(session, reopen_at=_QUERY):
     """The one end time for this student, the same number the core enforces: a joined session ends with its
     participation (which already includes the instructor's override); an unjoined one ends with its reopen window
-    when it has one, else with the contest. A disqualified student never gets more than the contest end."""
+    when it has one, else with the contest. A disqualified student never gets more than the contest end.
+    `reopen_at` lets a bulk caller pass the already-read window end (or None) instead of querying it per session."""
     contest = session.contest
     participation = session.participation if session.participation_id else None
     if participation is not None:
         deadline = participation.end_time
         return min(deadline, contest.end_time) if participation.is_disqualified else deadline
-    until = reopen_until(session)
+    until = reopen_until(session) if reopen_at is _QUERY else reopen_at
     return until if until is not None else contest.end_time
 
 
@@ -530,16 +592,20 @@ def instructor_unlock_end(*, contest, username, actor, reason):
     return session
 
 
+def reopen_minutes_from(left_seconds):
+    """The default reopen length for a student with this many seconds left: that or 30 minutes, whichever is longer."""
+    minutes = 30
+    if left_seconds is not None and left_seconds > 0:
+        minutes = max(minutes, int(-(-left_seconds // 60)))
+    return min(minutes, 1440)
+
+
 def default_reopen_minutes(contest, username):
     """The student's remaining time or 30 minutes, whichever is longer (the reopen itself never shortens)."""
     session = FairPlayDeviceSession.objects.select_related('contest', 'participation').filter(
         user__username=username, contest=contest).order_by('-created_at', '-pk').first()
-    minutes = 30
-    if session is not None:
-        left = (personal_deadline(session) - timezone.now()).total_seconds()
-        if left > 0:
-            minutes = max(minutes, int(-(-left // 60)))
-    return min(minutes, 1440)
+    left = None if session is None else (personal_deadline(session) - timezone.now()).total_seconds()
+    return reopen_minutes_from(left)
 
 
 @transaction.atomic
@@ -745,7 +811,13 @@ def bind_lock(session, lock, owner=None):
         owner = _lock_owner_from_db(code)
     if owner is not None and owner != mine:
         return False
-    if not FairPlayDeviceAudit.objects.filter(action='lock', reason=code, session=session).exists():
+    # A row is written whenever this session's code is not the student's newest bind in the exam, so the newest row
+    # is the computer that last registered (X, Y, X again ends on X, and a recover rebinding an older session
+    # counts). Extra rows never change ownership: the first row for a code decides.
+    last = FairPlayDeviceAudit.objects.filter(action='lock', session__user_id=session.user_id,
+                                              session__contest_id=session.contest_id) \
+        .order_by('-pk').values_list('session_id', 'reason').first()
+    if last != (session.pk, code):
         FairPlayDeviceAudit.objects.create(session=session, actor_id=session.user_id, action='lock', reason=code)
         _forget_lock_owner(code)
     return _lock_owner_from_db(code) == mine
@@ -756,6 +828,24 @@ def lock_bound_to(contest, username, code, use_cache=True):
     Release and permission decisions pass use_cache=False."""
     owner = lock_owner(code, use_cache=use_cache)
     return None if owner is None else owner == (contest.pk, username)
+
+
+def latest_bound_lock(contest, username):
+    """The Mac/PC lock code most recently registered by this student's computer in this exam, or None. Every bind or
+    rebind of a different code writes an audit row, so the newest row across all of the student's sessions is the
+    computer that last said it was locked (a recover can rebind a lock on an older session), provided the student's
+    newest session has registered a lock at all. A code another student
+    or exam owns (for example after an administrator override) is never returned: ownership is read uncached."""
+    newest = FairPlayDeviceSession.objects.filter(contest=contest, user__username=username) \
+        .order_by('-created_at', '-pk').values_list('pk', flat=True).first()
+    if newest is None or not FairPlayDeviceAudit.objects.filter(action='lock', session_id=newest).exists():
+        return None  # the newest computer has not registered a lock: the older one's code is not offered
+    code = FairPlayDeviceAudit.objects.filter(
+        action='lock', session__contest=contest, session__user__username=username
+    ).order_by('-pk').values_list('reason', flat=True).first()
+    if code and normalize_mac_code(code) == code and lock_bound_to(contest, username, code, use_cache=False):
+        return code
+    return None
 
 
 def override_lock_owner(contest, username, code, actor):

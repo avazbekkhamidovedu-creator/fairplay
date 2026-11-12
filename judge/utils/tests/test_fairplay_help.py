@@ -1,4 +1,5 @@
-"""The FairPlay student help page of a contest: who may open it, the confirm step and the bridge calls."""
+"""The FairPlay actions endpoint of a contest (its old help page now redirects to Participation): who may open it,
+the confirm step and the bridge calls."""
 import json
 from html import unescape
 from urllib.parse import parse_qs, urlsplit
@@ -39,52 +40,175 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertEqual(first.status_code, 200)
         return self.post(user, dict(data, confirm='1'))
 
-    def test_link_on_the_participation_page(self):
-        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
-        self.assertIn(self.URL, html)
-        self.assertIn('FairPlay student help', html)
-        html = self.login(self.student).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
-        self.assertNotIn(self.URL, html)
-
-    def test_page_lists_students_and_codes(self):
+    def test_no_link_to_a_separate_help_page_and_old_url_redirects(self):
+        participation = reverse('contest_participation_own', args=['fpexam'])
+        html = self.login(self.teacher).get(participation).content.decode()
+        self.assertNotIn('FairPlay student help', html)
+        self.assertNotIn('href="%s"' % self.URL, html)
         response = self.login(self.teacher).get(self.URL)
-        html = response.content.decode()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Cache-Control'], 'no-store')
-        for text in ('K7M2QX', '918273', 'fp_student', 'waiting for approval', 'submitted', 'bound', 'unused',
-                     'Approve resume', 'Move to another computer', 'Issue new code', 'Reopen exam',
-                     'Give extra time', 'Offline exit code', 'Sync now', 'asks to move to another computer'):
-            self.assertIn(text, html)
-        self.assertNotIn('Start again', html)
-        self.assert_acting(self.teacher)
+        self.assertRedirects(response, participation, fetch_redirect_response=False)
 
-    def test_menu_actions_depend_on_the_student(self):
-        html = self.login(self.teacher).get(self.URL).content.decode()
-        self.assertEqual(html.count('data-action="reopen"'), 1)
-        self.assertEqual(html.count('data-action="extra-time"'), 1)
-        self.assertEqual(html.count('data-action="approve"'), 1)
-        self.assertEqual(html.count('data-action="release-device"'), 2)
-        self.assertEqual(html.count('aria-label="Actions"'), 2)
-        self.assertEqual(html.count('name="reason"'), 1)
-        self.assertEqual(html.count('class="fp-choice"'), 8)
-        for text in ("Student's computer failed", 'Student lost or cannot read the code',
-                     'Approved accommodation', 'Submitted by mistake', 'Lock stuck during the exam', 'Other...'):
-            self.assertIn(text, unescape(html))
-        self.assertNotIn('For students still taking the exam', html)
-        self.fp.exam.return_value = exam(students=STUDENTS[:1])
-        html = self.login(self.teacher).get(self.URL).content.decode()
-        self.assertNotIn('data-action="reopen"', html)
-        self.assertEqual(html.count('data-action="extra-time"'), 1)
-        self.fp.exam.return_value = exam(students=STUDENTS[1:])
-        html = self.login(self.teacher).get(self.URL).content.decode()
-        self.assertIn('data-action="reopen"', html)
-        self.assertNotIn('data-action="extra-time"', html)
+    def test_classic_participation_table_has_the_classic_actions(self):
+        participation = reverse('contest_participation_own', args=['fpexam'])
+        html = self.login(self.teacher).get(participation).content.decode()
+        table = html.split('id="fp-participation"')[1]
+        for text in ('fp_student', 'Avazbek Khamidov', 'Waiting for approval', 'Class Mate', 'Submitted', 'K7M2QX',
+                     '918273', 'Sync now'):
+            self.assertIn(text, table)
+        menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
+        for action in ('approve', 'reopen', 'extra-time', 'release-device', 'reissue', 'offline-exit'):
+            self.assertIn('data-action="%s"' % action, menu)
+        self.assertNotIn('offline-exit-on-record', menu)
+        self.assertIn('data-action="approve" data-mode="" data-states="waiting"', menu)
+        self.assertIn('data-action="reopen" data-mode="" data-states="completed"', menu)
+        self.assertIn('Download access codes (PDF)', html)  # the toolbar span carries the classic download
+        student_html = self.login(self.student).get(participation).content.decode()
+        self.assertNotIn('id="fp-participation"', student_html)
+
+    def test_classic_offline_exit_without_a_code_asks_for_the_code_on_the_screen(self):
+        response = self.post(self.teacher, {'action': 'offline-exit', 'netid': 'fp_student', 'confirm': '1'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="mac_code"')
+        self.fp.offline_exit.assert_not_called()
+
+    def test_classic_block_is_shown_with_codes_and_sync_even_without_students(self):
+        self.fp.exam.return_value = exam(students=[], start_code='K7M2QX', invigilator_code='918273')
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        table = html.split('id="fp-participation"')[1]
+        for text in ('K7M2QX', '918273', 'Sync now', 'No students yet'):
+            self.assertIn(text, table)
+
+    def test_every_menu_action_asks_before_it_acts(self):
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
+        self.assertNotIn('data-question=""', menu)
+        for text in ('Issue a new access code to {who}? The old code stops working.',
+                     'Let {who} sign in again from another computer?', 'Reopen the exam for {who}, who has handed in?',
+                     'Approve {who} to resume the exam?', 'Give {who} extra time?'):
+            self.assertIn(text, unescape(menu))
+
+    def test_classic_rows_keep_the_swap_request_reopen_code_and_hand_in_count(self):
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        table = html.split('id="fp-participation"')[1].split('</table>')[0]
+        for text in ('Asks to move to another computer.', 'Hand-in reopened.', 'Code: bound. Hand-ins: 0.',
+                     'Code: unused. Hand-ins: 2.'):
+            self.assertIn(text, table)
+
+    def test_the_classic_cache_is_per_acting_instructor_and_a_stale_answer_is_shown_at_once(self):
+        import time
+        from unittest import mock
+        from django.core.cache import cache
+        from judge.views import fairplay
+        cache.clear()
+        class_a = fairplay._classic_cache_keys(self.exam, self.teacher.username)
+        class_b = fairplay._classic_cache_keys(self.exam, 'someone_else')
+        self.assertNotEqual(class_a, class_b)
+        stale = {'students': [dict(STUDENTS[0], name='From the cache')], 'start_code': 'OLD111',
+                 'invigilator_code': '000000'}
+        cache.set(class_a[0], {'at': time.time() - 100, 'exam': stale}, 900)
+        spawned = []
+        with mock.patch.object(fairplay, '_spawn', spawned.append):
+            html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        self.assertIn('From the cache', html)  # shown at once, FairPlay was not waited for
+        self.assertEqual(len(self.roster_calls()), 0)
+        self.assertEqual(len(spawned), 1)
+        spawned[0]()  # the background refresh asks FairPlay as the same instructor and replaces the entry
+        self.assertEqual(len(self.roster_calls()), 1)
+        self.assertNotIn('OLD111', str(cache.get(class_a[0])))
+        cache.clear()
+
+    def stale_page(self, page='contest_participation_own', **entry):
+        import time
+        from unittest import mock
+        from django.core.cache import cache
+        from judge.views import fairplay
+        cache.clear()
+        keys = fairplay._classic_cache_keys(self.exam, self.teacher.username)
+        old = {'students': [dict(STUDENTS[0])], 'start_code': 'OLD111', 'invigilator_code': '000000'}
+        data = {'at': time.time() - 300, 'exam': old}
+        data.update(entry)
+        cache.set(keys[0], data, 900)
+        with mock.patch.object(fairplay, '_spawn', lambda function: None):
+            html = self.login(self.teacher).get(reverse(page, args=['fpexam'])).content.decode()
+        cache.clear()
+        return html
+
+    def test_stale_data_is_never_shown_as_live(self):
+        import time
+        failed = self.stale_page(failed=time.time() - 10)
+        self.assertIn('FairPlay could not be reached; showing data from 5 minutes ago.', failed)
+        refreshing = self.stale_page()
+        self.assertIn('Showing data from 5 minutes ago; refreshing.', refreshing)
+        self.assertNotIn('could not be reached', refreshing)
+        fresh = self.stale_page(at=time.time() - 1)
+        self.assertNotIn('minutes ago', fresh)
+
+    def test_the_ranking_tab_says_when_its_mode_summary_is_old_and_ages_read_naturally(self):
+        import time
+        from judge.views.fairplay import _age_text
+        html = self.stale_page(page='contest_ranking', failed=time.time() - 10)
+        self.assertIn('FairPlay could not be reached; showing data from 5 minutes ago.', html)
+        self.assertEqual([_age_text(n) for n in (1, 45, 60, 119, 120)],
+                         ['1 second ago', '45 seconds ago', '1 minute ago', '1 minute ago', '2 minutes ago'])
+
+    def test_the_cached_roster_is_dropped_only_after_fairplay_accepted_an_action(self):
+        import time
+        from django.core.cache import cache
+        from judge.views import fairplay
+        cache.clear()
+        key = fairplay._classic_cache_keys(self.exam, self.teacher.username)[0]
+        cache.set(key, {'at': time.time(), 'exam': {'students': []}}, 900)
+        self.post(self.teacher, {'action': 'approve', 'netid': 'fp_student', 'reason': '', 'confirm': '1'})
+        self.assertIsNotNone(cache.get(key))  # refused (no reason): the stale fallback is kept
+        self.post(self.teacher, {'action': 'approve', 'netid': 'fp_student', 'reason': 'ok', 'confirm': '1'})
+        self.assertIsNone(cache.get(key))
+        cache.clear()
+
+    def test_the_participation_page_with_codes_is_never_stored(self):
+        response = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam']))
+        self.assertIn('no-store', response['Cache-Control'])
+        self.assertIn('private', response['Cache-Control'])
+
+    def test_the_classic_page_asks_fairplay_for_the_exam_only_once(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam']))
+        self.assertEqual(len(self.fp.exam.call_args_list), 1)  # the mode summary and the table share one answer
+        cache.clear()
+
+    def roster_calls(self):
+        return [c for c in self.fp.exam.call_args_list if c.kwargs.get('read_timeout') == 2]
+
+    def test_the_classic_roster_is_cached_briefly_and_an_outage_is_not_retried_at_once(self):
+        from django.core.cache import cache
+        cache.clear()
+        page = reverse('contest_participation_own', args=['fpexam'])
+        client = self.login(self.teacher)
+        client.get(page)
+        client.get(page)
+        self.assertEqual(len(self.roster_calls()), 1)  # a short read timeout, asked once for two loads
+        self.post(self.teacher, {'action': 'sync'})  # any action forgets the cached answer
+        client.get(page)
+        self.assertEqual(len(self.roster_calls()), 2)
+        cache.clear()
+        self.fp.exam.reset_mock()
+        self.fp.exam.side_effect = FairPlayUnreachable()
+        self.assertIn('FairPlay cannot be reached', client.get(page).content.decode())
+        self.assertIn('FairPlay cannot be reached', client.get(page).content.decode())
+        self.assertEqual(len(self.roster_calls()), 1)
+        cache.clear()
+
+    def test_classic_participation_says_so_when_fairplay_is_unreachable(self):
+        self.fp.exam.side_effect = FairPlayUnreachable()
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        self.assertIn('FairPlay cannot be reached', html)
 
     def test_only_editors_and_only_fairplay_exams(self):
         for user in (self.student, self.tester, self.course_admin, self.other_teacher, self.outsider):
             self.assertEqual(self.login(user).get(self.URL).status_code, 404, user.username)
             self.assertEqual(self.post(user, {'action': 'sync'}).status_code, 404, user.username)
         self.assertEqual(Client().get(self.URL).status_code, 302)
+        self.assertEqual(self.login(self.teacher).get(self.URL).status_code, 302)
         with FAIRPLAY_OFF:
             self.assertEqual(self.login(self.teacher).get(self.URL).status_code, 404)
         set_fairplay(self.exam, False)
@@ -139,7 +263,8 @@ class StudentHelpTestCase(PagesMixin, TestCase):
 
     def test_success_redirects_with_one_line(self):
         response = self.confirm(self.teacher, action='release-device', reason='laptop died')
-        self.assertRedirects(response, self.URL, fetch_redirect_response=False)
+        self.assertRedirects(response, reverse('contest_participation_own', args=['fpexam']),
+                             fetch_redirect_response=False)
         self.assertEqual([str(m) for m in get_messages(response.wsgi_request)],
                          ['Done: Move to another computer for Avazbek Khamidov.'])
 
@@ -161,7 +286,8 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertIn('Avazbek', html)
         self.assertIn('shown only once', html)
         self.fp.reissue_code.assert_called_once_with('fpexam', 'fp_student', 'lost the slip')
-        self.assertNotIn('Q9X4TT', self.login(self.teacher).get(self.URL).content.decode())
+        page = reverse('contest_participation_own', args=['fpexam'])
+        self.assertNotIn('Q9X4TT', self.login(self.teacher).get(page).content.decode())
         self.assertNotIn('Q9X4TT', json.dumps(list(self.client.session.items()), default=str))
 
     def test_bridge_errors_show_one_line(self):
@@ -194,10 +320,9 @@ class StudentHelpTestCase(PagesMixin, TestCase):
     @override_settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=True)
     def test_exit_code_is_issued_only_for_the_lock_this_student_set_in_this_exam(self):
         self.fp.native_exit.return_value = {'code': '123456'}
-        self.assertIn('id="fp-mac-exit"', self.login(self.teacher).get(self.URL).content.decode())
         self.bind('K7QM3XPA')
         response = self.ask(self.teacher)
-        self.fp.native_exit.assert_called_once_with('fpexam', 'fp_student', 'K7QM-3XPA', 'locked overnight')
+        self.fp.native_exit.assert_called_once_with('fpexam', 'fp_student', 'K7QM3XPA', 'locked overnight')
         self.assertIn('123456', response.content.decode())
 
     @override_settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=True)
@@ -239,7 +364,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.fp.native_exit.side_effect = FairPlayError('none', status=404)
         self.fp.offline_exit.return_value = {'code': '445566'}
         response = self.ask(self.teacher, code='K7QM-3XPA')
-        self.fp.offline_exit.assert_called_once_with('fpexam', 'fp_student', 'K7QM-3XPA')
+        self.fp.offline_exit.assert_called_once_with('fpexam', 'fp_student', 'K7QM3XPA')
         self.assertIn('445566', response.content.decode())
 
     @override_settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=True)
@@ -255,7 +380,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertIn('777888', response.content.decode())
         self.client_class.assert_called_with(acting_user='fp_teacher')
         args = self.fp.native_exit.call_args.args
-        self.assertEqual(args[:3], ('fpexam', 'fp_student', 'K7QM-3XPA'))
+        self.assertEqual(args[:3], ('fpexam', 'fp_student', 'K7QM3XPA'))
         self.assertTrue(args[3].startswith('stuck overnight'))
         self.assertTrue(args[3].endswith('(released by site administrator fp_admin)'))
         self.assertLessEqual(len(args[3]), 200)
@@ -323,18 +448,10 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertIn('fp_admin', logs.output[0])
         self.assertIn('654321', response.content.decode())
 
-    def test_classic_mode_has_no_standalone_mac_exit_form(self):
-        self.assertNotIn('id="fp-mac-exit"', self.login(self.teacher).get(self.URL).content.decode())
-
-    def test_unreachable_page(self):
-        self.fp.exam.side_effect = FairPlayUnreachable()
-        response = self.login(self.teacher).get(self.URL)
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('FairPlay cannot be reached', response.content.decode())
-
     def test_sync_now(self):
         response = self.post(self.teacher, {'action': 'sync'})
-        self.assertRedirects(response, self.URL, fetch_redirect_response=False)
+        self.assertRedirects(response, reverse('contest_participation_own', args=['fpexam']),
+                             fetch_redirect_response=False)
         self.fp.sync_ping.assert_called_once()
         self.assertEqual(self.fp.sync_ping.call_args.kwargs['exam_key'], 'fpexam')
 

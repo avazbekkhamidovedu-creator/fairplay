@@ -18,7 +18,7 @@ from judge.views import (
     problem, problem_import, problem_manage, ranked_submission, register, stats, status, submission, tasks, ticket, two_factor, user, widgets,
 )
 from judge.views.api import fairplay as fairplay_api
-from judge.views.fairplay_launch import ContestFairPlayLaunch, ContestFairPlayLaunchFile
+from judge.views.fairplay_launch import ContestFairPlayLaunch, ContestFairPlayLaunchFile, ContestFairPlayLaunchStatus
 from judge.views.editor_attachment import editor_file_download, editor_file_uploader
 from judge.views.problem_create_v2 import (
     ProblemCreateV2AIDecomposeView, ProblemCreateV2AIDifficultyView,
@@ -305,6 +305,7 @@ urlpatterns = [
         path('/access-codes.pdf', fairplay.ContestAccessCodesPdf.as_view(), name='contest_access_codes_pdf'),
         path('/fairplay-help', fairplay.ContestStudentHelp.as_view(), name='contest_fairplay_help'),
         path('/fairplay-launch', ContestFairPlayLaunch.as_view(), name='contest_fairplay_launch'),
+        path('/fairplay-launch/status', ContestFairPlayLaunchStatus.as_view(), name='contest_fairplay_launch_status'),
         path('/fairplay-launch-file', ContestFairPlayLaunchFile.as_view(), name='contest_fairplay_launch_file'),
         path('/stats', contests.ContestStats.as_view(), name='contest_stats'),
         path('/analytics', contest_analytics.ContestAnalytics.as_view(), name='contest_analytics'),

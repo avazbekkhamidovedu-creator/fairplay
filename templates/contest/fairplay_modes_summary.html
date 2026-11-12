@@ -2,6 +2,9 @@
 <p class="fairplay-exam-row"><strong>{{ _('FairPlay required') }}</strong> — {{ _('Students must open this exam in the FairPlay app. No access code is needed.') }}</p>
 {% else %}
 {% set t = fairplay_modes.table %}
+{% if fairplay_modes.stale and tab != 'participation' %}
+<p class="fairplay-exam-row" role="status">{% if fairplay_modes.stale.failed %}{{ _('FairPlay could not be reached; showing data from %(age)s.', age=fairplay_modes.stale.age) }}{% else %}{{ _('Showing data from %(age)s; refreshing.', age=fairplay_modes.stale.age) }}{% endif %}</p>
+{% endif %}
 <p class="fairplay-exam-row">
     <strong>{{ _('FairPlay exam: yes') }}</strong>
     {% if not t %}

@@ -15,7 +15,7 @@ from judge.models import Class
 from judge.models.tests.util import create_organization, create_user
 from judge.utils.fairplay_client import CLASS_STATUS_CACHE_KEY, FairPlayClient, FairPlayError, FairPlayUnreachable, \
     QUICK_READ_TIMEOUT, cached_class_status
-from judge.utils.fairplay_modes import fairplay_mode_table
+from judge.utils.fairplay_modes import mode_table_from_exam
 from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP, body_sha256, canonical_string, \
     direction_key, sign, signed_headers
 from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, \
@@ -474,9 +474,6 @@ class PagesMixin(FairPlayDataMixin):
         self.client_class = patcher.start()
         self.addCleanup(patcher.stop)
         self.fp = self.client_class.return_value
-        modes_patcher = mock.patch('judge.utils.fairplay_modes.FairPlayClient', self.client_class)
-        modes_patcher.start()
-        self.addCleanup(modes_patcher.stop)
         cache.clear()
         self.fp.exam.return_value = exam()
         self.fp.class_status.return_value = {
@@ -521,7 +518,7 @@ class AccessCodesTestCase(PagesMixin, TestCase):
         self.assertIn(self.BUTTON, html)
         self.assertIn(url, html)
         self.assertIn('class="fp-tools"', html)
-        self.assertIn('FairPlay student help', html)
+        self.assertNotIn('FairPlay student help', html)
         student_html = self.participation(self.student).content.decode()
         self.assertNotIn(self.BUTTON, student_html)
         self.assertNotIn('class="fp-tools"', student_html)
@@ -580,8 +577,7 @@ MODE_STUDENTS = [
 @FAIRPLAY_ON
 class ModeTableTestCase(PagesMixin, TestCase):
     def test_cells_from_batch_response(self):
-        self.fp.exam.return_value = exam(settings={'strong_lock': True}, students=MODE_STUDENTS)
-        table = fairplay_mode_table(self.exam, 'fp_teacher')
+        table = mode_table_from_exam(exam(settings={'strong_lock': True}, students=MODE_STUDENTS))
         cell = table['students']['fp_student']
         self.assertEqual((cell['mode'], cell['device'], cell['second_device']), ('on', 'bound', 2))
         self.assertEqual(table['students']['fp_classmate']['device'], 'unused')
@@ -592,18 +588,6 @@ class ModeTableTestCase(PagesMixin, TestCase):
         self.assertIs(table['strong_lock'], True)
         self.assertEqual(table['counts']['on'], 1)
         self.assertEqual((table['second_device_total'], table['second_device_students']), (2, 1))
-
-    def test_one_batch_call_cached_briefly(self):
-        fairplay_mode_table(self.exam, 'fp_teacher')
-        fairplay_mode_table(self.exam, 'fp_teacher')
-        self.fp.exam.assert_called_once_with('fpexam', read_timeout=QUICK_READ_TIMEOUT)
-
-    def test_unreachable_is_not_cached(self):
-        self.fp.exam.side_effect = FairPlayUnreachable()
-        self.assertIsNone(fairplay_mode_table(self.exam, 'fp_teacher'))
-        self.fp.exam.side_effect = None
-        self.fp.exam.return_value = exam(students=MODE_STUDENTS)
-        self.assertIsNotNone(fairplay_mode_table(self.exam, 'fp_teacher'))
 
     def test_summary_row_for_editors_only(self):
         self.fp.exam.return_value = exam(settings={'strong_lock': False}, students=MODE_STUDENTS)

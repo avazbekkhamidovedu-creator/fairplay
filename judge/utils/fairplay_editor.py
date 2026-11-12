@@ -300,6 +300,12 @@ def open_exam_values(contest, acting_user=None, with_lock_sites=False):
 LOCK_SITES_FRESH = 15
 LOCK_SITES_FAILURE = 2
 LOCK_SITES_STALE = 600
+# A waiter covers the fetch's own worst case (connect + read timeout of the quick read, see _fetch_lock_sites) plus a
+# margin, so an empty list is never signed only because a fetch was slow. It still ends the moment the fetch finishes.
+LOCK_SITES_WAIT = 6.5
+LOCK_SITES_FLIGHT_TTL = 10  # comfortably above the fetch worst case (6 s); waiters bound their own wait
+LOCK_SITES_MAX_WAITERS = 8  # per exam: a burst of claims cannot park every worker
+LOCK_SITES_POLL = 0.2
 LOCK_SITES_LOGGER = logging.getLogger('judge.fairplay')
 
 
@@ -316,15 +322,49 @@ def _fetch_lock_sites(contest, acting_user):
     return clean_lock_sites(fp_settings.get('lock_sites'))
 
 
-def refresh_lock_sites(contest):
+def refresh_lock_sites(contest, wait=False):
     """Fill the per-exam cache; call it before any row lock is taken. One caller asks FairPlay at a time, the last
-    good value is served for 10 minutes when FairPlay fails, and a failure is remembered for 2 seconds only."""
+    good value is served for 10 minutes when FairPlay fails, and a failure is remembered for 2 seconds only.
+    Only a caller with wait=True (the claim and recover paths, which sign the first state of an exam) waits for a fetch
+    already in flight; renew and state heartbeats never do."""
     from django.core.cache import cache
     fresh, good, flight = ('fp-browser-sites-v2:%s' % contest.pk, 'fp-lock-sites-good:%s' % contest.pk,
                            'fp-lock-sites-flight:%s' % contest.pk)
     if isinstance(cache.get(fresh), dict):
         return
-    if not cache.add(flight, 1, 10):
+    import uuid
+    token = uuid.uuid4().hex  # the flight key is owned: only its owner removes it
+    if not cache.add(flight, token, LOCK_SITES_FLIGHT_TTL):
+        # Another request is already asking FairPlay. With a last-good value cached, signed_lock_sites serves it and
+        # nobody waits. Only a request with nothing good to serve waits for the answer, so a first claim never signs an
+        # empty (closed-book) list just because a fetch was in flight. Bounded; never fails the caller. (A failed fetch
+        # leaves a 2 s answer in the fresh key, which returns above before anything waits.)
+        if not wait or isinstance(cache.get(good), dict):
+            return
+        import time
+        waiters = 'fp-lock-sites-waiters:%s' % contest.pk
+        ttl = int(LOCK_SITES_WAIT) + 2
+        cache.add(waiters, 0, ttl)
+        try:
+            parked = cache.incr(waiters)
+            cache.touch(waiters, ttl)  # every arrival renews the count, so it outlives the waiters it counts
+        except ValueError:  # the entry expired between add and incr: start the count again
+            cache.set(waiters, 1, ttl)
+            parked = 1
+        try:
+            if parked <= LOCK_SITES_MAX_WAITERS:
+                deadline = time.monotonic() + LOCK_SITES_WAIT
+                while time.monotonic() < deadline:
+                    if isinstance(cache.get(fresh), dict) or not cache.get(flight):
+                        break
+                    time.sleep(LOCK_SITES_POLL)
+            # beyond the cap the caller signs the current value without waiting
+        finally:
+            try:
+                if cache.decr(waiters) < 0:
+                    cache.set(waiters, 0, ttl)  # an expired and recreated count never goes below zero
+            except ValueError:
+                pass
         return
     try:
         editor = acting_editor_username(contest)
@@ -341,7 +381,8 @@ def refresh_lock_sites(contest):
             kept = cache.get(good)
             cache.set(fresh, kept if isinstance(kept, dict) else clean_lock_sites(None), LOCK_SITES_FAILURE)
     finally:
-        cache.delete(flight)
+        if cache.get(flight) == token:
+            cache.delete(flight)
 
 
 _ASSET_DENY_SUFFIX = (

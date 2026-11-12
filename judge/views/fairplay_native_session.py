@@ -11,9 +11,11 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
 from judge.models import Contest, FairPlayDeviceSession
+from judge.utils.fairplay import native_browser_enabled
 from judge.utils.fairplay_native_admission import session_digest
 from judge.utils.fairplay_native_proxy import verified_request_fingerprint
-from judge.utils.fairplay_device_session import claim_device, renew_for_request, bind_lock, DeviceSessionDenied
+from judge.utils.fairplay_device_session import (claim_device, renew_for_request, bind_lock, note_app_launch,
+                                                 DeviceSessionDenied)
 
 logger = logging.getLogger('judge.fairplay')
 _last_logged = {}
@@ -37,7 +39,7 @@ def request_identity(request):
     cached = getattr(request, '_fairplay_identity', None)
     if cached is not None:
         return cached
-    if getattr(settings, 'FAIRPLAY_NATIVE_BROWSER_ENABLED', False) is not True:
+    if not native_browser_enabled():
         raise deny(request, 'native-disabled')
     if not request.user.is_authenticated:
         raise deny(request, 'not-authenticated')
@@ -151,16 +153,16 @@ def close_if_due(record):
     return record
 
 
-def warm_sites(contest):
+def warm_sites(contest, wait=False):
     from judge.utils.fairplay_editor import refresh_lock_sites
-    refresh_lock_sites(contest)
+    refresh_lock_sites(contest, wait=wait)
 
 
-def prefetch_extras(contest):
+def prefetch_extras(contest, wait=False):
     """Everything the signed state reads from the cache, fetched BEFORE any row lock is taken."""
     from judge.utils.fairplay_editor import _log_hourly, oj_asset_origins, signed_lock_sites
     try:
-        warm_sites(contest)
+        warm_sites(contest, wait=wait)
         sites = signed_lock_sites(contest)
     except Exception:
         _log_hourly('sites', 'FairPlay could not work out the allowed sites; signing none')
@@ -214,7 +216,7 @@ def native_claim(request, key):
     contest, refusal = native_contest(request, key)
     if refusal is not None:
         return refusal
-    extras = prefetch_extras(contest)
+    extras = prefetch_extras(contest, wait=True)
     owner = known_lock_owner(request.POST.get('lock', ''))
     close_blocking_session(request.user.pk)
     return _claim_locked(request, contest, fingerprint, digest, extras, owner)
@@ -240,6 +242,15 @@ def known_lock_owner(lock):
     return lock_owner(code) if code else None
 
 
+def _note_launch_if_running(request, contest, session):
+    """The launch page counts a claim or recover only when it left a running session that is not on hold; a completed,
+    released or held one, or one the deadline close just ended, is not the app taking the exam over."""
+    from judge.utils.fairplay_device_session import session_on_hold
+    if (isinstance(session, FairPlayDeviceSession) and session.state in ('active', 'finishing')
+            and not session_on_hold(session)):
+        note_app_launch(request.user.pk, contest.pk)
+
+
 @transaction.atomic
 def _claim_locked(request, contest, fingerprint, digest, extras=None, owner=None):
     try:
@@ -251,7 +262,9 @@ def _claim_locked(request, contest, fingerprint, digest, extras=None, owner=None
     if not bind_lock(session, request.POST.get('lock', ''), owner=owner):
         transaction.set_rollback(True)
         return JsonResponse({'error': 'This Mac code belongs to another exam or student.'}, status=409)
-    return signed_state(request, close_if_due(session), extras=extras)
+    session = close_if_due(session)
+    _note_launch_if_running(request, contest, session)
+    return signed_state(request, session, extras=extras)
 
 
 def owned_record(request, session_id):
@@ -457,7 +470,7 @@ def native_recover(request, key):
     contest, refusal = native_contest(request, key)
     if refusal is not None:
         return refusal
-    extras = prefetch_extras(contest)
+    extras = prefetch_extras(contest, wait=True)
     owner = known_lock_owner(request.POST.get('lock', ''))
     return _recover_locked(request, contest, fingerprint, digest, extras, owner)
 
@@ -489,6 +502,7 @@ def _recover_locked(request, contest, fingerprint, digest, extras=None, owner=No
             transaction.set_rollback(True)
             return JsonResponse({'error': 'This Mac code belongs to another exam or student.'}, status=409)
         record = close_if_due(record)
+        _note_launch_if_running(request, contest, record)
     return signed_state(request, record, extras=extras)
 
 
