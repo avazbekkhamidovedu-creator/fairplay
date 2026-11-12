@@ -115,11 +115,13 @@
     setDraftStatus(gettext('Answer saved'), 'saved');
     showAutosaveHint(true);
   }
+  var leavingFlush = false;  // Leave is waiting for the last answers: retries are progress, not an error
   function markServerDraftFailed(payload, attempt) {
     if (nativeAdmitted && payload !== latestServerDraft) return;
     if (attempt < SERVER_DRAFT_RETRY_MS.length) {
       serverDraftSync = 'error';
-      setDraftStatus(gettext('Not synced to the server. Retrying…'), 'error');
+      if (leavingFlush) setDraftStatus(gettext('Submitting your answers…'), 'saving');
+      else setDraftStatus(gettext('Not synced to the server. Retrying…'), 'error');
       showAutosaveHint(false);
       serverDraftRetryTimer = setTimeout(function () {
         serverDraftRetryTimer = null;
@@ -203,8 +205,11 @@
     return sendServerDraft(payload);
   }
   // Leave waits for this so the harvest in ContestLeave sees the last keystrokes.
+  window.dkuojEndLeaveFlush = function () { leavingFlush = false; };  // Leave was reset: real failures show as errors again
   window.dkuojFlushBlocksLeave = nativeAdmitted;
   window.dkuojFlushServerDraft = nativeAdmitted ? async function () {
+    leavingFlush = true;
+    setDraftStatus(gettext('Submitting your answers…'), 'saving');
     await flushServerDraft({ beacon: false });
     await serverDraftQueue;
     if (pendingServerDraft) return window.dkuojFlushServerDraft();

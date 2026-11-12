@@ -294,8 +294,7 @@ def participation_rows(request, contest, instructor=None):
         row['reopen_minutes'] = reopen_minutes_from((deadline - now).total_seconds())
         notes = []
         if row['state'] == 'submitting':
-            notes.append(_('The student handed in and the hand-in is being completed. Reopen the exam once it is '
-                           'complete if they need to continue.'))
+            notes.append(_('Reopen the exam once the hand-in is complete if they need to continue.'))
         if session.state == 'active':
             if lease_expired_flagged(session, now=now, deadline=deadline,
                                      recorded=session.pk in flags['expired']):
@@ -538,9 +537,8 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                     if not mac_code:
                         if not candidates:
                             return _code_needed(request, contest, netid, name, reason, _(
-                                "No locked computer is on record for %(name)s in this exam. Type the code shown on "
-                                "the student's screen.") % {'name': name} + (
-                                    ' ' + _('Or use Unlock student device if the computer is online.')
+                                "No locked computer is on record for %(name)s in this exam.") % {'name': name} + (
+                                    ' ' + _('If the computer is online, use Unlock student device instead.')
                                     if native_browser_enabled() else ''))
                         can_type = ask = True
                         if len(candidates) == 1 and candidates[0][1] == 'bound':
@@ -695,8 +693,7 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                     if e.status == 404 and source == 'on record':
                         return _code_needed(request, contest, netid, name, untagged_reason, _(
                             'The lock on record for %(name)s is not the one FairPlay knows now (the computer may have '
-                            'a newer code). Type the code shown on the student\'s screen, or use Unlock student '
-                            'device if the computer is online.') % {'name': name})
+                            'a newer code). If the computer is online, use Unlock student device instead.') % {'name': name})
                     if e.status == 404 and native_browser_enabled():
                         messages.error(request, _('No FairPlay lock was registered for that code. The Mac has not registered it yet '
                                                   'and may still be retrying. Ask the student to close and reopen the Leave '

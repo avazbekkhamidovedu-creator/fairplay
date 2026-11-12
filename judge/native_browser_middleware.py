@@ -32,6 +32,21 @@ class NativeBrowserAdmissionMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
+    @staticmethod
+    def repeated_leave(request, route, fingerprint, digest):
+        """A Leave that arrives after this same device's newest session for the exam has completed (the hand-in page
+        re-posting by itself, a second press, a back-button restore) gets the 'Exam submitted' page, not a
+        'not in this contest' error. A device that is not that session's, or a session that is not completed, is
+        left to the normal handling."""
+        from judge.models import FairPlayDeviceSession
+        from judge.views.fairplay_native_session import submitted_response
+        newest = FairPlayDeviceSession.objects.filter(user_id=request.user.pk, contest__key=route.kwargs.get('contest')) \
+            .order_by('-created_at', '-pk').first()
+        if newest is None or newest.state != 'completed' or newest.fingerprint != fingerprint \
+                or newest.browser_digest != digest:
+            return None
+        return submitted_response(request)
+
     def __call__(self, request):
         if not native_browser_enabled() or not request.user.is_authenticated:
             return self.get_response(request)
@@ -60,6 +75,10 @@ class NativeBrowserAdmissionMiddleware:
             return response
         if name not in _CONTEST_ROUTES and name not in _PROBLEM_ROUTES:
             return self.get_response(request)
+        if name == 'contest_leave':
+            repeated = self.repeated_leave(request, route, fingerprint, digest)
+            if repeated is not None:
+                return repeated
         with transaction.atomic():
             locked_profile = Profile.objects.select_for_update().get(user_id=request.user.pk)
             if name == 'contest_join':

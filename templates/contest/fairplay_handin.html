@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block body %}
+<style>
+.fp-handin { box-sizing: border-box; max-width: 34em; margin: 1.5em auto; padding: 1.3em 1.5em; text-align: center; }
+.fp-handin .fp-spinner { width: 2.4em; height: 2.4em; margin: 0 auto 1em; border: .3em solid #ccc; border-top-color: #337ab7; border-radius: 50%; animation: fp-handin-spin 1s linear infinite; }
+.fp-handin progress { width: 100%; max-width: 22em; }
+@keyframes fp-handin-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .fp-handin .fp-spinner { animation: none; } }
+</style>
+<div class="fp-handin" id="fp-handin" data-state="{{ 'checking' if checking else 'failed' }}">
+    <form method="post" action="{{ url('contest_leave', contest.key) }}" id="fp-handin-form" class="fp-handin-form">
+        {% csrf_token %}
+        {% if checking %}
+        <input type="hidden" name="handin_attempt" value="{{ attempt }}">
+            <div class="fp-spinner" aria-hidden="true"></div>
+            <h3 role="status">{{ _('Checking that your answers reached DKU OJ...') }}</h3>
+            <p><progress max="{{ max_attempts }}" value="{{ attempt }}"></progress></p>
+            <p>{{ _('Please wait. Your answers are saved. Do not close the exam.') }}</p>
+            <noscript><button type="submit" class="button">{{ _('Check again') }}</button></noscript>
+        {% else %}
+            <h3 role="alert">{{ _('Your answers have not reached DKU OJ yet') }}</h3>
+            <p>{{ _('Your answers are kept as drafts in DKU OJ. Check your connection and press Try again.') }}</p>
+            <button type="submit" name="handin_attempt" value="0" class="button" style="width:auto">{{ _('Try again') }}</button>
+            <button type="submit" name="handin_attempt" value="0" class="button" style="width:auto">{{ _('Leave') }}</button>
+        {% endif %}
+    </form>
+</div>
+{% if checking %}
+<script>
+(function () {
+    var form = document.getElementById('fp-handin-form'), sent = false;
+    function again() { if (sent) { return; } sent = true; form.submit(); }
+    setTimeout(again, {{ retry_ms }});
+})();
+</script>
+{% endif %}
+{% endblock %}

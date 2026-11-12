@@ -87,6 +87,20 @@ class StudentHelpTestCase(PagesMixin, TestCase):
                      'Approve {who} to resume the exam?', 'Give {who} extra time?'):
             self.assertIn(text, unescape(menu))
 
+    def test_classic_actions_open_the_same_dialog_with_their_reason_lists(self):
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        self.assertNotIn('window.confirm', html)
+        self.assertNotIn('window.prompt', html)
+        self.assertEqual(html.count('<dialog'), 1)
+        menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
+        for key in ('approve', 'reopen', 'extra-time', 'release-device', 'reissue'):
+            self.assertIn('data-reasons="%s"' % key, menu)
+        self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
+        self.assertEqual(menu.count('data-minutes="1"'), 2)
+        for text in ('Student lost or cannot read the code', 'App was reinstalled', 'Approved retake of a part',
+                     'Disruption in the room', 's computer ran out of battery'):
+            self.assertIn(text, html)
+
     def test_classic_rows_keep_the_swap_request_reopen_code_and_hand_in_count(self):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
         table = html.split('id="fp-participation-head"')[1].split('</table>')[0]

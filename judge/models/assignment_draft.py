@@ -14,7 +14,7 @@ things: the problem was never submitted, or it was submitted and then edited aga
 """
 import json
 
-from django.db import models
+from django.db import models, transaction
 from django.db.models import CASCADE
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
@@ -141,9 +141,14 @@ def _assignment_draft_file_delete_stored_object(sender, instance, **kwargs):
     """
     if not instance.file:
         return
-    try:
-        instance.file.delete(save=False)
-    except Exception:
-        # A store that is briefly unreachable must not block deleting the row; the object is then
-        # unreferenced, which is what the storage sweep is for.
-        pass
+    name, storage = instance.file.name, instance.file.storage
+
+    def drop():
+        try:
+            storage.delete(name)
+        except Exception:
+            # A store that is briefly unreachable must not block deleting the row; the object is then
+            # unreferenced, which is what the storage sweep is for.
+            pass
+    # Only after the delete is committed: a hand-in that rolls back brings the row back, and the file must still exist.
+    transaction.on_commit(drop)

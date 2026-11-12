@@ -162,7 +162,8 @@ class FileDraftUploadTestCase(FileDraftTestMixin, TestCase):
         self._upload()
         name = self._draft_file().file.name
 
-        response = self.client.delete(self._url())
+        with self.captureOnCommitCallbacks(execute=True):  # the object goes after the commit
+            response = self.client.delete(self._url())
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(AssignmentDraftFile.objects.exists())
@@ -216,7 +217,25 @@ class FileDraftHarvestTestCase(FileDraftTestMixin, TestCase):
     """At the deadline the saved file has to become a submission a teacher can actually open."""
 
     def _harvest(self):
-        return harvest_participation(self.participation)
+        # The stored draft file is dropped only once the transaction commits.
+        with self.captureOnCommitCallbacks(execute=True):
+            return harvest_participation(self.participation)
+
+    def test_a_rolled_back_hand_in_keeps_the_stored_file_and_the_retry_submits_it(self):
+        from django.db import transaction
+        self._upload()
+        key = self._draft_file().file.name
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            with transaction.atomic():  # a hand-in refused after the harvest rolls everything back
+                self.assertEqual(len(harvest_participation(self.participation)), 1)
+                transaction.set_rollback(True)
+        self.assertEqual(callbacks, [])  # nothing is left to delete the file after the rollback
+        self.assertTrue(self.storage.exists(key))  # the file survived the failed attempt
+        self.assertEqual(AssignmentDraftFile.objects.count(), 1)
+        created = self._harvest()  # the retry
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].upload.file.read(), PDF)
+        self.assertFalse(self.storage.exists(key))  # dropped after the commit
 
     def test_the_saved_file_becomes_a_submission(self):
         self._upload()

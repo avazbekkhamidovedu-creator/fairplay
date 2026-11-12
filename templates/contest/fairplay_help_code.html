@@ -1,12 +1,20 @@
 {% extends "base.html" %}
 
 {% block body %}
+<style>
+.fairplay-help { box-sizing: border-box; max-width: 34em; margin: 1.5em auto; padding: 1.3em 1.5em; border: 1px solid #ccc; border-radius: 10px; background: #fff; color: #333; box-shadow: 0 8px 28px rgba(0,0,0,.18); text-align: center; }
+.fairplay-help h2 { margin-top: 0; }
+.fairplay-help table { margin: 0 auto 1em; text-align: left; }
+.fairplay-help input[type=text] { box-sizing: border-box; max-width: 100%; padding: .45em .6em; font-size: 1em; }
+.fairplay-help .button { display: inline-block; margin: .3em .3em 0; }
+@media (max-width: 600px) { .fairplay-help { margin: .8em; padding: 1em; } }
+</style>
 <div class="fairplay-help">
-    <h2>{{ _('Participation') }}: {{ contest.name }}</h2>
+    <h2>{{ contest.name }}</h2>
     <p>{{ first_name }} {{ last_name }} ({{ netid }})</p>
     <p>{% if offline %}{{ _('Offline exit code') }}{% else %}{{ _('New access code') }}{% endif %}:</p>
     <p id="fairplay-help-code" style="font-family: monospace; font-size: 2em; letter-spacing: 0.15em; font-weight: bold">{{ code }}</p>
-    {% if lock_code %}<p id="fairplay-help-lock">{{ _('Exit code for lock') }} <strong style="font-family: monospace; letter-spacing: 0.1em">{{ lock_code }}</strong>. {{ _("Check that the student's screen shows this lock code.") }}</p>{% endif %}
+    {% if lock_code %}<p id="fairplay-help-lock">{{ _('For lock code') }} <strong style="font-family: monospace; letter-spacing: 0.1em">{{ lock_code }}</strong>.</p>{% endif %}
     <p><strong>{{ _('Write this down now. It is shown only once and is not kept in DKU OJ. Do not reload this page: that would issue another code.') }}</strong></p>
     <p><a href="{{ url('contest_participation_own', contest.key) }}">{{ _('Back to Participation') }}</a></p>
 </div>

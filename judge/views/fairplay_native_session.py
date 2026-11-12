@@ -156,6 +156,22 @@ def close_if_due(record):
     return record
 
 
+CLOSE_THROTTLE_SECONDS = 10
+
+
+def close_if_due_throttled(record):
+    """close_if_due for the state poll: past the deadline it takes row locks, so one session runs it at most once per
+    CLOSE_THROTTLE_SECONDS; the polls in between just re-read the session."""
+    from django.utils import timezone
+    from judge.utils.fairplay_device_session import personal_deadline
+    if not (isinstance(record, FairPlayDeviceSession) and record.state in ('active', 'finishing')
+            and personal_deadline(record) <= timezone.now()):
+        return record
+    if not cache.add('fp-native-close-%s' % record.pk, 1, CLOSE_THROTTLE_SECONDS):
+        return FairPlayDeviceSession.objects.select_related('contest', 'participation').get(pk=record.pk)
+    return close_after_deadline(record)
+
+
 def warm_sites(contest, wait=False):
     from judge.utils.fairplay_editor import refresh_lock_sites
     refresh_lock_sites(contest, wait=wait)
@@ -301,10 +317,11 @@ def owned_record(request, session_id):
 @require_GET
 def native_state(request, session_id):
     # Revoked/finished devices can retrieve only their own signed terminal state.
+    request.no_profile_update = True  # a 5 s poll must not update the Profile row the hand-in locks
     record = owned_record(request, session_id)
     check_signing(request)
     extras = prefetch_extras(record.contest)
-    return signed_state(request, close_if_due(record), extras=extras)
+    return signed_state(request, close_if_due_throttled(record), extras=extras)
 
 
 @require_POST
@@ -443,6 +460,7 @@ def close_after_deadline(record):
 @transaction.atomic
 def native_finish(request, session_id):
     # Validate the response request before touching answers or uploaded files.
+    request.no_profile_update = True
     if request.POST.get('confirm') != '1' or not re.fullmatch(r'[A-Za-z0-9-]{32,64}', request.POST.get('nonce', '')):
         raise Http404()
     record = owned_record(request, session_id)
@@ -475,6 +493,7 @@ def native_finish(request, session_id):
 @require_POST
 @transaction.atomic
 def native_abort(request, session_id):
+    request.no_profile_update = True
     if request.POST.get('confirm') != '1':
         raise Http404()
     record = owned_record(request, session_id)
@@ -535,6 +554,40 @@ def _recover_locked(request, contest, fingerprint, digest, extras=None, owner=No
     return signed_state(request, record, extras=extras)
 
 
+HANDIN_MAX_ATTEMPTS = 5   # checks, one every HANDIN_RETRY_MS, before the hand-in is reported as failed
+HANDIN_RETRY_MS = 3000
+
+
+def handin_pending(request, participation):
+    """The hand-in did not finish on this try. The page that answers the Leave POST shows a progress state and posts
+    the same (repeatable) Leave again by itself; only after the last try does it say the answers have not arrived,
+    with a Try again button that starts the checks over. The attempt counter is a posted number, never trusted for
+    anything but this wording."""
+    try:
+        attempt = max(0, min(int(request.POST.get('handin_attempt', '0')), HANDIN_MAX_ATTEMPTS)) + 1
+    except ValueError:
+        attempt = 1
+    checking = attempt < HANDIN_MAX_ATTEMPTS
+    from django.shortcuts import render
+    response = render(request, 'contest/fairplay_handin.html', {
+        'contest': participation.contest, 'checking': checking, 'attempt': attempt,
+        'max_attempts': HANDIN_MAX_ATTEMPTS, 'retry_ms': HANDIN_RETRY_MS,
+        # The apps read 'Hand-in not complete' as the final failure: only the page after the last try carries it.
+        'title': 'Checking your answers' if checking else 'Hand-in not complete',
+        'content_title': 'Checking your answers' if checking else 'Hand-in not complete',
+    }, status=409)
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+def submitted_response(request):
+    from judge.utils.views import generic_message
+    response = generic_message(request, 'Exam submitted',
+        'DKU OJ has received your exam. FairPlay is verifying completion and will unlock your computer automatically. You do not need to start the exam again.')
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
 def finish_from_website(request, participation):
     """Complete an admitted native attempt through DKU's existing leave POST.
 
@@ -548,14 +601,9 @@ def finish_from_website(request, participation):
     outcome = _finish_from_website_locked(request, participation, identity)
     if outcome is None:
         return None
-    from judge.utils.views import generic_message
     if outcome == 'not_complete':
-        return generic_message(request, 'Hand-in not complete',
-            'Your answers are saved but the hand-in did not finish. Go back to the exam and press Leave again.', 409)
-    response = generic_message(request, 'Exam submitted',
-        'DKU OJ has received your exam. FairPlay is verifying completion and will unlock your computer automatically. You do not need to start the exam again.')
-    response['Cache-Control'] = 'private, no-store'
-    return response
+        return handin_pending(request, participation)
+    return submitted_response(request)
 
 
 @transaction.atomic
@@ -592,8 +640,16 @@ def _finish_from_website_locked(request, participation, identity):
     try:
         begin_finishing(**arguments)
         mark_hand_in(record)
-        harvest_participation(participation, judge_on_commit=True)
-        confirm_completed(**arguments)
+        # A draft that landed just after the first harvest is taken by one more harvest here, under the same account
+        # lock, before the hand-in is called incomplete.
+        for last_try in (False, True):
+            harvest_participation(participation, judge_on_commit=True)
+            try:
+                confirm_completed(**arguments)
+                break
+            except DeviceSessionDenied:
+                if last_try:
+                    raise
     except DeviceSessionDenied:
         transaction.set_rollback(True)
         return 'not_complete'

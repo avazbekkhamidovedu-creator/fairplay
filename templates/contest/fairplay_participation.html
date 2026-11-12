@@ -15,6 +15,20 @@
 .fp-part-menu button:hover, .fp-part-menu button:focus { background: #f0f4f8; outline: none; }
 .fp-part-menu button.fp-danger { color: #b94a48; }
 .fp-part-menu button[hidden] { display: none; }
+.fp-dialog { width: min(28em, calc(100vw - 2em)); max-height: calc(100vh - 2em); overflow-y: auto; box-sizing: border-box; padding: 0; border: 1px solid #ccc; border-radius: 10px; background: #fff; color: #333; box-shadow: 0 10px 34px rgba(0,0,0,.32); margin: auto; }
+.fp-dialog::backdrop { background: rgba(0,0,0,.45); }
+.fp-dialog #fp-part-dialog-form { padding: 1.2em 1.4em; }
+.fp-dialog h3 { margin: 0 0 .6em; }
+.fp-dialog .fp-question { margin: 0 0 1em; line-height: 1.45; }
+.fp-dialog .fp-field { display: block; margin: 0 0 .8em; font-weight: 600; }
+.fp-dialog .fp-field[hidden], .fp-dialog #fp-part-other[hidden] { display: none; }
+.fp-dialog input[type=number], .fp-dialog select, .fp-dialog #fp-part-other { display: block; width: 100%; box-sizing: border-box; margin: .3em 0 0; padding: .45em .6em; font: inherit; font-weight: normal; }
+.fp-dialog #fp-part-other { margin-bottom: .8em; }
+.fp-dialog .fp-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .6em; margin-top: 1.1em; }
+.fp-dialog .fp-btn { min-width: 6.5em; padding: .5em 1.2em; border: 1px solid #337ab7; border-radius: 6px; background: #337ab7; color: #fff; cursor: pointer; font: inherit; }
+.fp-dialog .fp-btn.fp-cancel { background: #fff; color: #333; border-color: #ccc; }
+.fp-dialog .fp-btn:disabled { opacity: .5; cursor: not-allowed; }
+#content ul.messages { max-width: 44em; margin: 0 auto 1em; text-align: center; font-size: 1.05em; font-weight: 600; }
 </style>
 <div id="fp-participation-head">
     {% if not fairplay_native_mode %}

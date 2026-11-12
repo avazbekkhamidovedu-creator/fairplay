@@ -1452,6 +1452,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         with patch('judge.utils.assignment_harvest.create_submission', side_effect=RuntimeError('storage')):
             response = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
         self.assertEqual(response.status_code, 409, response.content[:300])
+        self.assertContains(response, 'Checking that your answers reached DKU OJ', status_code=409)
         self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'active')
         self.assertIsNotNone(self.student.profile.__class__.objects.get(pk=self.student.profile.pk).current_contest_id)
 
@@ -1463,10 +1464,113 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.client_request('POST', '/contest/fpexam/draft/fpshort', {'content': '{"text":"keep"}'})
         with patch('judge.utils.assignment_harvest.create_submission', side_effect=RuntimeError('storage')):
             response = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
-        self.assertEqual(response.status_code, 409)
-        self.assertContains(response, 'Hand-in not complete', status_code=409)
+        # The first tries show a progress state, not a failure, and repeat the Leave by themselves.
+        self.assertEqual(response.status_code, 409)  # the apps key on this page: title and status stay
+        self.assertContains(response, 'Checking that your answers reached DKU OJ', status_code=409)
+        self.assertContains(response, '<title>Checking your answers', status_code=409)
+        self.assertNotContains(response, '<title>Hand-in not complete', status_code=409)  # not yet the final failure
+        self.assertContains(response, 'data-state="checking"', status_code=409)
+        self.assertContains(response, 'name="handin_attempt" value="1"', status_code=409)
+        self.assertNotContains(response, 'have not reached DKU OJ yet', status_code=409)
         self.assertNotEqual(response['Content-Type'].split(';')[0], 'application/json')
         self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'active')
+        # Only after the last try is it a failure, with a working Try again that starts the checks over.
+        with patch('judge.utils.assignment_harvest.create_submission', side_effect=RuntimeError('storage')):
+            response = self.client_request('POST', '/contest/fpexam/leave',
+                                           {'nonce': uuid.uuid4().hex, 'confirm': '1', 'handin_attempt': '4'})
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(response, 'have not reached DKU OJ yet', status_code=409)
+        self.assertContains(response, 'Try again', status_code=409)
+        self.assertContains(response, 'Hand-in not complete', status_code=409)
+        self.assertContains(response, '>Leave<', status_code=409)
+        self.assertContains(response, '<title>Hand-in not complete', status_code=409)
+        self.assertContains(response, 'name="handin_attempt" value="0"', status_code=409)  # Try again restarts the checks
+        self.assertNotContains(response, 'type="hidden" name="handin_attempt"', status_code=409)
+        with patch('judge.utils.assignment_harvest.create_submission', side_effect=RuntimeError('storage')):
+            restarted = self.client_request('POST', '/contest/fpexam/leave',
+                                            {'nonce': uuid.uuid4().hex, 'confirm': '1', 'handin_attempt': '0'})
+        self.assertContains(restarted, '<title>Checking your answers', status_code=409)
+        self.assertContains(restarted, 'name="handin_attempt" value="1"', status_code=409)
+        self.assertNotContains(response, 'Checking that your answers reached DKU OJ', status_code=409)
+        # The retry is the same Leave: once the storage works again it completes, and a repeat is not an error.
+        response = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
+        self.assertContains(response, 'Exam submitted')
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'completed')
+
+    @override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
+    def test_a_draft_that_lands_after_the_first_harvest_is_taken_by_one_retry_inside_the_leave(self):
+        from unittest.mock import patch
+        from judge.utils import fairplay_device_session as fds
+        session = self.joined_device()
+        self.client_request('POST', '/contest/fpexam/draft/fpshort', {'content': '{"text":"late"}'})
+        real = fds.confirm_completed
+        calls = []
+
+        def flaky(**kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise fds.DeviceSessionDenied('Answers are still waiting to be submitted.')
+            return real(**kwargs)
+        with patch('judge.utils.fairplay_device_session.confirm_completed', side_effect=flaky):
+            response = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
+        self.assertContains(response, 'Exam submitted')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'completed')
+
+    @override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
+    def test_a_repeated_leave_after_the_hand_in_completed_shows_exam_submitted_not_a_404(self):
+        session = self.joined_device()
+        first = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
+        self.assertContains(first, 'Exam submitted')
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'completed')
+        again = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
+        self.assertEqual(again.status_code, 200)
+        self.assertContains(again, 'Exam submitted')
+        self.assertNotContains(again, 'You are not in contest')
+        # Another device, or a plain browser, keeps the old behaviour.
+        other = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex}, fingerprint='b' * 64)
+        self.assertNotContains(other, 'Exam submitted')
+        self.assertNotContains(self.client.post('/contest/fpexam/leave'), 'Exam submitted')
+
+    def test_the_state_poll_and_finish_leave_the_profile_row_alone_and_the_deadline_close_is_throttled(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+        from django.core.cache import cache
+        from django.utils import timezone
+        payload = self.decode(self.claim())
+        path = '/api/fairplay/native/session/' + payload['session']
+        seen = []
+        original = native_state
+
+        def spy(request, session_id):
+            try:
+                return original(request, session_id)
+            finally:
+                seen.append(getattr(request, 'no_profile_update', False))
+        request = self.request('GET', path)
+        spy(request, payload['session'])
+        self.assertEqual(seen, [True])
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        FairPlayDeviceSession.objects.filter(pk=session.pk).update(lease_until=timezone.now() - timedelta(minutes=5))
+        cache.clear()
+        with patch('judge.views.fairplay_native_session.close_after_deadline', side_effect=lambda r: r) as closer, \
+                patch('judge.utils.fairplay_device_session.personal_deadline',
+                      return_value=timezone.now() - timedelta(minutes=1)):
+            for _ in range(3):
+                native_state(self.request('GET', path), payload['session'])
+        self.assertEqual(closer.call_count, 1)  # once per window, not once per poll
+
+    def test_leave_shows_progress_while_the_last_answers_are_sent(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[3]
+        js = (root / 'resources' / 'workspace.js').read_text()
+        self.assertIn("gettext('Submitting your answers…')", js)
+        self.assertIn('if (leavingFlush)', js)
+        self.assertIn('dkuojEndLeaveFlush', js)
+        media = (root / 'templates' / 'contest' / 'media-js.html').read_text()
+        self.assertIn('dkuojShowLeaveBusy(form);', media)
+        self.assertIn('dkuojResetLeave', media)
+        self.assertLess(media.index('function submitLeave()'), media.index('setTimeout(function () { dkuojResetLeave(form); }, 20000)'))
 
     def _leave_with_a_vanished_slot(self):
         from unittest.mock import patch
@@ -1474,7 +1578,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         session = self.joined_device()
         with patch('judge.utils.fairplay_device_session.begin_finishing', side_effect=DeviceSessionDenied('gone')):
             response = self.client_request('POST', '/contest/fpexam/leave', {'nonce': uuid.uuid4().hex, 'confirm': '1'})
-        self.assertContains(response, 'Hand-in not complete', status_code=409)
+        self.assertContains(response, 'Checking your answers', status_code=409)
         self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'active')
 
     @override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
@@ -2220,6 +2324,33 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertNotIn('mac_code', form)
         self.assertNotIn('name="back"', form)
 
+    def test_participation_actions_use_one_centered_dialog_and_no_browser_boxes(self):
+        html = self.participation_html()
+        self.assertNotIn('window.confirm', html)
+        self.assertNotIn('window.prompt', html)
+        self.assertNotIn('prompt(', html)
+        self.assertEqual(html.count('<dialog'), 1)
+        self.assertIn('<dialog id="fp-part-dialog"', html)
+        self.assertIn('showModal()', html)
+        self.assertIn('downOnBackdrop = e.target === dlg', html)  # a drag that ends on the backdrop is not a cancel
+        self.assertIn("setAttribute('open', '')", html)  # no showModal: the dialog still opens
+        self.assertIn('#fp-part-dialog-form { padding', html)
+        for text in ('id="fp-part-minutes"', 'id="fp-part-reason"', 'id="fp-part-other"', 'maxlength="200"',
+                     'id="fp-part-confirm"', 'id="fp-part-cancel"'):
+            self.assertIn(text, html)
+        for text in ('Other...', 'Choose a reason...', 'Reopened by the instructor', 'Approved accommodation',
+                     'Technical problem during the exam', 'Device is stuck', 'Submitted by mistake',
+                     'Student could not reach the server', 'Code was shown to someone else',
+                     'Student was stopped by mistake', 'Student switched to a lab computer',
+                     'id="fp-part-reasons-unlock-reopen"', 's computer failed'):
+            self.assertIn(text, html)
+        menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
+        self.assertIn('data-reasons="unlock-reopen"', menu)
+        self.assertIn('data-reasons="extra-time"', menu)
+        self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
+        self.assertIn('data-reasons="unlock-device" data-reason-optional="1"', menu)
+        self.assertEqual(menu.count('data-question="'), menu.count('role="menuitem"'))
+
     def test_old_help_page_url_redirects_editors_to_participation(self):
         self.client.force_login(self.teacher)
         response = self.client.get('/contest/fpexam/fairplay-help')
@@ -2482,10 +2613,27 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         client.native_exit.assert_not_called()
         response, client = self.ask_exit(mac_code='hint:BBBB2345')
         self.assertContains(response, '123456')
-        self.assertContains(response, 'Exit code for lock')
+        self.assertContains(response, 'For lock code')
+        self.assertNotContains(response, 'Exit code for lock')
         self.assertContains(response, 'BBBB-2345')
         self.assertEqual(client.native_exit.call_args[0][2], 'BBBB2345')
         self.assertEqual(self.exit_audit(), [('BBBB2345|chosen from list', 'fp_teacher')])
+
+    def test_the_exit_pages_say_each_thing_once(self):
+        from judge.utils.fairplay_device_session import bind_lock
+        session = self.joined_device()
+        bind_lock(session, 'AAAA2345')
+        page, _client = self.ask_exit(confirm=False)
+        html = page.content.decode()
+        self.assertNotIn('Participation: ', html)  # the title is not repeated in the heading
+        self.assertEqual(html.count('Offline exit code'), 0)  # the question says it; no second "Action" row
+        self.assertEqual(html.count("Check that the student"), 1)
+        self.assertNotIn('(On record', html)  # no parenthesis inside a parenthesis
+        result, _client = self.ask_exit(mac_code='bound:AAAA2345')
+        html = result.content.decode()
+        self.assertNotIn('Participation: ', html)
+        self.assertNotIn("Check that the student", html)
+        self.assertEqual(html.count('AAAA-2345'), 1)
 
     def test_a_confirming_post_without_a_lock_never_issues_a_code(self):
         self.bind_exit_lock()
@@ -2831,7 +2979,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertTrue(explicit_hand_in(session))
         row = self.row_for(self.student.username)
         self.assertEqual(row['state'], 'submitting')
-        self.assertTrue(any('handed in' in n for n in row['notes']))
+        self.assertTrue(any('hand-in is complete' in n for n in row['notes']))
         html = self.participation_html()
         self.assertNotIn('data-states="in_progress completed unlocked reopened not_locked submitting', html)
         response = self.quick(mode='only')
@@ -3255,7 +3403,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
 
     def test_the_min_prompt_limits_match_what_the_server_accepts(self):
         html = self.participation_html()
-        self.assertIn("item.dataset.minutesDefault === 'row' ? 1440 : 1440", html)  # native: reopen, extra time
+        self.assertIn("maxMinutes = rowDefault ? 1440 : 1440", html)  # native: reopen, extra time
         base = {'action': 'extra-time', 'netid': self.student.username, 'name': 'A', 'reason': 'x', 'confirm': '1'}
         self.decode(self.claim())
         self.client.force_login(self.teacher)

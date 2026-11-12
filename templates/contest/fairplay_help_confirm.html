@@ -1,13 +1,20 @@
 {% extends "base.html" %}
 
 {% block body %}
+<style>
+.fairplay-help { box-sizing: border-box; max-width: 34em; margin: 1.5em auto; padding: 1.3em 1.5em; border: 1px solid #ccc; border-radius: 10px; background: #fff; color: #333; box-shadow: 0 8px 28px rgba(0,0,0,.18); text-align: center; }
+.fairplay-help h2 { margin-top: 0; }
+.fairplay-help table { margin: 0 auto 1em; text-align: left; }
+.fairplay-help input[type=text] { box-sizing: border-box; max-width: 100%; padding: .45em .6em; font-size: 1em; }
+.fairplay-help .button { display: inline-block; margin: .3em .3em 0; }
+@media (max-width: 600px) { .fairplay-help { margin: .8em; padding: 1em; } }
+</style>
 <div class="fairplay-help">
-    <h2>{{ _('Participation') }}: {{ contest.name }}</h2>
+    <h2>{{ contest.name }}</h2>
     <p><strong>{{ question }}</strong></p>
     <table class="table" style="width:auto">
         <tr><td>{{ _('Student') }}</td><td>{{ name }} ({{ netid }})</td></tr>
-        <tr><td>{{ _('Action') }}</td><td>{{ button }}</td></tr>
-        {% if lock_code %}<tr><td>{{ _('Lock code') }}</td><td><span id="fairplay-confirm-lock" style="font-family: monospace">{{ lock_code }}</span>{% if lock_kind %} <small>({{ lock_kind }})</small>{% endif %}<br>{{ _("Check that the student's screen shows this code.") }}</td></tr>{% endif %}
+        {% if lock_code %}<tr><td>{{ _('Lock code') }}</td><td><span id="fairplay-confirm-lock" style="font-family: monospace">{{ lock_code }}</span>{% if lock_kind %} <small>- {{ lock_kind }}</small>{% endif %}<br>{{ _("Check that the student's screen shows this code.") }}</td></tr>{% endif %}
         {% if minutes %}<tr><td>{{ _('Minutes') }}</td><td>{{ minutes }}</td></tr>{% endif %}
         <tr><td>{{ _('Reason') }}</td><td>{{ reason }}</td></tr>
     </table>
@@ -33,7 +40,7 @@
                    style="font-family: monospace; text-transform: uppercase"></p>
         {% elif mac_code %}<input type="hidden" name="mac_code" value="{{ mac_code }}">
         {% if can_type %}
-        <p><label for="fp-typed-other">{{ _("Or type the code shown on the student's screen if it is a different one") }}</label>
+        <p><label for="fp-typed-other">{{ _('If the screen shows a different code, type it here') }}</label>
             <input type="text" id="fp-typed-other" name="mac_code_typed" maxlength="64" autocomplete="off"
                    style="font-family: monospace; text-transform: uppercase"></p>
         {% endif %}{% endif %}

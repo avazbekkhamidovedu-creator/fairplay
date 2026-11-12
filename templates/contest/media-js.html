@@ -341,6 +341,30 @@
         $(form).find('button[type=submit], input[type=submit]').prop('disabled', false);
     }
 
+    // While the last answers are sent and the hand-in is checked, the Leave button says so instead of looking dead.
+    function dkuojShowLeaveBusy(form) {
+        $(form).find('button[type=submit]').each(function () {
+            if (this.dataset.idleHtml === undefined) this.dataset.idleHtml = this.innerHTML;
+            this.textContent = {{ _('Submitting your answers...')|htmltojs }};
+        });
+    }
+
+    function dkuojResetLeave(form) {
+        if (!form || !document.documentElement.contains(form)) return;
+        $(form).find('button[type=submit]').each(function () {
+            if (this.dataset.idleHtml !== undefined) this.innerHTML = this.dataset.idleHtml;
+        });
+        delete form.dataset.leaveConfirmed;
+        if (typeof window.dkuojEndLeaveFlush === 'function') window.dkuojEndLeaveFlush();
+        dkuojEnableLeaveButtons(form);
+    }
+
+    window.addEventListener('pageshow', function (event) {
+        if (event.persisted) {
+            document.querySelectorAll('form[action$="/leave"]').forEach(dkuojResetLeave);
+        }
+    });
+
     function dkuojShowLeaveConfirm(form) {
         var overlay = document.getElementById('leave-confirm-overlay');
         if (!overlay) return true;
@@ -384,7 +408,13 @@
             onOk: function (done) {
                 done();
                 form.dataset.leaveConfirmed = '1';
+                dkuojShowLeaveBusy(form);
+                // If this page is still here a while after the confirmed Leave (the answer never came, or the
+                // page was restored from the back/forward cache), Leave must work again without a reload.
                 function submitLeave() {
+                    // The recovery timer starts only once the POST is sent, so a slow flush cannot clear the
+                    // confirmation and make requestSubmit() ask again.
+                    setTimeout(function () { dkuojResetLeave(form); }, 20000);
                     if (typeof form.requestSubmit === 'function') form.requestSubmit();
                     else form.submit();
                 }

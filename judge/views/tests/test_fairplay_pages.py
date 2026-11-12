@@ -605,4 +605,5 @@ class ModeTableTestCase(PagesMixin, TestCase):
         cache.clear()
         response = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam']))
         self.assertEqual(response.status_code, 200)
-        self.assertIn('mode per student: -', response.content.decode())
+        self.assertNotIn('mode per student', response.content.decode())  # one notice, not two
+        self.assertIn('cannot be reached', response.content.decode())
