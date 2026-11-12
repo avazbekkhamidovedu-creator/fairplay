@@ -139,7 +139,7 @@ import WebKit
     private func openController(_ probe: Probe, root: NSView) async throws -> ProtectedBrowserController {
         var effects = ProtectedBrowserController.Effects(checks: { [] }, acquire: { probe.locked = true; return true },
             ownsLock: { probe.locked }, release: { probe.locked = false; probe.released += 1 }, load: { _, _ in })
-        effects.presentLeave = { _ in probe.prompts += 1 }
+        effects.presentLeave = { _, _ in probe.prompts += 1 }
         var setup = NativeLockSetup.dev
         setup.store = probe.store
         setup.newKey = { TestExit.key }

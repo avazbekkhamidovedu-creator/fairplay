@@ -125,12 +125,29 @@ private final class FailingStore: NativeLockStoring {
         #expect(result == .failure(.save))
     }
 
-    @Test func loginItemFollowsTheSavedLock() {
+    @Test func aLockFromAnEarlierBootIsDroppedAndItsLoginItemRemoved() {
+        var saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date())
+        saved.boot = "boot-1"
+        let item = RecordingLoginItem()
+        var s = setup(store: InMemoryNativeLockStore(saved), key: nil, isDev: true, status: 201)
+        s.loginItem = item
+        guard case .rebooted = NativeRelaunch.decide(store: s.store, boot: "boot-2") else { Issue.record("expected rebooted"); return }
+        s.clear()    // what main.swift does for .rebooted
+        #expect(item.unregistered == 1 && s.store.load() == nil)
+    }
+
+    @Test func registeringTheLoginItemIsOneCallOnTheSetup() {
         let item = RecordingLoginItem()
         var s = setup(store: InMemoryNativeLockStore(), key: nil, isDev: true, status: 201)
         s.loginItem = item
         s.registerLoginItem()
         #expect(item.registered == 1)
+    }
+
+    @Test func clearingTheLockRemovesTheLoginItem() {
+        let item = RecordingLoginItem()
+        var s = setup(store: InMemoryNativeLockStore(), key: nil, isDev: true, status: 201)
+        s.loginItem = item
         s.clear()
         #expect(item.unregistered == 1)
         #expect(s.store.load() == nil)
@@ -180,12 +197,59 @@ private final class FailingStore: NativeLockStoring {
     }
 
     @Test func wrongAttemptsSurviveTheRelaunch() throws {
-        let saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date())
+        let id = NativeExit.newLockId()
+        let saved = NativeLockState(lockId: id, verifier: NativeExit.makeVerifier(code: "123456", lockId: id, iterations: 1000), created: Date())
         let store = InMemoryNativeLockStore(saved)
         let now = Date()
         for _ in 0..<2 { _ = NativeExit.attempt(typed: "000000", store: store, now: now) }
         guard case .relock(let state) = NativeRelaunch.decide(store: store) else { Issue.record("expected relock"); return }
         #expect(state.wrong == 2)
+    }
+
+    @Test func aLockFromAnEarlierBootDoesNotLockAgain() {
+        var saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date())
+        saved.boot = "boot-A"
+        let store = InMemoryNativeLockStore(saved)
+        guard case .rebooted(let state) = NativeRelaunch.decide(store: store, boot: "boot-B") else {
+            Issue.record("expected the home screen after a restart"); return
+        }
+        #expect(state.lockId == saved.lockId)
+    }
+
+    @Test func aKillInTheSameBootStillLocksAgain() {
+        var saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date())
+        saved.boot = "boot-A"
+        let store = InMemoryNativeLockStore(saved)
+        guard case .relock = NativeRelaunch.decide(store: store, boot: "boot-A") else {
+            Issue.record("expected relock"); return
+        }
+    }
+
+    @Test func theWatchdogRelockAlwaysLocks() {
+        var saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date())
+        saved.boot = "boot-A"
+        let store = InMemoryNativeLockStore(saved)
+        guard case .relock = NativeRelaunch.decide(store: store, relockRequested: true, boot: "boot-B") else {
+            Issue.record("expected relock"); return
+        }
+    }
+
+    @Test func aLockWithoutASavedBootLocksAgain() {
+        // An older build's lock, or one whose Keychain copy was lost: the wall clock never ends it.
+        let saved = NativeLockState(lockId: NativeExit.newLockId(), created: Date(timeIntervalSince1970: 1_800_000_000))
+        guard case .relock = NativeRelaunch.decide(store: InMemoryNativeLockStore(saved), boot: "boot-B") else {
+            Issue.record("expected relock"); return
+        }
+    }
+
+    @Test func theBootIsSavedAndSurvivesEncoding() throws {
+        var s = NativeLockState(lockId: "K7QM3XPA", created: Date(timeIntervalSince1970: 1_800_000_000))
+        s.boot = "boot-A"
+        let back = try JSONDecoder().decode(NativeLockState.self, from: JSONEncoder().encode(s))
+        #expect(back.boot == "boot-A")
+        // Only the Keychain copy (first) counts; an edited file copy cannot supply the boot.
+        #expect(DualNativeLockStore.merged(s, NativeLockState(lockId: "K7QM3XPA", created: s.created)).boot == "boot-A")
+        #expect(DualNativeLockStore.merged(NativeLockState(lockId: "K7QM3XPA", created: s.created), s).boot == nil)
     }
 }
 
@@ -329,7 +393,9 @@ private final class FailingStore: NativeLockStoring {
         defer { controller.lockEnded() }
         #expect(await waitUntil { probe.locked })
         #expect(store.load() != nil)
-        #expect(item.registered == 1)
+        // A same-boot log-out and log-in must reopen FairPlay into the lock: the item is registered while the lock is held.
+        #expect(await waitUntil { item.registered == 1 })
+        #expect(item.unregistered == 0)
     }
 
     @Test func aLockThatCannotBeTakenDeletesTheSavedState() async throws {

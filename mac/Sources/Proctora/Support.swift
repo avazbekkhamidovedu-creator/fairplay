@@ -207,6 +207,8 @@ final class EventLog {
         case syntheticInput(String)
         case pinMismatch(String)
         case previousRunKilled
+        /// A saved native lock was dropped because the Mac was turned off and on (the lock id).
+        case lockEndedByRestart(String)
         case offlineExit
         case offlineExitRejected
         /// 2026-10-13: a windowed app left running behind the exam (noticed, not quit).
@@ -249,6 +251,7 @@ final class EventLog {
             case .syntheticInput(let s): return ("synthetic_input", s)
             case .pinMismatch(let s): return ("tls_pin_mismatch", s)
             case .previousRunKilled: return ("previous_run_killed", "FairPlay ended while locked last time")
+            case .lockEndedByRestart(let id): return ("lock_ended_by_restart", "native lock \(id) dropped: the Mac was restarted")
             // Own types: the server stores client "emergency_exit" as "client_emergency_exit" (audit S-06).
             case .offlineExit: return ("offline_exit", "offline invigilator code accepted")
             case .offlineExitRejected: return ("offline_exit_rejected", "wrong offline invigilator code")

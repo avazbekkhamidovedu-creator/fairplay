@@ -1,3 +1,10 @@
+## What's new in 0.8.6
+
+- Turning the computer off and on during an exam no longer reopens FairPlay in locked mode: FairPlay opens on its home screen, and Wi-Fi, the university VPN and the usual start-up steps work. Quitting or a crash without a restart still locks again.
+- The red "Emergency exit" button (top right) accepts the instructor's 6-digit offline exit code, with no internet needed. Instructors get the code from the Participation page in DKU OJ.
+- Open-book exams: the allowed websites open automatically in their own tabs when the exam starts, Duke Box sign-in (Duke login and Duo) works inside the Box tab, and tabs look like Safari's.
+- Windows: a two-finger touchpad swipe no longer leaves the exam page, FairPlay starts much faster, the device test covers the whole screen and Leave returns to the home screen, and dialogs have a cleaner design.
+
 ## What's new in 0.8.5
 
 - Instructors can unlock a student with one button and one confirmation on the DKU OJ help page, with no codes or typing. The student's computer is released within about 25 seconds and the app returns to its first screen.

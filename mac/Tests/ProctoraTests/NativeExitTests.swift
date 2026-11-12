@@ -130,7 +130,9 @@ private final class FailingStore: NativeLockStoring {
         let loaded = try #require(f.load())
         #expect(loaded.verifier == nil)
         let code = NativeExit.code(key: key, lockId: "K7QM3XPA")
-        #expect(att(code, f, t0) == .wrong(remaining: 4))
+        // No verifier and not a lost Keychain: nothing to guess against, so nothing is counted.
+        #expect(att(code, f, t0) == .noVerifier)
+        #expect(f.load()?.attempts == 0)
         let rewritten = try Data(contentsOf: f.url)
         #expect(rewritten.range(of: key) == nil && !String(decoding: rewritten, as: UTF8.self).contains(key.base64EncodedString()))
     }

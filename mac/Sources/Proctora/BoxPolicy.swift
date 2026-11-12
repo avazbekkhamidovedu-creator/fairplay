@@ -16,12 +16,13 @@ struct BoxPolicy {
     static let maxBlocked = 128
     private static let methodNames: Set<String> = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
-    private static let appCeiling: Set<String> = ["duke.box.com", "duke.app.box.com"]
-    private static let signInExact: Set<String> = ["duke.account.box.com", "account.box.com", "sso.services.box.net", "shib.oit.duke.edu"]
-    private static let loginPathOnly: Set<String> = ["duke.account.box.com", "account.box.com"]
-    private static let signInSubdomainsOf = ["duosecurity.com"]
-    private static let assetExact: Set<String> = ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com"]
-    private static let assetSubdomainsOf = ["boxcloud.com"]
+    // One source of truth with the sign-in chain of reference tabs: BoxSignIn.swift.
+    private static let appCeiling = BoxSignIn.appHosts
+    private static let signInExact = BoxSignIn.signInExact
+    private static let loginPathOnly = BoxSignIn.loginPathOnly
+    private static let signInSubdomainsOf = BoxSignIn.signInSubdomainsOf
+    private static let assetExact = BoxSignIn.assetExact
+    private static let assetSubdomainsOf = BoxSignIn.assetSubdomainsOf
 
     struct SignInHost: Equatable {
         let host: String

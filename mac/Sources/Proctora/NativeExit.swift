@@ -12,6 +12,9 @@ enum NativeExitAttempt: Equatable {
     case refused
     /// The lock this attempt was counted against ended or was replaced while the code was being checked.
     case stale
+    /// The saved lock has no verifier (not registered yet, or the Keychain copy was lost): no typed code can open it,
+    /// and nothing is counted. Only an instructor release from the OJ ends it.
+    case noVerifier
 }
 
 struct NativeLockState: Codable, Equatable {
@@ -56,6 +59,9 @@ struct NativeLockState: Codable, Equatable {
     var guessLog: [GuessStamp] = []
     /// Earliest time a background registration run may start again (from Retry-After and backoff); survives relaunches.
     var retryNotBefore: Date? = nil
+    /// Boot session the lock was taken in (trusted only from the Keychain copy). A launch in a later boot (the Mac was
+    /// turned off and on) does not lock again; a lock without it locks again as before.
+    var boot: String? = nil
 
     /// One counted guess, stamped on the wall and the continuous clock.
     struct GuessStamp: Codable, Equatable, Hashable {
@@ -64,10 +70,12 @@ struct NativeLockState: Codable, Equatable {
         var mono: TimeInterval?
     }
 
-    /// What may be written outside the Keychain: counters and binding, never the verifier.
+    /// What may be written outside the Keychain: counters and binding, never the verifier or the boot
+    /// (an edited file copy must not be able to make a lock look like it came from an earlier boot).
     var withoutVerifier: NativeLockState {
         var copy = self
         copy.verifier = nil
+        copy.boot = nil
         return copy
     }
 }
@@ -75,7 +83,7 @@ struct NativeLockState: Codable, Equatable {
 extension NativeLockState {
     private enum CodingKeys: String, CodingKey {
         case v, lockId, verifier, created, contest, binding, wrong, until, unclean, lastAttempt, attempts, waitBoot, waitMono, keychainLost, vpnUsed
-        case guessLog, retryNotBefore
+        case guessLog, retryNotBefore, boot
     }
 
     init(from decoder: Decoder) throws {
@@ -97,6 +105,7 @@ extension NativeLockState {
         vpnUsed = try c.decodeIfPresent(TimeInterval.self, forKey: .vpnUsed) ?? 0
         guessLog = try c.decodeIfPresent([GuessStamp].self, forKey: .guessLog) ?? []
         retryNotBefore = try c.decodeIfPresent(Date.self, forKey: .retryNotBefore)
+        boot = try c.decodeIfPresent(String.self, forKey: .boot)
     }
 }
 
@@ -352,6 +361,7 @@ struct DualNativeLockStore: NativeLockStoring {
     /// The Keychain copy (`a`) is the base and the only source of a verifier.
     static func merged(_ a: NativeLockState, _ b: NativeLockState) -> NativeLockState {
         guard a.lockId == b.lockId else { return a }
+        // m starts as a, so the boot saved with the lock stays the Keychain copy's (the file copy can be edited).
         var m = a
         m.wrong = max(a.wrong, b.wrong)
         let later = (b.until ?? .distantPast) > (a.until ?? .distantPast) ? b : a
@@ -602,7 +612,8 @@ enum NativeExit {
         return Monotonic(boot: boot, seconds: Double(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1e9)
     }
 
-    /// Wait left on a lockout, from the stored evidence. After a reboot the continuous clock has
+    /// Wait left on a lockout, from the stored evidence. A lock from an earlier boot is normally dropped at launch
+    /// (NativeRelaunch); when the boot cannot be told apart and the lock survives, the continuous clock has
     /// no common origin, so the wait restarts in full (the stricter of the wall clock and a fixed
     /// re-penalty). Within one boot the longer of the wall clock and the continuous clock counts,
     /// so moving the wall clock forward cannot end it.
@@ -668,6 +679,32 @@ enum NativeExit {
         }
     }
 
+    /// The audit event for one offline exit attempt; nil for results that are not a judged code (malformed, stale, no verifier).
+    static func auditEvent(for result: NativeExitAttempt) -> EventLog.Event? {
+        switch result {
+        case .accepted: return .offlineExit
+        case .wrong, .wait, .refused: return .offlineExitRejected
+        case .malformed, .stale, .noVerifier: return nil
+        }
+    }
+
+    /// The shared end of an off-main check (browser and relaunch block screen): an accepted code releases only when
+    /// `canRelease` (this screen still owns the lock) and the saved lock is still the one it was checked against, else
+    /// the answer is `.stale`; the final answer is audited and returned. A second submit while one is checked is `.stale` too.
+    static func settle(_ result: NativeExitAttempt, ticket: Ticket?, store: NativeLockStoring, canRelease: Bool,
+                       release: () -> Void) -> NativeExitAttempt {
+        var final = result
+        if result == .accepted {
+            final = canRelease && releaseIfCurrent(ticket, store: store, release: release) ? .accepted : .stale
+        }
+        audit(final)
+        return final
+    }
+
+    static func audit(_ result: NativeExitAttempt) {
+        if let event = auditEvent(for: result) { EventLog.shared.record(event) }
+    }
+
     /// The same attempt, with the PBKDF2 comparison off the main thread; `completion` runs on main.
     /// The clock reading is taken by the caller so nothing main-bound is touched on the worker.
     static func attemptInBackground(typed: String, store: NativeLockStoring, now: Date, monotonic: Monotonic,
@@ -694,6 +731,11 @@ enum NativeExit {
         enum Step { case done(NativeExitAttempt), compare(NativeLockState, NativeExitAttempt) }
         let step: Step = NativeLockGate.run {
             guard var st = store.load() else { return .done(.malformed) }
+            // A lock that was never registered has nothing to guess against: nothing is counted. A lock whose Keychain
+            // copy was lost (keychainLost) is not that case: the tamper penalty and the guess ledger still apply to it,
+            // so deleting a copy can never buy a free reset.
+            // The state is rewritten unchanged so a file from an older build that still holds its key is scrubbed.
+            if st.verifier == nil, !st.keychainLost { try? store.save(st); return .done(.noVerifier) }
             let mono = monotonic()
             if st.attempts >= maxTotalAttempts, guessCapEnd(st, now: now, mono: mono) != nil { return .done(.refused) }
 

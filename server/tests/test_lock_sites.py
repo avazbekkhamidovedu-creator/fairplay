@@ -36,14 +36,14 @@ def test_denied_hosts_never_appear_from_any_source():
     assert out["pages"] == ["https://docs.python.org/"]
 
 
-def test_box_link_and_its_origins_appear():
+def test_box_link_page_appears_and_the_sign_in_chain_is_left_to_the_clients():
     out = build_lock_sites(["docs.python.org"], None, BOX)
     assert out["pages"][0] == "https://duke.app.box.com/s/abcdefghij1234"
-    for o in ("https://duke.box.com", "https://cdn01.boxcdn.net", "https://shib.oit.duke.edu", "https://sso.services.box.net"):
-        assert o in out["resources"], o
-    assert "https://*.boxcloud.com" in out["resources"] and "https://*.duosecurity.com" in out["resources"]
-    assert all(r.startswith("https://") for r in out["resources"])
     assert not any("*" in r for r in out["pages"])
+    # The apps own the chain (Mac BoxSignIn.swift, Windows BoxSignIn.cs): none of its hosts is sent as a resource.
+    joined = " ".join(out["resources"])
+    for host in ("box", "duosecurity", "shib", "boxcdn", "boxcloud"):
+        assert host not in joined, host
     assert "https://duke.app.box.com" not in out["resources"]
 
 
@@ -124,3 +124,30 @@ def test_resources_never_take_the_last_page_slot():
 def test_a_link_with_a_quote_is_refused_like_the_oj_does():
     out = build_lock_sites(["Docs https://docs.python.org/it's", "w3.org"])
     assert out["pages"] == ["https://w3.org/"]
+
+
+def test_no_box_sign_in_host_is_emitted_for_any_box_page():
+    for out in (build_lock_sites([], None, BOX),
+                build_lock_sites(["https://duke.box.com/s/abcdefghij1234", "docs.python.org"], None, None)):
+        assert out["pages"] and out["pages"][0].endswith("/s/abcdefghij1234")
+        assert not any(k in r for r in out["resources"] for k in ("box", "duosecurity", "shib"))
+
+
+def test_box_sign_in_hosts_are_not_sites_of_their_own():
+    out = build_lock_sites(["account.box.com", "api.box.com"], None, None)
+    assert out == {"pages": [], "resources": []}
+    out = build_lock_sites(["https://duke.account.box.com/login"], None, None)
+    assert out["pages"] == []
+
+
+def test_the_box_page_and_teacher_pages_are_never_cut_for_resources():
+    teacher = [f"https://site{i}.example.org/page" for i in range(25)]
+    out = build_lock_sites(teacher, None, BOX)
+    assert out["pages"][0] == "https://duke.app.box.com/s/abcdefghij1234"
+    assert all(t in out["pages"] for t in teacher)
+    assert len(out["pages"]) + len(out["resources"]) <= 32
+    full = [f"https://site{i}.example.org/page" for i in range(40)]
+    out = build_lock_sites(full, None, BOX)
+    assert out["pages"][0] == "https://duke.app.box.com/s/abcdefghij1234"
+    assert len(out["pages"]) == 32 and out["resources"] == []
+    assert out["pages"][1:] == full[:31]

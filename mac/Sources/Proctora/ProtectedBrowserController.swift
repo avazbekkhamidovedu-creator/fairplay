@@ -39,7 +39,16 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var handInCancels: [() -> Void] = []
     private lazy var renewSchedule = NativeRenewSchedule(random: effects.random)
     private var contextInFlight = false
-    private var activeExamBinding: String?
+    /// A different account or exam invalidates what was already opened for the previous one.
+    private var activeExamBinding: String? { didSet { if oldValue != activeExamBinding { cancelStagger(); referencePages.reset() } } }
+    /// Intended address of every tab opened from the allowed-websites list (the page itself may not have loaded).
+    private var referenceURLs: [ObjectIdentifier: URL] = [:]
+    /// Reference tabs still remembered (for tests): every removed tab must be forgotten.
+    var rememberedReferenceTabs: Int { referenceURLs.count }
+    /// Reference tabs opened behind the exam tab and not selected yet: they may load, but cannot download or open windows.
+    private var backgroundTabs: Set<ObjectIdentifier> = []
+    /// Background tabs whose load failed or was refused; they load again when the student selects them.
+    private var tabsToReload: Set<ObjectIdentifier> = []
     private var approvedSites: [String] = []
     private var approvedResources: [String] = []
     private var approvedAssets: [String] = []
@@ -48,6 +57,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var hostAnsweredAt: Date?
     private var failsafeCancel: (() -> Void)?
     private var pickerSites: [String] = []
+    private var referencePages = ReferencePages()
     private var sitePicker: NSPopUpButton?
     private var nativeProvisioned = false
     private var retainedWebsiteStore: WKWebsiteDataStore?
@@ -61,7 +71,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private var draftFields: [String: String]?
     private var pendingDraft: BrowserDraftStore.Record?
     private var draftReadInFlight = false
-    private var tabStrip: NSStackView?
+    private var tabStrip: SafariTabBar?
+    private var staggerCancel: (() -> Void)?
+    private var autoQueue: [String] = []
+    private var pendingAuto: Set<String> = []
     private var recoveryAttempts: Set<ObjectIdentifier> = []
     private var closePopupButton: NSButton?
     private var retryButton: NSButton?
@@ -106,7 +119,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             if hard { view.reloadFromOrigin() } else { view.reload() }
         }
         var showError: (WKWebView, String, URL) -> WKNavigation? = { $0.loadHTMLString($1, baseURL: $2) }
-        var presentLeave: (NSWindow?) -> Void = { _ in }
+        var presentLeave: (NativeLeavePrompt, NSWindow?) -> Void = { _, _ in }
         var setup: NativeLockSetup = .dev
         var now: () -> Date = Date.init
         var monotonic: () -> NativeExit.Monotonic = NativeExit.systemMonotonic
@@ -127,7 +140,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     release: { LockdownController.shared.releaseNativeLock() },
                     load: { $0.load(URLRequest(url: $1)) })
             effects.setup = .live
-            effects.presentLeave = { NativeLeaveSheet.present(in: $0) }
+            effects.presentLeave = { NativeLeaveSheet.present($0, in: $1) }
             return effects
         }
     }
@@ -554,6 +567,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 }
                 self.ruleIdentifier = identifier
                 let opened = self.flow.activate(token, acquireLock: acquire, open: { self.open(parsed, rules: rules) })
+                // A same-boot log-out and log-in reopens FairPlay into the lock; a real restart clears it (NativeRelaunch.rebooted).
                 if opened { self.effects.setup.registerLoginItem() }
                 if !opened {
                     self.removeRules()
@@ -668,24 +682,26 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         draftLabel.font = .systemFont(ofSize: 11)
         draftStatus = draftLabel
         strip.addArrangedSubview(draftLabel)
-        let leave = NSButton(title: "Leave", target: self, action: #selector(leavePressed))
-        leave.bezelStyle = .rounded
+        let leave = NSButton(title: NativeLeaveText.title, target: self, action: #selector(leavePressed))
+        NativeLeaveText.styleEmergency(leave)
         leave.identifier = NSUserInterfaceItemIdentifier("browser.leave")
-        leave.frame = NSRect(x: root.bounds.width - 96, y: root.bounds.height - 44, width: 80, height: 32)
+        leave.frame = NSRect(x: root.bounds.width - 146, y: root.bounds.height - 44, width: 130, height: 32)
         leave.autoresizingMask = [.minXMargin, .minYMargin]
-        root.addSubview(leave)
         let restore = NSButton(title: "Recover draft", target: self, action: #selector(restoreDraftPressed))
         restore.isHidden = true
         restoreButton = restore
         strip.addArrangedSubview(restore)
         root.addSubview(strip)
-        let tabs = NSStackView()
-        tabs.orientation = .horizontal
-        tabs.spacing = 6
-        tabs.frame = NSRect(x: 16, y: root.bounds.height - 48, width: root.bounds.width - 32 - 96, height: 40)
+        // Safari-style tab bar: it ends before the red Emergency exit button (which is added last, so it is on top).
+        let tabs = SafariTabBar(frame: NSRect(x: 16, y: root.bounds.height - 48, width: Self.tabBarWidth(root.bounds.width), height: 40))
         tabs.autoresizingMask = [.width, .minYMargin]
+        tabs.onSelect = { [weak self] index in
+            self?.select(index: index)
+        }
+        tabs.onClose = { [weak self] index in self?.closeTab(at: index) }
         root.addSubview(tabs)
         tabStrip = tabs
+        root.addSubview(leave)
         rebuildTabs()
         root.window?.makeFirstResponder(view)
         updateNavigation()
@@ -886,6 +902,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             policy?.sitesExpire = policyExpires
             if context.sites != approvedSites || (context.resources ?? []) != approvedResources {
                 installReferenceSites(context.sites, resources: context.resources ?? [])
+            } else if !pickerSites.isEmpty, policy != nil {
+                autoOpenReferencePages()
+                rebuildTabs()
             }
         } else {
             activeExamBinding = nil
@@ -920,24 +939,76 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 self.approvedSites = sites
                 self.approvedResources = resources
                 self.approvedAssets = cdns
-                self.pickerSites = updated.acceptedSites
+                let pages = ReferencePages.distinct(updated.acceptedSites)
+                self.pickerSites = pages
                 self.sitePicker?.removeAllItems()
                 self.sitePicker?.addItem(withTitle: "Allowed websites")
-                for raw in updated.acceptedSites { self.sitePicker?.addItem(withTitle: ProtectedBrowserPolicy.normalizedURL(raw)?.host ?? raw) }
-                self.sitePicker?.isHidden = updated.acceptedSites.isEmpty
+                for raw in pages { self.sitePicker?.addItem(withTitle: ReferencePages.label(raw)) }
+                self.sitePicker?.isHidden = pages.isEmpty
                 // Close revoked resource tabs, preserving the university page and its drafts.
-                let revoked = self.orderedTabs.dropFirst().filter { updated.allows($0.url, mainFrame: true) == false }
+                let revoked = self.orderedTabs.dropFirst().filter { tab in
+                    let url = tab.url ?? self.referenceURLs[ObjectIdentifier(tab)]
+                    // A Box tab on its sign-in page is not revoked for the page the policy does not list.
+                    if updated.hasBoxPage, BoxSignIn.allowsTopLevel(target: url, current: url, boxTab: self.boxTabs.contains(ObjectIdentifier(tab))) { return false }
+                    return updated.allows(url, mainFrame: true) == false
+                }
                 for tab in revoked {
                     if self.browser === tab {
                         if let rootIndex = self.orderedTabs.firstIndex(where: { $0 === page }) {
-                            let button = NSButton(); button.tag = rootIndex; self.selectTab(button)
+                            self.select(index: rootIndex)
                         }
                     }
-                    self.parents.removeAll { $0 === tab }; self.orderedTabs.removeAll { $0 === tab }
+                    self.parents.removeAll { $0 === tab }; self.orderedTabs.removeAll { $0 === tab }; self.forget(tab)
                     tab.stopLoading(); tab.navigationDelegate = nil; tab.uiDelegate = nil; tab.removeFromSuperview()
                 }
+                self.autoOpenReferencePages()
                 self.rebuildTabs()
             }
+        }
+    }
+
+    /// One page after the other, so the allowed sites do not compete with the OJ for the network at the start of the exam.
+    /// One queue: pages claimed while a chain is running are appended to it, so no chain is ever orphaned.
+    private func openStaggered(_ pages: [String]) {
+        for raw in pages where !autoQueue.contains(raw) {
+            autoQueue.append(raw); pendingAuto.insert(ReferencePages.key(raw))
+        }
+        if staggerCancel == nil { openNext() }
+    }
+
+    /// A binding change or a hold ends the automatic opening: pages still waiting for their turn are dropped (a later renew claims them again).
+    private func cancelStagger() {
+        staggerCancel?(); staggerCancel = nil; pendingAuto.removeAll(); autoQueue.removeAll()
+    }
+
+    private func openNext() {
+        guard holdLabel == nil, !held, !autoQueue.isEmpty else { return }
+        let raw = autoQueue.removeFirst()
+        pendingAuto.remove(ReferencePages.key(raw))
+        if lockIsOwned, isOpen, activeExamBinding != nil, let url = ProtectedBrowserPolicy.normalizedURL(raw), openReferenceTab(url, select: false) {
+            referencePages.opened(raw)
+        }
+        guard !autoQueue.isEmpty else { return }
+        staggerCancel = effects.schedule(Self.staggerDelay) { [weak self] in self?.staggerCancel = nil; self?.openNext() }
+    }
+
+    static let staggerDelay: TimeInterval = 0.4
+    static let tabsFullText = "Close a tab to open another."
+
+    /// Open book: the allowed pages open next to the exam tab, which stays selected. Safe to run on every renew: pages already
+    /// open or handled are not claimed again, and a page that failed to open is tried again.
+    private func autoOpenReferencePages() {
+        if activeExamBinding != nil, holdLabel == nil, !held {
+            var open: Set<String> = []
+            for tab in orderedTabs {
+                if let url = tab.url, let key = ReferencePages.key(url) { open.insert(key) }
+                if let url = referenceURLs[ObjectIdentifier(tab)], let key = ReferencePages.key(url) { open.insert(key) }
+            }
+            let fresh = referencePages.claim(pickerSites, openTabs: orderedTabs.count, open: open)
+                .filter { !pendingAuto.contains(ReferencePages.key($0)) }
+            openStaggered(fresh)
+        } else {
+            referencePages.reset()
         }
     }
 
@@ -947,18 +1018,67 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         openReferenceTab(url)
     }
 
-    private func openReferenceTab(_ url: URL) {
-        guard lockIsOwned, orderedTabs.count < 8, let root = orderedTabs.first, let current = browser,
-              policy?.allows(url, mainFrame: true) == true else { return }
+    /// True when the tab was really created.
+    @discardableResult
+    private func openReferenceTab(_ url: URL, select: Bool = true) -> Bool {
+        guard lockIsOwned, let root = orderedTabs.first, let current = browser,
+              policy?.allows(url, mainFrame: true) == true else { return false }
+        guard orderedTabs.count < ReferencePages.maxTabs else {
+            // Only an automatic open stays quiet; a link the student or the page asked for says why nothing happened.
+            if select { notice?.stringValue = Self.tabsFullText }
+            return false
+        }
         let child = ProtectedUniversityWebView(frame: current.frame, configuration: root.configuration)
         child.autoresizingMask = [.width, .height]; child.navigationDelegate = self; child.uiDelegate = self
         child.allowsLinkPreview = false
+        if BoxSignIn.isBoxPage(url) { boxTabs.insert(ObjectIdentifier(child)) }
+        if !select {
+            // Background tab: loads hidden; the visible tab and its navigation state stay as they are.
+            // Not in `parents`: until selected it is not a tab the student has used (no downloads, no windows).
+            child.isHidden = true; orderedTabs.append(child)
+            referenceURLs[ObjectIdentifier(child)] = url; backgroundTabs.insert(ObjectIdentifier(child))
+            overlay?.addSubview(child, positioned: .below, relativeTo: current)
+            effects.load(child, url)
+            rebuildTabs()    // the new tab shows at the end of the row at once
+            return true
+        }
+        referenceURLs[ObjectIdentifier(child)] = url
         if Self.clearsClipboard(from: current, to: child, examTab: root) { NSPasteboard.general.clearContents() }
         current.isHidden = true; parents.append(current); orderedTabs.append(child); browser = child
         overlay?.addSubview(child, positioned: .below, relativeTo: current)
         navigationState = ProtectedBrowserNavigation(startURL: url)
         effects.load(child, url); updateNavigation()
+        return true
     }
+
+    private func forget(_ tab: WKWebView) {
+        let id = ObjectIdentifier(tab)
+        referenceURLs[id] = nil; backgroundTabs.remove(id); tabsToReload.remove(id); boxTabs.remove(id)
+    }
+
+    /// Tabs opened on a Box link: only they may open Duke Box's sign-in chain (Box, Duke SSO, Duo) as pages.
+    private var boxTabs: Set<ObjectIdentifier> = []
+
+    /// The policy's answer for a page or frame in this tab; a Box tab also gets the sign-in chain as pages (never the exam tab).
+    private func verdict(_ url: URL?, mainFrame: Bool, in webView: WKWebView?) -> Bool? {
+        guard let policy else { return nil }
+        if policy.allows(url, mainFrame: mainFrame) { return true }
+        // The chain exists only while the current list still has a Box page, only in a Box tab and never in the exam tab.
+        guard policy.hasBoxPage, let webView, webView !== orderedTabs.first else { return false }
+        // Same signed lifetime as every other allowed site: once the list has expired the chain is closed too.
+        if let expiry = policyExpires, expiry < effects.now() { return false }
+        let box = boxTabs.contains(ObjectIdentifier(webView))
+        return mainFrame ? BoxSignIn.allowsTopLevel(target: url, current: webView.url, boxTab: box)
+                         : BoxSignIn.allowsSubframe(target: url, current: webView.url, boxTab: box)
+    }
+
+    /// For tests: would this tab be let to the page?
+    func boxChainAllowed(_ url: URL?, in webView: WKWebView) -> Bool { verdict(url, mainFrame: true, in: webView) == true }
+
+    private func isBackground(_ webView: WKWebView) -> Bool { backgroundTabs.contains(ObjectIdentifier(webView)) }
+
+    /// May navigate: a tab the student has used, or a reference tab still loading behind the exam tab.
+    private func loadable(_ webView: WKWebView) -> Bool { tracked(webView) || isBackground(webView) }
 
     private func captureDraft() {
         guard lockIsOwned, let page = browser, !page.isLoading, !draftReadInFlight,
@@ -1031,48 +1151,49 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
     }
 
-    private func rebuildTabs() {
-        guard let strip = tabStrip else { return }
-        strip.arrangedSubviews.forEach { strip.removeArrangedSubview($0); $0.removeFromSuperview() }
-        for (index, page) in orderedTabs.enumerated() {
-            let title = page.title.flatMap { $0.isEmpty ? nil : String($0.prefix(28)) }
-                ?? page.url?.host ?? (index == 0 ? "University" : "New tab")
-            let button = NSButton(title: title, target: self, action: #selector(selectTab(_:)))
-            button.bezelStyle = .rounded
-            button.isBordered = false
-            button.wantsLayer = true
-            button.layer?.cornerRadius = 10
-            button.layer?.backgroundColor = (page === browser ? NSColor.controlBackgroundColor : NSColor.clear).cgColor
-            button.font = .systemFont(ofSize: 14, weight: page === browser ? .medium : .regular)
-            button.heightAnchor.constraint(equalToConstant: 36).isActive = true
-            button.widthAnchor.constraint(equalToConstant: 230).isActive = true
-            if index == 0, let path = Bundle.main.path(forResource: "DKUOJ", ofType: "ico"), let image = NSImage(contentsOfFile: path) {
-                image.size = NSSize(width: 18, height: 18)
-                button.image = image; button.imagePosition = .imageLeft
-            }
-            button.tag = index
-            button.state = page === browser ? .on : .off
-            button.contentTintColor = page === browser ? BrandMark.blue : .labelColor
-            button.setAccessibilityLabel("Tab: " + title)
-            strip.addArrangedSubview(button)
-        }
+    /// Width of the tab bar: the window less the margins and the Emergency exit button (130 pt + its margin).
+    static func tabBarWidth(_ windowWidth: CGFloat) -> CGFloat { max(0, windowWidth - 16 - 158) }
+
+    /// Close a tab other than the exam tab: the shown one through its popup path, another through the same path a page closing itself takes.
+    private func closeTab(at index: Int) {
+        guard lockIsOwned, orderedTabs.indices.contains(index), index > 0 else { return }
+        let tab = orderedTabs[index]
+        if tab === browser { closePopupPressed() } else { webViewDidClose(tab) }
     }
 
-    @objc private func selectTab(_ sender: NSButton) {
-        guard lockIsOwned, orderedTabs.indices.contains(sender.tag), let current = browser else { return }
-        let target = orderedTabs[sender.tag]
+    private func rebuildTabs() {
+        guard let bar = tabStrip else { return }
+        let items = orderedTabs.enumerated().map { index, page in
+            SafariTabItem(id: ObjectIdentifier(page),
+                          title: page.title.flatMap { $0.isEmpty ? nil : String($0.prefix(60)) }
+                              ?? page.url?.host ?? referenceURLs[ObjectIdentifier(page)]?.host ?? (index == 0 ? "University" : "New tab"),
+                          selected: page === browser, closable: index > 0, useExamIcon: index == 0,
+                          loading: page.isLoading)
+        }
+        bar.update(items)
+    }
+
+    func select(index: Int) {
+        guard lockIsOwned, orderedTabs.indices.contains(index), let current = browser else { return }
+        let target = orderedTabs[index]
         guard target !== current else { return }
         if Self.clearsClipboard(from: current, to: target, examTab: orderedTabs.first) { NSPasteboard.general.clearContents() }
         dialogs.cancel()
         current.isHidden = true
+        let id = ObjectIdentifier(target)
+        let wasBackground = backgroundTabs.remove(id) != nil
+        // A background tab that failed, was refused or never showed a page loads again now, with the normal error and Reload.
+        let retry = tabsToReload.remove(id) != nil || (wasBackground && target.url == nil && !target.isLoading)
+        let intended = target.url ?? referenceURLs[id]
         parents.removeAll { $0 === target }
         parents.append(current)
         browser = target
         target.isHidden = false
         activeNavigation = nil
         policyDenial = nil
-        navigationState = ProtectedBrowserNavigation(startURL: target.url ?? policy!.startURL)
-        if !target.isLoading { navigationState?.finished() }
+        navigationState = ProtectedBrowserNavigation(startURL: intended ?? policy!.startURL)
+        if retry, let intended { navigationState?.started(); effects.load(target, intended) }
+        else if !target.isLoading { navigationState?.finished() }
         updateNavigation()
         overlay?.window?.makeFirstResponder(target)
     }
@@ -1083,13 +1204,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     @objc private func backPressed() {
         guard lockIsOwned, let previous = browser?.backForwardList.backItem?.url,
-              policy?.allows(previous, mainFrame: true) == true else { return }
+              verdict(previous, mainFrame: true, in: browser) == true else { return }
         browser?.goBack()
     }
     private var reloadTarget: URL? {
         guard let state = navigationState, state.canReload else { return nil }
         let target = state.phase == .failed ? state.requestedURL : browser?.url
-        guard policy?.allows(target, mainFrame: true) == true else { return nil }
+        guard verdict(target, mainFrame: true, in: browser) == true else { return nil }
         return target
     }
 
@@ -1164,16 +1285,22 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         else { effects.reload(view, hard) }
     }
 
-    /// Before the lock there is nothing to leave. Once the Mac is locked, Leave only explains how
-    /// the lock ends; it also gives a paused registration its next try.
+    /// Before the lock there is nothing to leave. Once the Mac is locked, the Emergency exit sheet shows the instructor
+    /// release, the lock code and a field for the instructor's offline exit code, checked here with no network.
+    /// It also gives a paused registration its next try.
     @objc private func leavePressed() {
         guard flow.ownsLock else { close(release: false); return }
         let setup = effects.setup
         setup.background { [weak self] in
-            _ = setup.leaveSnapshot()
+            let snapshot = setup.leaveSnapshot()
             setup.onMain {
                 guard let self, self.flow.ownsLock else { return }
-                self.effects.presentLeave(self.overlay?.window)
+                self.effects.presentLeave(setup.leavePrompt(snapshot,
+                                                            submitAsync: { [weak self] typed, done in
+                                                                guard let self else { done(.stale); return }
+                                                                self.submitLeaveCodeInBackground(typed, completion: done)
+                                                            }),
+                                          self.overlay?.window)
             }
         }
     }
@@ -1183,8 +1310,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     func submitLeaveCode(_ typed: String) -> NativeExitAttempt {
         guard flow.ownsLock else { return .malformed }
         let (result, ticket) = NativeExit.attemptTicketed(typed: typed, store: effects.setup.store, now: effects.now(), monotonic: effects.monotonic)
-        if result == .accepted { return completeLeaveIfCurrent(ticket) ? .accepted : .stale }
-        return result
+        return NativeExit.settle(result, ticket: ticket, store: effects.setup.store, canRelease: true) { completeLeave() }
     }
 
     private var leaveInFlight = false
@@ -1192,24 +1318,18 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     /// Same rules as `submitLeaveCode`, but the slow comparison runs off the main thread.
     /// Only one check at a time; `completion` runs on the main thread.
     func submitLeaveCodeInBackground(_ typed: String, completion: @escaping (NativeExitAttempt) -> Void) {
-        guard flow.ownsLock, !leaveInFlight else { completion(.malformed); return }
+        guard flow.ownsLock, !leaveInFlight else { completion(.stale); return }
         leaveInFlight = true
-        NativeExit.attemptInBackground(typed: typed, store: effects.setup.store, now: effects.now(), monotonic: effects.monotonic()) { [weak self] result, ticket in
+        let store = effects.setup.store
+        NativeExit.attemptInBackground(typed: typed, store: store, now: effects.now(), monotonic: effects.monotonic()) { [weak self] result, ticket in
             guard let self else { completion(result); return }
             self.leaveInFlight = false
-            if result == .accepted {
-                guard self.flow.ownsLock, self.completeLeaveIfCurrent(ticket) else { completion(.stale); return }
-            }
-            completion(result)
+            completion(NativeExit.settle(result, ticket: ticket, store: store, canRelease: self.flow.ownsLock) { self.completeLeave() })
         }
     }
 
     /// Web view first, then the lock, then both saved copies; the OJ is told last and its answer
     /// (409, offline, anything) never undoes the unlock.
-    private func completeLeaveIfCurrent(_ ticket: NativeExit.Ticket?) -> Bool {
-        NativeExit.releaseIfCurrent(ticket, store: effects.setup.store) { completeLeave() }
-    }
-
     private func completeLeave() {
         let session = nativeExam.binding?.session
         let cookies = retainedWebsiteStore
@@ -1531,6 +1651,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             label.autoresizingMask = [.width, .minYMargin, .maxYMargin]
             root.addSubview(label)
             holdLabel = label
+            cancelStagger()
             notice?.stringValue = Self.holdText
             holdCancel?()
             holdCancel = effects.schedule(renewSchedule.interval(.hold)) { [weak self] in self?.holdCancel = nil; self?.refreshExamContext() }
@@ -1545,20 +1666,26 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private func discardBrowser() {
         renewCancel?(); renewCancel = nil
         contextInFlight = false; approvedSites = []; approvedResources = []; approvedAssets = []; pickerSites = []; sitePicker = nil
+        referencePages.reset()
         policyRevision = UUID(); policyExpires = nil
         draftTimer?.invalidate(); draftTimer = nil
         draftScope = nil; draftFields = nil; pendingDraft = nil
         draftReadInFlight = false; draftStatus = nil; restoreButton = nil
         activeNavigation = nil
         policyDenial = nil
-        let pages = parents + (browser.map { [$0] } ?? [])
+        // Every tab this controller created: the exam tab, parents, the shown tab and the background reference tabs.
+        var pages: [WKWebView] = []
+        for page in orderedTabs + parents + (browser.map { [$0] } ?? []) where !pages.contains(where: { $0 === page }) { pages.append(page) }
         parents.removeAll()
         orderedTabs.removeAll()
+        cancelStagger()
+        referenceURLs.removeAll(); backgroundTabs.removeAll(); tabsToReload.removeAll(); boxTabs.removeAll()
         tabStrip = nil
         recoveryAttempts.removeAll()
         browser = nil
         for page in pages {
             page.stopLoading()
+            page.isHidden = true
             page.navigationDelegate = nil
             page.uiDelegate = nil
             page.removeFromSuperview()
@@ -1590,6 +1717,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             EventTap.reloadShortcutAllowed = false
             EventTap.editShortcutsAllowed = false
             self.holdLabel = nil
+            // The Emergency exit sheet belongs to this lock; it must not stay attached over the next screen.
+            NativeLeaveSheet.end(in: self.overlay?.window)
             self.discardBrowser()
             self.overlay?.removeFromSuperview()
             self.overlay = nil
@@ -1654,7 +1783,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let initialPopupBlank = !parents.isEmpty && webView === browser
             && webView.url == nil && action.request.url?.absoluteString == "about:blank"
         let trustedPopupRequest = action.targetFrame == nil && webView === browser
-            && policy?.allows(webView.url, mainFrame: true) == true
+            && verdict(webView.url, mainFrame: true, in: webView) == true
             && action.request.url?.absoluteString == "about:blank"
         let mainTabNeedsOwnTab = webView === orderedTabs.first && action.targetFrame?.isMainFrame == true
             && policy?.opensInOwnTab(action.request.url) == true
@@ -1663,8 +1792,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             openReferenceTab(url)
             return
         }
-        guard tracked(webView), lockIsOwned, !action.shouldPerformDownload,
-              (initialPopupBlank || trustedPopupRequest) || policy?.allows(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true) == true else {
+        guard loadable(webView), lockIsOwned, !action.shouldPerformDownload,
+              (initialPopupBlank || trustedPopupRequest) || verdict(action.request.url, mainFrame: action.targetFrame?.isMainFrame ?? true, in: webView) == true else {
             if webView === browser, lockIsOwned {
                 if action.targetFrame?.isMainFrame == true {
                     policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: action.request.url)
@@ -1673,8 +1802,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             }
             decisionHandler(.cancel); return
         }
+        // Any non-exam tab that goes to an allowed Box page (a link followed anywhere, a popup) may sign in to Box from there.
+        if action.targetFrame?.isMainFrame ?? true, webView !== orderedTabs.first, let url = action.request.url,
+           BoxSignIn.isBoxPage(url), policy?.allows(url, mainFrame: true) == true {
+            boxTabs.insert(ObjectIdentifier(webView))
+        }
         if webView === browser, action.targetFrame?.isMainFrame == true,
-           let url = action.request.url, policy?.allows(url, mainFrame: true) == true {
+           let url = action.request.url, verdict(url, mainFrame: true, in: webView) == true {
             policyDenial = nil
             navigationState?.requested(url)
             diagnostic("navigation-allowed", url: url)
@@ -1684,7 +1818,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
                  completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        guard tracked(webView), lockIsOwned else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+        // Same rule as the navigation policy: a reference tab still loading in the background must answer ServerTrust too.
+        guard loadable(webView), lockIsOwned else { completionHandler(.cancelAuthenticationChallenge, nil); return }
         nativeIdentity.respond(challenge, completion: completionHandler)
     }
 
@@ -1699,15 +1834,17 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if loadable(webView), webView !== browser { rebuildTabs() }    // the tab shows the page's title as it loads, like Safari
         if navigation != nil, navigation === errorPageNavigation { return }
         guard webView === browser, lockIsOwned, let url = webView.url,
-              policy?.allows(url, mainFrame: true) == true else { return }
+              verdict(url, mainFrame: true, in: webView) == true else { return }
         navigationState?.committed(url)
         diagnostic("navigation-committed", url: url)
         updateNavigation()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if loadable(webView), webView !== browser { rebuildTabs() }    // the shown tab is rebuilt by updateNavigation
         guard webView === browser, lockIsOwned else { return }
         if navigation === errorPageNavigation { return }
         navigationState?.finished()
@@ -1726,7 +1863,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         components.scheme = source.protocol
         components.host = source.host
         if source.port != 0 { components.port = source.port }
-        guard let url = components.url, policy?.allows(url, mainFrame: true) == true,
+        guard let url = components.url, verdict(url, mainFrame: true, in: webView) == true,
               let origin = ProtectedBrowserPolicy.origin(url) else { return nil }
         return origin
     }
@@ -1781,8 +1918,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         }
         // An HTTP error page is the site's own page: show it, never cancel it for its content type.
         let showable = response.canShowMIMEType || (httpStatus ?? 0) >= 400
-        guard tracked(webView), lockIsOwned, showable, !AllowedSites.isAttachment(contentDisposition: disposition),
-              initialPopupBlank || policy?.allows(response.response.url, mainFrame: response.isForMainFrame) == true else {
+        guard loadable(webView), lockIsOwned, showable, !AllowedSites.isAttachment(contentDisposition: disposition),
+              initialPopupBlank || verdict(response.response.url, mainFrame: response.isForMainFrame, in: webView) == true else {
             if webView === browser, lockIsOwned {
                 if response.isForMainFrame {
                     policyDenial = ProtectedBrowserPolicyDenial(view: webView, navigation: activeNavigation, target: response.response.url)
@@ -1796,9 +1933,15 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard webView === browser, lockIsOwned, orderedTabs.count < 8,
-              let opener = webView.url, policy?.allows(opener, mainFrame: true) == true,
-              action.request.url?.absoluteString == "about:blank" || policy?.allows(action.request.url, mainFrame: true) == true else {
+        // A tab the student has not selected yet cannot open windows, and its refusal must not show in the exam tab.
+        if isBackground(webView) { diagnostic("background-tab-window-refused", url: action.request.url); return nil }
+        if webView === browser, lockIsOwned, orderedTabs.count >= ReferencePages.maxTabs {
+            notice?.stringValue = Self.tabsFullText
+            return nil
+        }
+        guard webView === browser, lockIsOwned, orderedTabs.count < ReferencePages.maxTabs,
+              let opener = webView.url, verdict(opener, mainFrame: true, in: webView) == true,
+              action.request.url?.absoluteString == "about:blank" || verdict(action.request.url, mainFrame: true, in: webView) == true else {
             refuse(action.request.url); return nil
         }
         // WebKit supplies the configuration to preserve window.opener and the ephemeral session.
@@ -1813,6 +1956,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         child.uiDelegate = self
         child.allowsBackForwardNavigationGestures = false
         child.allowsLinkPreview = false
+        // A sign-in window opened by a Box tab is part of the same chain.
+        if boxTabs.contains(ObjectIdentifier(webView)) { boxTabs.insert(ObjectIdentifier(child)) }
         if Self.clearsClipboard(from: webView, to: child, examTab: orderedTabs.first) { NSPasteboard.general.clearContents() }
         webView.isHidden = true
         parents.append(webView)
@@ -1837,12 +1982,13 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) { decisionHandler(.deny) }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if isBackground(webView), lockIsOwned { tabsToReload.insert(ObjectIdentifier(webView)); return }
         guard tracked(webView), lockIsOwned else { return }
         diagnostic("web-process-stopped", url: webView.url)
         // Keep the other tabs and the lock. One automatic recovery per tab;
         // repeated crashes leave a manual Reload action instead of a crash loop.
         if recoveryAttempts.insert(ObjectIdentifier(webView)).inserted,
-           policy?.allows(webView.url, mainFrame: true) == true {
+           verdict(webView.url, mainFrame: true, in: webView) == true {
             webView.reload()
         } else if webView === browser {
             navigationState?.failed(diagnostic: "Page process stopped")
@@ -1862,11 +2008,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         child.uiDelegate = nil
         child.removeFromSuperview()
         orderedTabs.removeAll { $0 === child }
+        forget(child)
         browser = parent
         activeNavigation = nil
         policyDenial = nil
         parent.isHidden = false
-        navigationState = ProtectedBrowserNavigation(startURL: parent.url ?? policy!.startURL)
+        navigationState = ProtectedBrowserNavigation(startURL: parent.url ?? referenceURLs[ObjectIdentifier(parent)] ?? policy!.startURL)
         if !parent.isLoading { navigationState?.finished() }
         updateNavigation()
         overlay?.window?.makeFirstResponder(parent)
@@ -1878,11 +2025,17 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             // A hidden popup may close after opening another; detach it without touching the root.
             parents.remove(at: index)
             orderedTabs.removeAll { $0 === webView }
+            forget(webView)
             rebuildTabs()
             webView.stopLoading()
             webView.navigationDelegate = nil
             webView.uiDelegate = nil
             webView.removeFromSuperview()
+        } else if isBackground(webView) {
+            orderedTabs.removeAll { $0 === webView }
+            forget(webView)
+            rebuildTabs()
+            webView.stopLoading(); webView.navigationDelegate = nil; webView.uiDelegate = nil; webView.removeFromSuperview()
         }
     }
 
@@ -1891,6 +2044,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     private func navigationFailed(_ webView: WKWebView, navigation: WKNavigation?, error: Error) {
+        // A failed background tab shows nothing yet; it loads again when the student selects it.
+        if isBackground(webView), lockIsOwned { tabsToReload.insert(ObjectIdentifier(webView)); return }
         guard webView === browser, lockIsOwned else { return }
         if navigation != nil, navigation === errorPageNavigation { return }
         let failure = error as NSError
@@ -1907,20 +2062,20 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         diagnostic("navigation-failed domain=" + domain + " code=" + String(failure.code), url: failedURL)
         // A reply the server did send (bad body, interrupted frame, redirect loop) is not "unreachable":
         // no notice, no retry loop, no VPN prompt; the page stays as the server left it.
-        if policy?.allows(failedURL, mainFrame: true) != false,
+        if verdict(failedURL, mainFrame: true, in: webView) != false,
            LoadOutcome.classify(status: nil, error: failure) != .unreachable {
             navigationState?.finished()
             updateNavigation()
             return
         }
         let blockedOrigin = failedURL.flatMap(ProtectedBrowserPolicy.origin).flatMap { origin in
-            policy?.allows(failedURL, mainFrame: true) == false ? " · Blocked site: " + origin : nil
+            verdict(failedURL, mainFrame: true, in: webView) == false ? " · Blocked site: " + origin : nil
         } ?? ""
         let tls = LoadOutcome.isTLSFailure(domain: failure.domain, code: failure.code)
         navigationState?.failed(diagnostic: tls ? LoadOutcome.tlsNotice : domain + " (" + String(failure.code) + ")" + blockedOrigin)
         failureDescription = failure.localizedDescription
         updateNavigation()
-        if blockedOrigin.isEmpty, let failedURL, policy?.allows(failedURL, mainFrame: true) == true {
+        if blockedOrigin.isEmpty, let failedURL, verdict(failedURL, mainFrame: true, in: webView) == true {
             errorPageNavigation = effects.showError(webView, Self.errorPageHTML(description: failure.localizedDescription, url: failedURL), failedURL)
         }
         let ojHost = failedURL.flatMap(ProtectedBrowserPolicy.origin) == ProtectedBrowserPolicy.origin(selection.url)

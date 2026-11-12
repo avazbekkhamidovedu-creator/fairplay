@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from ...box_profiles import APP_HOSTS, checked_link, selected_profile, BoxProfileError
+from ...box_profiles import checked_link
 from ...schemas import WILDCARD_PREFIX, is_shared_suffix, parse_website_entry
 from ...site_companions import companions
 from ..site_policy import filter_sites
@@ -26,21 +26,14 @@ def _origin(host: str, wildcard_ok: bool = False) -> str | None:
     h = host.lower().rstrip(".")
     if h.startswith(WILDCARD_PREFIX):
         suffix = h[len(WILDCARD_PREFIX):]
-        if (not wildcard_ok or "*" in suffix or is_shared_suffix(suffix) or not _allowed(WILDCARD_PREFIX + suffix)
-                or not _allowed(suffix)):
+        if not wildcard_ok or "*" in suffix or is_shared_suffix(suffix):
+            return None
+        if not _allowed(WILDCARD_PREFIX + suffix) or not _allowed(suffix):
             return None
         return "https://" + h
     if not h or "*" in h or not _allowed(h):
         return None
     return "https://" + h
-
-
-def _box_hosts() -> list[str]:
-    try:
-        _, prof = selected_profile()
-    except BoxProfileError:
-        return []
-    return [*APP_HOSTS, *(x["host"] for x in prof["sign_in_hosts"]), *prof["asset_hosts"]]
 
 
 def build_lock_sites(websites, links=None, box_link=None) -> dict:
@@ -86,12 +79,14 @@ def build_lock_sites(websites, links=None, box_link=None) -> dict:
     for group in companions(hosts):
         for site in group["sites"]:
             add_resource(site)
-    if link:
-        for h in _box_hosts():
-            add_resource(h)
-    page_origins = {"https://" + (urlsplit(p).hostname or "") for p in pages}
-    resources = [r for r in resources if r not in page_origins][:MAX_LOCK_PAGES_AND_RESOURCES - 1]
-    pages = pages[:MAX_LOCK_PAGES_AND_RESOURCES - len(resources)]
+    # Duke Box's sign-in chain (Box login, Duke SSO, Duo) is NOT emitted: the apps own it (Mac BoxSignIn.swift, Windows
+    # BoxSignIn.cs) and open it only in a tab that started on a Box link. Emitting it here would put those hosts in every
+    # tab of an older client and only crowd out real companion resources.
     if not pages:
         return {"pages": [], "resources": []}
+    # The OJ signs one shared cap of pages + resources and trims resources first, so the pages are cut first here and
+    # the resources get what is left.
+    pages = pages[:MAX_LOCK_PAGES_AND_RESOURCES]
+    page_origins = {"https://" + (urlsplit(p).hostname or "") for p in pages}
+    resources = [r for r in resources if r not in page_origins][:MAX_LOCK_PAGES_AND_RESOURCES - len(pages)]
     return {"pages": pages, "resources": resources}

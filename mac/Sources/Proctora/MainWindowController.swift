@@ -128,6 +128,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     /// The saved lock ended (dev safety unlock): stop trying to take it again.
     func cancelNativeRecovery() {
+        endAttachedSheet()
         recoveryTimer?.invalidate(); recoveryTimer = nil
         recoveredState = nil
         recoveryRelease?.stop(); recoveryRelease = nil
@@ -171,15 +172,19 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
                 return { timer.invalidate() }
             },
             monotonic: NativeExit.systemMonotonic,
-            release: {
+            release: { [weak self] in
                 DebugLog.log("lock", "native lock released from the relaunch block screen")
                 LockdownController.shared.releaseNativeLock()
                 setup.clear()
+                self?.endAttachedSheet()
             })
         let poller = NativeRecoveryRelease(state: state, deps: deps)
         recoveryRelease = poller
         poller.start()
     }
+
+    /// A sheet (the Emergency exit one) must never outlive the lock it belongs to: every path that ends the block screen calls this.
+    private func endAttachedSheet() { NativeLeaveSheet.end(in: window) }
 
     private func attemptNativeRecovery() {
         guard let state = recoveredState, let content = window?.contentView else { return }
@@ -187,22 +192,24 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             recoveryTimer?.invalidate(); recoveryTimer = nil
             recoveredState = nil
             recoveryRelease?.stop(); recoveryRelease = nil
+            // An Emergency exit sheet opened on the block screen must not outlive it: its submit would act behind the browser.
+            endAttachedSheet()
             hideBlocking()
             webView.stopLoading()
             webView.isHidden = true
             protectedBrowser.resumeNativeLock(state, in: content)
             return
         }
+        // A retry tick (the timer exists) finds the block screen already up; it is only entered and shown the first time.
+        guard recoveryTimer == nil else { return }
         enterLockedMode()
         let union = NSScreen.screens.reduce(NSRect.zero) { $0.union($1.frame) }
         window?.setFrame(union.isEmpty ? (NSScreen.main?.frame ?? .zero) : union, display: true)
         showBlocking(reason: "FairPlay could not lock this Mac again.\nAllow FairPlay in System Settings > Privacy & Security > Accessibility. This Mac stays locked until then.\nYour instructor can release this Mac from DKU OJ.", quitAction: nil, calm: true)
         startRecoveryRelease(state)
-        if recoveryTimer == nil {
-            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.attemptNativeRecovery() }
-            RunLoop.main.add(timer, forMode: .common)
-            recoveryTimer = timer
-        }
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.attemptNativeRecovery() }
+        RunLoop.main.add(timer, forMode: .common)
+        recoveryTimer = timer
     }
 
     /// The Leave sheet for the native lock: the browser's own when it is open, else the one on the
@@ -212,9 +219,43 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard recoveredState != nil || LockdownController.shared.nativeLockActive else { return }
         let setup = NativeLockSetup.live
         setup.background { [weak self] in
-            _ = setup.leaveSnapshot()
-            setup.onMain { NativeLeaveSheet.present(in: self?.window) }
+            let snapshot = setup.leaveSnapshot()
+            setup.onMain {
+                guard let self else { return }
+                let prompt = setup.leavePrompt(snapshot) { [weak self] typed, done in
+                    guard let self, !self.blockLeaveInFlight, !self.protectedBrowser.isOpen else { done(.stale); return }
+                    self.blockLeaveInFlight = true
+                    NativeExit.attemptInBackground(typed: typed, store: setup.store, now: Date(), monotonic: NativeExit.systemMonotonic()) { [weak self] result, ticket in
+                        guard let self else { done(result); return }
+                        self.blockLeaveInFlight = false
+                        done(NativeExit.settle(result, ticket: ticket, store: setup.store, canRelease: !self.protectedBrowser.isOpen) {
+                            self.finishLeaveWithoutBrowser(setup)
+                        })
+                    }
+                }
+                NativeLeaveSheet.present(prompt, in: self.window)
+            }
         }
+    }
+
+    /// A right exit code on the relaunch block screen: no network is needed or waited for.
+    private var blockLeaveInFlight = false
+
+    private func finishLeaveWithoutBrowser(_ setup: NativeLockSetup) {
+        // The protected browser took the lock over (recovery succeeded): it alone ends it.
+        guard !protectedBrowser.isOpen else { return }
+        recoveryTimer?.invalidate(); recoveryTimer = nil
+        recoveredState = nil
+        recoveryRelease?.stop(); recoveryRelease = nil
+        LockdownController.shared.releaseNativeLock()
+        // releaseNativeLock returns early when the lock was never taken (the block screen is up because it could not be),
+        // which would leave the borderless top-level window: always put the normal window back.
+        exitLockedMode()
+        setup.clear()
+        hideBlocking()
+        webView.isHidden = false
+        takeFocus()
+        showProtectedBrowser()
     }
 
 
@@ -1511,10 +1552,12 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         stack.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(stack)
         content.addSubview(v)   // topmost
-        let eb = NSButton(title: LockdownController.shared.nativeLockActive ? "Leave" : "Invigilator exit", target: self, action: #selector(exitButtonPressed))
+        let nativeExit = LockdownController.shared.nativeLockActive || recoveredState != nil
+        let eb = NSButton(title: nativeExit ? NativeLeaveText.title : "Invigilator exit", target: self, action: #selector(exitButtonPressed))
         eb.bezelStyle = .rounded
         eb.controlSize = .small
-        eb.setAccessibilityLabel("Invigilator exit")
+        if nativeExit { NativeLeaveText.styleEmergency(eb) }
+        if !nativeExit { eb.setAccessibilityLabel("Invigilator exit") }
         eb.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(eb)
         NSLayoutConstraint.activate([

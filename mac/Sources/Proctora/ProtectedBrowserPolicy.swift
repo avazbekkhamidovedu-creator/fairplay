@@ -16,6 +16,8 @@ struct ProtectedBrowserPolicy {
     private var sitesLive: Bool { sitesExpire.map { clock() < $0 } ?? true }
     /// The signed sites that passed validation, in order (the picker lists these).
     let acceptedSites: [String]
+    /// True when an allowed page is a Duke Box page: the Box sign-in chain is available to Box tabs.
+    let hasBoxPage: Bool
 
     init?(start: String, additionalOrigins: String, forbiddenOrigin: URL, allowHTTP: Bool = false, referenceSites: [String] = [], resourceOrigins resources: [String] = [], assetOrigins assets: [String] = []) {
         guard start.utf8.count <= 2048, additionalOrigins.utf8.count <= 8192,
@@ -66,6 +68,7 @@ struct ProtectedBrowserPolicy {
         var suffixes: Set<String> = []
         guard resources.count <= 64 else { return nil }
         for raw in (accepted.isEmpty ? [] : resources) {
+            if BoxSignIn.isChainResource(raw) { continue }
             if raw.contains("*") {
                 if let suffix = Self.resourceSuffix(raw) { suffixes.insert(suffix) }
                 continue
@@ -77,6 +80,10 @@ struct ProtectedBrowserPolicy {
                   !SiteDenyList.isDenied(host: link.host ?? "") else { continue }
             assets.insert(origin)
         }
+        // A Box link among the allowed pages enables the sign-in chain, but only as frames and subresources of a page that is itself
+        // on the chain (Box tab, see contentRules and the controller's verdict), never as resources of every tab. A chain host a
+        // list sends as a plain resource is dropped above for the same reason.
+        hasBoxPage = accepted.contains { BoxSignIn.isBoxPage(URL(string: $0)) }
         resourceOrigins = assets
         resourceSuffixes = suffixes
         // The OJ's own subresource hosts: always allowed for non-main-frame loads, with or without sites.
@@ -88,6 +95,9 @@ struct ProtectedBrowserPolicy {
         startURL = url
         origins = allowed
     }
+
+    /// A host or suffix as a content-rule regex literal.
+    static func escapeDots(_ host: String) -> String { host.replacingOccurrences(of: ".", with: "\\.") }
 
     static func normalizedURL(_ raw: String) -> URL? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -263,6 +273,23 @@ struct ProtectedBrowserPolicy {
                               "action": ["type": "ignore-previous-rules"]])
             }
         }
+        // Duke Box sign-in chain: its hosts load only inside a page that is itself on the chain (a Box tab), never in the exam
+        // tab or another site; account hosts only on /login. WebKit has no per-tab lists, so the top page scopes it.
+        if hasBoxPage {
+            var tops: [String] = []
+            for host in BoxSignIn.appHosts.union(BoxSignIn.signInExact).sorted() { tops.append("^https://" + Self.escapeDots(host) + "/") }
+            for base in BoxSignIn.signInSubdomainsOf { tops.append("^https://[a-z0-9.-]+\\." + Self.escapeDots(base) + "/") }
+            func chainRule(_ filter: String) {
+                rules.append(["trigger": ["url-filter": filter, "if-top-url": tops], "action": ["type": "ignore-previous-rules"]])
+            }
+            for host in BoxSignIn.signInExact.union(BoxSignIn.assetExact).sorted() {
+                let escaped = Self.escapeDots(host)
+                chainRule("^https://" + escaped + (BoxSignIn.loginPathOnly.contains(host) ? "/login" : "/"))
+            }
+            for base in BoxSignIn.signInSubdomainsOf + BoxSignIn.assetSubdomainsOf {
+                chainRule("^https://[a-z0-9.-]+\\." + Self.escapeDots(base) + "/")
+            }
+        }
         // Pages on an OJ origin may load anything but denied hosts; signed sites keep the rules above.
         var topURLs: [String] = []
         for origin in baseOrigins.sorted() {
@@ -292,7 +319,7 @@ struct ProtectedBrowserPolicy {
             let tails = parsed.port == nil ? ["/", parsed.scheme == "https" ? ":443/" : ":80/"] : ["/"]
             for tail in tails { rules.append(scoped("^" + escaped + tail, "ignore-previous-rules")) }
         }
-        func escape(_ host: String) -> String { host.replacingOccurrences(of: ".", with: "\\.") }
+        func escape(_ host: String) -> String { Self.escapeDots(host) }
         for denied in SiteDenyList.allSuffixes {
             for prefix in ["^https?://", "^https?://[a-z0-9.-]+\\."] {
                 rules.append(scoped(prefix + escape(denied) + "[:/]", "block", typed: false))

@@ -40,12 +40,12 @@ import WebKit
     }
 
     @Test func aResourceOnlyOriginLoadsSubresourcesButIsNeverAPage() throws {
-        let p = try policy(["https://duke.app.box.com/"], resources: ["https://cdn.boxcloud.com", "https://bad host", "https://cdn.boxcloud.com/path"])
-        let asset = URL(string: "https://cdn.boxcloud.com/app.js")!
+        let p = try policy(["https://duke.app.box.com/"], resources: ["https://cdn.cdnfiles.org", "https://bad host", "https://cdn.cdnfiles.org/path"])
+        let asset = URL(string: "https://cdn.cdnfiles.org/app.js")!
         #expect(p.allows(asset, mainFrame: false))
         #expect(!p.allows(asset, mainFrame: true))
         #expect(!p.allowsMainTab(asset) && !p.opensInOwnTab(asset))
-        #expect(p.contentRules.contains("cdn\\\\.boxcloud\\\\.com"))
+        #expect(p.contentRules.contains("cdn\\\\.cdnfiles\\\\.org"))
     }
 
     @Test func theMainTabRefusesAnAllowedSiteAndItOpensInItsOwnTab() throws {
@@ -106,15 +106,15 @@ import WebKit
     private func url(_ s: String) -> URL { URL(string: s)! }
 
     @Test func aWildcardCoversSubdomainsForSubresourcesOnly() {
-        let p = policy(["https://*.boxcloud.com"])
-        #expect(p.allows(url("https://dl.boxcloud.com/a.js"), mainFrame: false))
-        #expect(p.allows(url("https://a.b.boxcloud.com:443/a.js"), mainFrame: false))
-        #expect(!p.allows(url("https://boxcloud.com/a.js"), mainFrame: false))
-        #expect(!p.allows(url("https://evilboxcloud.com/a.js"), mainFrame: false))
-        #expect(!p.allows(url("http://dl.boxcloud.com/a.js"), mainFrame: false))
-        #expect(!p.allows(url("https://dl.boxcloud.com:8443/a.js"), mainFrame: false))
-        #expect(!p.allows(url("https://dl.boxcloud.com/"), mainFrame: true))
-        #expect(!p.allowsMainTab(url("https://dl.boxcloud.com/")) && !p.opensInOwnTab(url("https://dl.boxcloud.com/")))
+        let p = policy(["https://*.cdnfiles.org"])
+        #expect(p.allows(url("https://dl.cdnfiles.org/a.js"), mainFrame: false))
+        #expect(p.allows(url("https://a.b.cdnfiles.org:443/a.js"), mainFrame: false))
+        #expect(!p.allows(url("https://cdnfiles.org/a.js"), mainFrame: false))
+        #expect(!p.allows(url("https://evilcdnfiles.org/a.js"), mainFrame: false))
+        #expect(!p.allows(url("http://dl.cdnfiles.org/a.js"), mainFrame: false))
+        #expect(!p.allows(url("https://dl.cdnfiles.org:8443/a.js"), mainFrame: false))
+        #expect(!p.allows(url("https://dl.cdnfiles.org/"), mainFrame: true))
+        #expect(!p.allowsMainTab(url("https://dl.cdnfiles.org/")) && !p.opensInOwnTab(url("https://dl.cdnfiles.org/")))
     }
 
     @Test func malformedAndTooBroadPatternsAreRefused() {
@@ -123,7 +123,7 @@ import WebKit
                     "https://**.a.com", "https://*.*.a.com", "*.a.com", "https://*.A.com"] {
             #expect(ProtectedBrowserPolicy.resourceSuffix(bad) == nil, "\(bad)")
         }
-        #expect(ProtectedBrowserPolicy.resourceSuffix("https://*.duosecurity.com") == "duosecurity.com")
+        #expect(ProtectedBrowserPolicy.resourceSuffix("https://*.idpassets.org") == "idpassets.org")
         let p = policy(["https://*.com"])
         #expect(!p.allows(url("https://a.com/x.js"), mainFrame: false))
     }
@@ -140,15 +140,15 @@ import WebKit
     }
 
     @Test func wildcardsInSitesAreNotPages() {
-        let p = policy([], sites: ["https://*.boxcloud.com"])
+        let p = policy([], sites: ["https://*.cdnfiles.org"])
         #expect(p.acceptedSites.isEmpty)
-        #expect(!p.allows(url("https://dl.boxcloud.com/"), mainFrame: true))
+        #expect(!p.allows(url("https://dl.cdnfiles.org/"), mainFrame: true))
     }
 
     @Test func theCapOfSixtyFourStaysAndRulesCompile() {
         #expect(ProtectedBrowserPolicy(start: "https://oj.example.edu", additionalOrigins: "", forbiddenOrigin: forbidden,
                 resourceOrigins: (0..<65).map { "https://*.s\($0).org" }) == nil)
-        let p = policy(["https://*.duosecurity.com", "https://*.microsoft.com"])
+        let p = policy(["https://*.idpassets.org", "https://*.microsoft.com"])
         #expect((try? JSONSerialization.jsonObject(with: Data(p.contentRules.utf8))) != nil)
     }
 }
@@ -161,12 +161,12 @@ import WebKit
     }
 
     @Test func sitesAndResourcesStopWorkingWhenTheExpiryPasses() {
-        var p = make(sites: ["https://docs.python.org/3/"], resources: ["https://cdn.example.org", "https://*.duosecurity.com"])
+        var p = make(sites: ["https://docs.python.org/3/"], resources: ["https://cdn.example.org", "https://*.idpassets.org"])
         var now = Date(timeIntervalSince1970: 1000)
         p.clock = { now }
         p.sitesExpire = Date(timeIntervalSince1970: 1090)
         let site = URL(string: "https://docs.python.org/3/x")!, cdn = URL(string: "https://cdn.example.org/a.js")!
-        let duo = URL(string: "https://api.duosecurity.com/a.js")!, oj = URL(string: "https://oj.example.edu/c")!
+        let duo = URL(string: "https://api.idpassets.org/a.js")!, oj = URL(string: "https://oj.example.edu/c")!
         #expect(p.allows(site, mainFrame: true) && p.allows(cdn, mainFrame: false) && p.allows(duo, mainFrame: false))
         now = Date(timeIntervalSince1970: 1091)
         #expect(!p.allows(site, mainFrame: true) && !p.allows(cdn, mainFrame: false) && !p.allows(duo, mainFrame: false))
@@ -176,9 +176,9 @@ import WebKit
     }
 
     @Test func resourcesAreIgnoredWhenNoSiteIsAccepted() {
-        let p = make(sites: ["*.bad.org"], resources: ["https://cdn.example.org", "https://*.duosecurity.com"])
+        let p = make(sites: ["*.bad.org"], resources: ["https://cdn.example.org", "https://*.idpassets.org"])
         #expect(!p.allows(URL(string: "https://cdn.example.org/a.js")!, mainFrame: false))
-        #expect(!p.allows(URL(string: "https://x.duosecurity.com/a.js")!, mainFrame: false))
+        #expect(!p.allows(URL(string: "https://x.idpassets.org/a.js")!, mainFrame: false))
     }
 
     @Test func newDeniedHostsAndPublicSuffixesAreRefused() {
@@ -210,7 +210,7 @@ import WebKit
             #expect(ProtectedBrowserPolicy.resourceSuffix(pattern) == nil, "\(pattern)")
         }
         #expect(SiteDenyList.exactHostIsUnder("google.com") && SiteDenyList.exactHostIsUnder("brave.com"))
-        #expect(!SiteDenyList.exactHostIsUnder("duosecurity.com"))
+        #expect(!SiteDenyList.exactHostIsUnder("idpassets.org"))
         for host in ["www.google.com", "translate.google.com", "meet.google.com", "search.brave.com", "google.com"] {
             #expect(SiteDenyList.isDenied(host: host))
         }
@@ -223,8 +223,8 @@ import WebKit
             #expect(ProtectedBrowserPolicy.isSharedSuffix(suffix), "\(suffix)")
             #expect(ProtectedBrowserPolicy.resourceSuffix("https://*." + suffix) == nil, "\(suffix)")
         }
-        #expect(!ProtectedBrowserPolicy.isSharedSuffix("duosecurity.com"))
-        #expect(ProtectedBrowserPolicy.resourceSuffix("https://*.duosecurity.com") == "duosecurity.com")
+        #expect(!ProtectedBrowserPolicy.isSharedSuffix("idpassets.org"))
+        #expect(ProtectedBrowserPolicy.resourceSuffix("https://*.idpassets.org") == "idpassets.org")
     }
 
     @Test func aTrailingSlashEntryMatchesItsPathWithAndWithoutTheSlashAndChildren() {

@@ -1,6 +1,10 @@
 import Foundation
 import ServiceManagement
 
+/// The login item that reopens FairPlay while a native lock is held (macOS 13+): after a log-out and log-in in the same
+/// boot (the app and its watchdog both ended) FairPlay opens by itself and locks again. It is registered when the lock is
+/// taken and removed on every lock end. After a real restart the saved lock is from an earlier boot (NativeRelaunch.rebooted):
+/// it is cleared, which removes the item, so FairPlay at most opens once on the home screen and never locks.
 protocol LoginItemRegistering {
     func register()
     func unregister()
@@ -11,7 +15,6 @@ struct NoLoginItem: LoginItemRegistering {
     func unregister() {}
 }
 
-/// Reopens FairPlay after a reboot while a native lock is saved (macOS 13+).
 struct SystemLoginItem: LoginItemRegistering {
     func register() {
         do { try SMAppService.mainApp.register() }
@@ -71,6 +74,8 @@ struct NativeLockSetup {
     var random: () -> Double = { Double.random(in: 0..<1) }
     var now: () -> Date = Date.init
     var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    /// Current boot session, saved with a new lock so a launch after a restart can tell it apart.
+    var bootSession: () -> String = { NativeExit.systemMonotonic().boot }
     var background: (@escaping () -> Void) -> Void = { work in
         nonisolated(unsafe) let work = work
         DispatchQueue.global(qos: .userInitiated).async { work() }
@@ -143,12 +148,14 @@ struct NativeLockSetup {
         let publicKey = self.publicKey, isDev = self.isDev, iterations = self.iterations, newKey = self.newKey
         let devKey = isDev && publicKey == nil ? self.devKey : nil
         let deviceId = device()
+        let boot = bootSession()
         nonisolated(unsafe) let work = { [self] in
             var key = devKey ?? newKey()
             let lockId = NativeExit.newLockId()
             let verifier = NativeExit.makeVerifier(code: NativeExit.code(key: key, lockId: lockId), lockId: lockId,
                                                    iterations: iterations ?? NativeExit.calibratedIterations())
-            let state = NativeLockState(lockId: lockId, verifier: verifier, created: now)
+            var state = NativeLockState(lockId: lockId, verifier: verifier, created: now)
+            state.boot = boot
             var body: Data?
             let keyOK = publicKey.map { $0.count == 32 } ?? false
             if keyOK, let publicKey, let blob = try? NativeExit.seal(key: key, lockId: lockId, serverPublic: publicKey) {
@@ -191,7 +198,7 @@ struct NativeLockSetup {
         send(failures: 0)
     }
 
-    /// Deletes both copies and stops reopening the app after a reboot.
+    /// Deletes both copies and removes the login item (every lock end, and a lock dropped after a restart, goes through here).
     func clear() {
         NativeLockGate.run {
             registrar.cancel()
@@ -200,7 +207,9 @@ struct NativeLockSetup {
         loginItem.unregister()
     }
 
+    /// Registered once the lock is held, so a same-boot log-out and log-in reopens FairPlay and locks again.
     func registerLoginItem() { loginItem.register() }
+
 
     /// A relaunched lock with no verifier (state recreated after a crash, or the Keychain copy lost) is not known to the server, or
     /// not with a key this Mac still has. Registers it in the background; the verifier counts as saved only when it reads back
@@ -313,6 +322,8 @@ struct NativeLockSetup {
                 next.lockId = reg.lockId
                 next.verifier = reg.verifier
                 next.keychainLost = false
+                // A lock registered again while it is held belongs to this boot, so a later restart ends it like any other.
+                next.boot = prior.boot ?? self.bootSession()
                 next = Self.budgetAfterRegistration(next)
                 do { try store.save(next) } catch { try? store.save(prior); return .failed }
                 guard let trusted = store.loadTrusted(), trusted.lockId == reg.lockId, trusted.verifier == reg.verifier else {
@@ -367,6 +378,25 @@ struct NativeLockSetup {
         if let lock { registerMissingVerifier(for: lock) }
         let development = lock.flatMap { developmentCode(lockId: $0.lockId) }
         return LeaveSnapshot(lock: lock, text: NativeExit.leaveCodeText(lock, registration: registrar.status), development: development, version: version)
+    }
+
+    /// The one place a Leave sheet's prompt is built (browser and relaunch block screen). The saved lock is read once per
+    /// availability check, off the main thread.
+    func leavePrompt(_ snapshot: LeaveSnapshot,
+                     submitAsync: @escaping (String, @escaping (NativeExitAttempt) -> Void) -> Void) -> NativeLeavePrompt {
+        let store = self.store, registrar = self.registrar
+        var prompt = NativeLeavePrompt(lockCode: snapshot.text, developmentCode: snapshot.development,
+                                       lockVersion: { registrar.lockIdChanges }, shownVersion: snapshot.version)
+        prompt.availability = { done in
+            background {
+                // The Keychain copy only: a read that never writes back. Only when it is missing (a lost Keychain) the full load decides.
+                let state = NativeLeaveAvailability.of(store.loadTrusted() ?? store.load())
+                onMain { done(state) }
+            }
+        }
+        prompt.reload = reloadLeaveCode
+        prompt.submitAsync = submitAsync
+        return prompt
     }
 
     /// Reads the current code text for a Leave sheet that is already open; `done` runs on main.
@@ -506,26 +536,43 @@ final class NativeLockRegistrar {
     }
 }
 
-/// What the app does at launch (main.swift): a saved native lock always locks again first.
+/// What the app does at launch (main.swift). A saved native lock locks again when the app was killed
+/// or crashed in this boot. After the Mac was turned off and on, the saved lock is dropped and the
+/// student gets the normal home screen, so Wi-Fi, the VPN and sign-in work as usual.
 enum NativeRelaunch: Equatable {
     case normal
     case relock(NativeLockState)
+    /// The saved lock is from an earlier boot: clear it and start normally.
+    case rebooted(NativeLockState)
 
     /// `relockRequested`: the watchdog reopened the app because it died while locked. If the saved
     /// state has been deleted meanwhile the Mac still locks, in a state no typed code can open;
     /// only a signed release from the OJ ends it.
-    static func decide(store: NativeLockStoring, relockRequested: Bool = false, now: Date = Date()) -> NativeRelaunch {
+    static func decide(store: NativeLockStoring, relockRequested: Bool = false, now: Date = Date(),
+                       boot: String = NativeExit.systemMonotonic().boot) -> NativeRelaunch {
         NativeLockGate.run {
             guard var state = store.load() else {
                 guard relockRequested else { return .normal }
-                let state = NativeLockState(lockId: NativeExit.newLockId(), created: now, unclean: true)
+                var state = NativeLockState(lockId: NativeExit.newLockId(), created: now, unclean: true)
+                state.boot = boot
                 try? store.save(state)
                 return .relock(state)
             }
+            // The watchdog only runs within one boot, so its relock request always counts.
+            if !relockRequested, isFromEarlierBoot(state, boot: boot) { return .rebooted(state) }
             state.unclean = true
             try? store.save(state)
             return .relock(state)
         }
+    }
+
+    /// True when the lock was taken in an earlier boot. Needs the boot saved with the lock (Keychain copy); a lock without
+    /// one (older build, or the Keychain copy lost) is treated as this boot and locks again, but only when the student
+    /// opens FairPlay again. After a restart the lock is not enforced at all: the item only opens FairPlay on the home screen
+    /// enforced until FairPlay is opened.
+    static func isFromEarlierBoot(_ state: NativeLockState, boot: String) -> Bool {
+        guard let saved = state.boot, saved != "unknown", boot != "unknown" else { return false }
+        return saved != boot
     }
 }
 

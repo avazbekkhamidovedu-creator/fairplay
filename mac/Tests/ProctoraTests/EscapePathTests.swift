@@ -62,7 +62,7 @@ enum Source {
             #expect(!browser.contains(gone), "\(gone)")
         }
         let abort = try #require(browser.range(of: "/abort\""))
-        let accepted = try #require(browser.range(of: "if result == .accepted { return completeLeaveIfCurrent(ticket)"))
+        let accepted = try #require(browser.range(of: "NativeExit.settle(result, ticket: ticket, store: effects.setup.store, canRelease: true)"))
         #expect(browser.distance(from: browser.startIndex, to: abort.lowerBound) > browser.distance(from: browser.startIndex, to: accepted.lowerBound))
         #expect(browser.components(separatedBy: "/abort\"").count == 2)
     }

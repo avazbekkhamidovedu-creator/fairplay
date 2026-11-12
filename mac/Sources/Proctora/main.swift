@@ -68,20 +68,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             wc?.promptEmergencyExit()
         }
         recoveringExam = Watchdog.cleanUpAtLaunch()
+        let relaunch = NativeRelaunch.decide(store: NativeLockSetup.live.store,
+                                             relockRequested: CommandLine.arguments.contains(Watchdog.relockArgument))
+        if case .rebooted = relaunch {
+            // The Mac was turned off and on during a native lock: an allowed way out, not a kill (a saved lock without a boot
+            // still locks again; the login item reopens FairPlay only for a same-boot log-in). It must not
+            // keep exam links blocked for this run (the lock marker it left is already removed).
+            recoveringExam = false
+        }
         if recoveringExam {
             // The last run ended while locked (killed / crashed). The page forwards this
             // once the student is back in the exam; the server also sees the beat gap.
             EventLog.shared.record(.previousRunKilled)
-            DebugLog.log("app", "last run ended while LOCKED (killed, crashed or Mac restarted)")
+            DebugLog.log("app", "last run ended while LOCKED (killed or crashed)")
         }
 
         Net.onUpgradeRequired = { [weak wc] minimum in wc?.showUpdateRequired(minimum: minimum) }
-        if case .relock(let saved) = NativeRelaunch.decide(store: NativeLockSetup.live.store,
-                                          relockRequested: CommandLine.arguments.contains(Watchdog.relockArgument)) {
+        switch relaunch {
+        case .relock(let saved):
             relockingNative = true
             DebugLog.log("app", "saved native lock found: locking again before anything is shown")
             wc.startRecovering(saved)
-        } else {
+        case .rebooted(let saved):
+            // The Mac was turned off and on: no lock, the student sees the home screen.
+            DebugLog.log("app", "saved native lock \(saved.lockId) is from before a restart: cleared, starting normally")
+            // Only a local record (and the usual event stream): the OJ has no native-lock endpoint for a lock dropped this way.
+            EventLog.shared.record(.lockEndedByRestart(saved.lockId))
+            NativeLockSetup.live.clear()
+            wc.start()
+            if let pendingExam { wc.openUniversityExam(pendingExam) }
+        case .normal:
             wc.start()
             if !recoveringExam, let pendingExam { wc.openUniversityExam(pendingExam) }
         }
