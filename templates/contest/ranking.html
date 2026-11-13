@@ -155,11 +155,6 @@
             <input id="show-organizations-checkbox" type="checkbox" style="vertical-align: bottom">
             <label for="show-organizations-checkbox" style="vertical-align: bottom">{{ _('Show organizations') }}</label>
         </span>
-        {% if fairplay_instructor and not fairplay_native_mode %}
-            <span class="fp-tools">
-                <a class="fp-tool" href="{{ url('contest_access_codes_pdf', contest.key) }}"><i class="fa fa-download" aria-hidden="true"></i> {{ _('Download access codes (PDF)') }}</a>
-            </span>
-        {% endif %}
     </div>
     {% if fairplay_modes %}
         {% include "contest/fairplay_modes_summary.html" %}

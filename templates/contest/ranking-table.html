@@ -90,7 +90,6 @@
         {% set fp = fairplay_modes.table.students.get(user.user.username) if fairplay_modes.table else None %}
         <td class="fairplay-mode">
             {%- if fp and fp.mode_label %}<strong>{{ fp.mode_label }}</strong>{% else %}-{% endif %}
-            {%- if fp and fp.device_label %} / {{ fp.device_label }}{% endif %}
             {%- if fp and fp.second_device %}
                 <span class="fairplay-second-device" style="background:#c0392b;color:#fff;border-radius:3px;padding:0 4px;margin-left:4px">{{ _('second device x%(n)d', n=fp.second_device) }}</span>
             {%- endif %}

@@ -2284,6 +2284,12 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             self.assertContains(closed, self.student.username)
             self.assertContains(closed, 'Unlocked')
 
+    def test_participation_actions_show_a_progress_indicator_while_waiting(self):
+        self.client.force_login(self.teacher)
+        html = self.client.get('/contest/fpexam/participations').content.decode()
+        self.assertIn('id="fp-part-busy"', html)
+        self.assertIn("document.getElementById('fp-part-busy').hidden = false;\n        form.submit();", html)
+
     def test_native_participation_page_has_no_access_code_download(self):
         self.client.force_login(self.teacher)
         response = self.client.get('/contest/fpexam/participations')
@@ -2340,7 +2346,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             self.assertIn(text, html)
         for text in ('Other...', 'Choose a reason...', 'Reopened by the instructor', 'Approved accommodation',
                      'Technical problem during the exam', 'Device is stuck', 'Submitted by mistake',
-                     'Student could not reach the server', 'Code was shown to someone else',
+                     'Student could not reach the server', 
                      'Student was stopped by mistake', 'Student switched to a lab computer',
                      'id="fp-part-reasons-unlock-reopen"', 's computer failed'):
             self.assertIn(text, html)

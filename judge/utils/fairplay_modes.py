@@ -7,7 +7,6 @@ __all__ = ['mode_table_from_exam']
 MODE_LABELS = {
     'on': _l('ON'), 'off': _l('OFF'), 'not_started': _l('NOT STARTED'), 'submitted': _l('SUBMITTED'),
 }
-DEVICE_LABELS = {'unused': _l('unused'), 'bound': _l('bound')}
 # Older FairPlay sends only `status`.
 STATUS_TO_MODE = {
     'not_started': 'not_started', 'writing': 'on', 'offline': 'off', 'waiting': 'off', 'handed_in': 'submitted',
@@ -25,12 +24,8 @@ def _cell(student):
     mode = student.get('fp_mode')
     if mode not in MODE_LABELS:
         mode = None
-    device = student.get('device_state')
-    if device not in DEVICE_LABELS:
-        device = None
     return {
         'mode': mode, 'mode_label': MODE_LABELS.get(mode),
-        'device': device, 'device_label': DEVICE_LABELS.get(device),
         'second_device': _attempts(student.get('second_device_attempts')),
         'last_beat_at': student.get('last_beat_at') if isinstance(student.get('last_beat_at'), str) else None,
     }

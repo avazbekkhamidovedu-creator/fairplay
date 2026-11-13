@@ -6,7 +6,6 @@ import os
 from unittest import mock
 
 import requests
-from django.contrib.messages import get_messages
 from django.core.cache import cache
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
@@ -19,7 +18,7 @@ from judge.utils.fairplay_modes import mode_table_from_exam
 from judge.utils.fairplay_signing import DIRECTION_FP_TO_OJ, DIRECTION_OJ_TO_FP, body_sha256, canonical_string, \
     direction_key, sign, signed_headers
 from judge.views.tests.fairplay_base import FAIRPLAY_OFF, FAIRPLAY_ON, FairPlayDataMixin, TOKEN, create_contest, \
-    fp_signed, grant, installation_path, set_fairplay
+    fp_signed, grant, installation_path
 
 # Fixed signing vectors, shared with the FairPlay server's tests.
 VECTORS_PATH = os.path.join(os.path.dirname(__file__), 'fairplay_vectors.json')
@@ -270,34 +269,6 @@ class ClientTestCase(FairPlayDataMixin, TestCase):
                                      hashlib.sha256(body).hexdigest())
         self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical))
 
-    def test_access_codes_pdf(self):
-        response = fake_response(200, chunks=[b'%PDF-1.4 ', b'codes'])
-        response.headers = {'Content-Type': 'application/pdf'}
-        with mock.patch('judge.utils.fairplay_client.requests.request', return_value=response) as call:
-            data = FairPlayClient().access_codes_pdf('fpexam', 'fp_teacher')
-        self.assertEqual(data, b'%PDF-1.4 codes')
-        args, kwargs = call.call_args
-        path = installation_path('/api/integrations/dkuoj/v1/exams/fpexam/access-codes.pdf')
-        self.assertEqual(args, ('GET', 'https://exam.example.edu' + path))
-        headers = kwargs['headers']
-        self.assertEqual(headers['X-FP-Acting-User'], 'fp_teacher')
-        self.assertEqual(headers['Accept'], 'application/pdf')
-        canonical = canonical_string('GET', path, headers['X-FP-Timestamp'], headers['X-FP-Nonce'], 'fp_teacher',
-                                     hashlib.sha256(b'').hexdigest())
-        self.assertEqual(headers['X-FP-Signature'], sign(direction_key(DIRECTION_OJ_TO_FP, TOKEN), canonical))
-
-    def test_access_codes_pdf_errors(self):
-        with mock.patch('judge.utils.fairplay_client.requests.request',
-                        return_value=fake_response(409, {'detail': 'The exam is not ready.'})):
-            with self.assertRaises(FairPlayError) as cm:
-                FairPlayClient().access_codes_pdf('fpexam', 'fp_teacher')
-        self.assertEqual((cm.exception.status, cm.exception.detail), (409, 'The exam is not ready.'))
-        html = fake_response(200, text='<html>')
-        html.headers = {'Content-Type': 'text/html'}
-        with mock.patch('judge.utils.fairplay_client.requests.request', return_value=html):
-            with self.assertRaises(FairPlayError):
-                FairPlayClient().access_codes_pdf('fpexam', 'fp_teacher')
-
     def test_errors(self):
         client = FairPlayClient(acting_user='fp_teacher')
         with mock.patch('judge.utils.fairplay_client.requests.request', side_effect=requests.ConnectionError()):
@@ -503,66 +474,16 @@ class MenuTestCase(PagesMixin, TestCase):
 
 
 @FAIRPLAY_ON
-class AccessCodesTestCase(PagesMixin, TestCase):
-    BUTTON = 'Download access codes (PDF)'
-
-    def participation(self, user):
-        return self.login(user).get(reverse('contest_participation_own', args=['fpexam']))
-
-    def download(self, user):
-        return self.login(user).get(reverse('contest_access_codes_pdf', args=['fpexam']))
-
-    def test_button_for_editors_of_a_fairplay_exam(self):
-        url = reverse('contest_access_codes_pdf', args=['fpexam'])
-        html = self.participation(self.teacher).content.decode()
-        self.assertIn(self.BUTTON, html)
-        self.assertIn(url, html)
-        self.assertIn('class="fp-tools"', html)
-        self.assertNotIn('FairPlay student help', html)
-        student_html = self.participation(self.student).content.decode()
-        self.assertNotIn(self.BUTTON, student_html)
-        self.assertNotIn('class="fp-tools"', student_html)
-        set_fairplay(self.exam, False)
-        self.assertNotIn(self.BUTTON, self.participation(self.teacher).content.decode())
-
-    def test_no_button_when_bridge_is_off(self):
-        with FAIRPLAY_OFF:
-            self.assertNotIn(self.BUTTON, self.participation(self.teacher).content.decode())
-
-    def test_download(self):
-        self.fp.access_codes_pdf.return_value = b'%PDF-1.4 codes'
-        response = self.download(self.teacher)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'application/pdf')
-        self.assertEqual(response['Content-Disposition'], 'attachment; filename="access-codes-fpexam.pdf"')
-        self.assertEqual(response.content, b'%PDF-1.4 codes')
-        self.fp.access_codes_pdf.assert_called_once_with('fpexam', 'fp_teacher')
-        self.assert_acting(self.teacher)
-
-    def test_not_ready_shows_one_short_line(self):
-        for status in (404, 409):
-            with self.subTest(status=status):
-                self.fp.access_codes_pdf.side_effect = FairPlayError('FairPlay says: stack trace here', status=status)
-                response = self.download(self.teacher)
-                self.assertRedirects(response, reverse('contest_participation_own', args=['fpexam']),
-                                     fetch_redirect_response=False)
-                texts = [str(m) for m in get_messages(response.wsgi_request)]
-                self.assertEqual(texts, ['The access codes are not ready yet.'])
-
-    def test_unreachable_shows_one_short_line(self):
-        self.fp.access_codes_pdf.side_effect = FairPlayUnreachable()
-        response = self.download(self.teacher)
-        self.assertEqual([str(m) for m in get_messages(response.wsgi_request)],
-                         ['The access codes could not be downloaded.'])
-
-    def test_permissions(self):
-        for user in (self.student, self.tester, self.course_admin, self.other_teacher, self.outsider):
-            self.assertEqual(self.download(user).status_code, 404, user.username)
-        self.assertEqual(Client().get(reverse('contest_access_codes_pdf', args=['fpexam'])).status_code, 302)
-        set_fairplay(self.exam, False)
-        self.assertEqual(self.download(self.teacher).status_code, 404)
-        self.fp.access_codes_pdf.assert_not_called()
-
+class AccessCodesRemovedTestCase(PagesMixin, TestCase):
+    def test_no_access_code_url_button_or_client_method(self):
+        from django.urls import NoReverseMatch
+        with self.assertRaises(NoReverseMatch):
+            reverse('contest_access_codes_pdf', args=['fpexam'])
+        self.assertEqual(self.login(self.teacher).get('/contest/fpexam/access-codes.pdf').status_code, 404)
+        html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
+        self.assertNotIn('Download access codes', html)
+        self.assertFalse(hasattr(FairPlayClient, 'access_codes_pdf'))
+        self.assertFalse(hasattr(FairPlayClient, 'reissue_code'))
 
 MODE_STUDENTS = [
     {'netid': 'fp_student', 'status': 'writing', 'fp_mode': 'on', 'device_state': 'bound',
@@ -579,12 +500,12 @@ class ModeTableTestCase(PagesMixin, TestCase):
     def test_cells_from_batch_response(self):
         table = mode_table_from_exam(exam(settings={'strong_lock': True}, students=MODE_STUDENTS))
         cell = table['students']['fp_student']
-        self.assertEqual((cell['mode'], cell['device'], cell['second_device']), ('on', 'bound', 2))
-        self.assertEqual(table['students']['fp_classmate']['device'], 'unused')
+        self.assertEqual((cell['mode'], cell['second_device']), ('on', 2))
+        self.assertNotIn('device', cell)
         for netid in ('old_one', 'odd'):
             cell = table['students'][netid]
-            self.assertEqual((cell['mode'], cell['device'], cell['second_device'], cell['last_beat_at']),
-                             (None, None, 0, None))
+            self.assertEqual((cell['mode'], cell['second_device'], cell['last_beat_at']),
+                             (None, 0, None))
         self.assertIs(table['strong_lock'], True)
         self.assertEqual(table['counts']['on'], 1)
         self.assertEqual((table['second_device_total'], table['second_device_students']), (2, 1))

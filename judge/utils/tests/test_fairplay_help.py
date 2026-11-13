@@ -56,12 +56,13 @@ class StudentHelpTestCase(PagesMixin, TestCase):
                      '918273', 'Sync now'):
             self.assertIn(text, table)
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
-        for action in ('approve', 'reopen', 'extra-time', 'release-device', 'reissue', 'offline-exit'):
+        for action in ('approve', 'reopen', 'extra-time', 'release-device', 'offline-exit'):
             self.assertIn('data-action="%s"' % action, menu)
         self.assertNotIn('offline-exit-on-record', menu)
         self.assertIn('data-action="approve" data-mode="" data-states="waiting"', menu)
         self.assertIn('data-action="reopen" data-mode="" data-states="completed"', menu)
-        self.assertIn('Download access codes (PDF)', html)  # the toolbar span carries the classic download
+        self.assertNotIn('data-action="reissue"', menu)
+        self.assertNotIn('Download access codes', html)
         student_html = self.login(self.student).get(participation).content.decode()
         self.assertNotIn('id="fp-participation"', student_html)
 
@@ -82,8 +83,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
         self.assertNotIn('data-question=""', menu)
-        for text in ('Issue a new access code to {who}? The old code stops working.',
-                     'Let {who} sign in again from another computer?', 'Reopen the exam for {who}, who has handed in?',
+        for text in ('Let {who} sign in again from another computer?', 'Reopen the exam for {who}, who has handed in?',
                      'Approve {who} to resume the exam?', 'Give {who} extra time?'):
             self.assertIn(text, unescape(menu))
 
@@ -93,19 +93,19 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertNotIn('window.prompt', html)
         self.assertEqual(html.count('<dialog'), 1)
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
-        for key in ('approve', 'reopen', 'extra-time', 'release-device', 'reissue'):
+        for key in ('approve', 'reopen', 'extra-time', 'release-device'):
             self.assertIn('data-reasons="%s"' % key, menu)
         self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
         self.assertEqual(menu.count('data-minutes="1"'), 2)
-        for text in ('Student lost or cannot read the code', 'App was reinstalled', 'Approved retake of a part',
+        for text in ('Approved retake of a part',
                      'Disruption in the room', 's computer ran out of battery'):
             self.assertIn(text, html)
 
     def test_classic_rows_keep_the_swap_request_reopen_code_and_hand_in_count(self):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
         table = html.split('id="fp-participation-head"')[1].split('</table>')[0]
-        for text in ('Asks to move to another computer.', 'Hand-in reopened.', 'Code: bound. Hand-ins: 0.',
-                     'Code: unused. Hand-ins: 2.'):
+        for text in ('Asks to move to another computer.', 'Hand-in reopened.', 'Hand-ins: 0.',
+                     'Hand-ins: 2.'):
             self.assertIn(text, table)
 
     def test_the_classic_cache_is_per_acting_instructor_and_a_stale_answer_is_shown_at_once(self):
@@ -235,11 +235,11 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.fp.sync_ping.assert_not_called()
 
     def test_get_does_not_act(self):
-        self.login(self.teacher).get(self.URL + '?action=reissue&netid=fp_student&confirm=1&reason=x')
-        self.fp.reissue_code.assert_not_called()
+        self.login(self.teacher).get(self.URL + '?action=release-device&netid=fp_student&confirm=1&reason=x')
+        self.fp.release_device.assert_not_called()
 
     def test_reason_is_required_for_every_action(self):
-        for action in ('approve', 'release-device', 'reissue', 'reopen', 'extra-time'):
+        for action in ('approve', 'release-device', 'reopen', 'extra-time'):
             with self.subTest(action=action):
                 for reason in ('', '   '):
                     response = self.post(self.teacher, {'action': action, 'netid': 'fp_student', 'minutes': '10',
@@ -247,7 +247,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
                     self.assertEqual(response.status_code, 302)
                     self.assertEqual([str(m) for m in get_messages(response.wsgi_request)],
                                      ['Write a reason first.'])
-        for call in (self.fp.approve, self.fp.release_device, self.fp.reissue_code, self.fp.reopen,
+        for call in (self.fp.approve, self.fp.release_device, self.fp.reopen,
                      self.fp.extra_time):
             call.assert_not_called()
 
@@ -290,19 +290,6 @@ class StudentHelpTestCase(PagesMixin, TestCase):
                 self.assertEqual(response.status_code, 302)
         self.fp.extra_time.assert_not_called()
 
-    def test_new_code_is_shown_once_and_never_stored(self):
-        self.fp.reissue_code.return_value = {'code': 'Q9X4TT', 'first_name': 'Avazbek', 'last_name': 'Khamidov'}
-        response = self.confirm(self.teacher, action='reissue', reason='lost the slip')
-        html = response.content.decode()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Cache-Control'], 'no-store')
-        self.assertIn('Q9X4TT', html)
-        self.assertIn('Avazbek', html)
-        self.assertIn('shown only once', html)
-        self.fp.reissue_code.assert_called_once_with('fpexam', 'fp_student', 'lost the slip')
-        page = reverse('contest_participation_own', args=['fpexam'])
-        self.assertNotIn('Q9X4TT', self.login(self.teacher).get(page).content.decode())
-        self.assertNotIn('Q9X4TT', json.dumps(list(self.client.session.items()), default=str))
 
     def test_bridge_errors_show_one_line(self):
         self.fp.release_device.side_effect = FairPlayError('The student has not signed in.', status=409)
@@ -491,8 +478,6 @@ class StudentHelpClientTestCase(TestCase):
     def test_paths_and_bodies(self):
         self.assertEqual(self.call('release_device', 'ex', 'n1', 'why'),
                          ('/exams/ex/students/n1/release-device', {'reason': 'why'}))
-        self.assertEqual(self.call('reissue_code', 'ex', 'n1', 'why'),
-                         ('/exams/ex/access-codes/reissue', {'netid': 'n1', 'reason': 'why'}))
         self.assertEqual(self.call('reopen', 'ex', 'n1', 10, 'why'),
                          ('/exams/ex/students/n1/reopen', {'minutes': 10, 'reason': 'why'}))
         self.assertEqual(self.call('extra_time', 'ex', 'n1', 5, 'why'),

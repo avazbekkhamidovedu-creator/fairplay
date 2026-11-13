@@ -302,7 +302,6 @@ urlpatterns = [
         path('/draft/<str:problem>', assignment_draft.AssignmentDraftView.as_view(), name='assignment_draft'),
         path('/seb-config', contests.ContestSEBConfig.as_view(), name='contest_seb_config'),
         path('/seb-launch-token', contests.SEBLaunchToken.as_view(), name='seb_launch_token'),
-        path('/access-codes.pdf', fairplay.ContestAccessCodesPdf.as_view(), name='contest_access_codes_pdf'),
         path('/fairplay-help', fairplay.ContestStudentHelp.as_view(), name='contest_fairplay_help'),
         path('/fairplay-launch', ContestFairPlayLaunch.as_view(), name='contest_fairplay_launch'),
         path('/fairplay-launch/status', ContestFairPlayLaunchStatus.as_view(), name='contest_fairplay_launch_status'),

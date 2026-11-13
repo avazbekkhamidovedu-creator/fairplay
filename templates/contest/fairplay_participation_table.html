@@ -62,8 +62,6 @@
             data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
     <button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed" data-reason="1" data-reasons="release-device"
             data-question="{{ _('Let {who} sign in again from another computer?') }}">{{ _('Move to another computer') }}</button>
-    <button type="button" role="menuitem" data-action="reissue" data-mode="" data-states="not_started in_progress waiting completed" data-reason="1" data-reasons="reissue"
-            data-question="{{ _('Issue a new access code to {who}? The old code stops working.') }}">{{ _('Issue new code') }}</button>
     <button type="button" role="menuitem" data-action="offline-exit" data-mode="" data-states="not_started in_progress waiting completed" data-reasons="offline-exit" data-reason-optional="1"
             data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ.') }}">{{ _('Offline exit code') }}</button>
 {% endif %}
@@ -87,7 +85,6 @@
 {{ reason_list('unlock-device', [_('Device is stuck'), _('Technical problem during the exam'), _('Instructor ended this session')]) }}
 {{ reason_list('unlock-reopen', [_("Student's computer failed"), _('Technical problem during the exam'), _('Student moves to another computer')]) }}
 {{ reason_list('release-device', [_("Student's computer failed"), _("Student's computer ran out of battery"), _('Student switched to a lab computer')]) }}
-{{ reason_list('reissue', [_('Student lost or cannot read the code'), _('Code was shown to someone else'), _('App was reinstalled')]) }}
 {{ reason_list('reopen', [_('Submitted by mistake'), _('Technical problem at hand-in'), _('Approved retake of a part')]) }}
 {{ reason_list('extra-time', [_('Approved accommodation'), _('Technical problem during the exam'), _('Disruption in the room')]) }}
 {{ reason_list('offline-exit', [_('Student could not reach the server'), _('Lock stuck during the exam')]) }}
@@ -112,6 +109,18 @@
         </div>
     </form>
 </dialog>
+
+<div id="fp-part-busy" role="status" aria-live="polite" hidden>
+    <style>
+    #fp-part-busy { position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8em; background: rgba(255,255,255,.82); color: #333; font-weight: bold; }
+    #fp-part-busy[hidden] { display: none; }
+    #fp-part-busy .fp-spinner { width: 2.4em; height: 2.4em; border: .3em solid #ccc; border-top-color: #337ab7; border-radius: 50%; animation: fp-part-spin 1s linear infinite; }
+    @keyframes fp-part-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #fp-part-busy .fp-spinner { animation: none; } }
+    </style>
+    <div class="fp-spinner" aria-hidden="true"></div>
+    <span>{{ _('Working... Please wait.') }}</span>
+</div>
 
 <script>
 (function () {
@@ -204,6 +213,7 @@
         var field = !minutesWrap.hidden ? minutesIn : (!reasonWrap.hidden ? reasonSel : null);
         (field || (confirmBtn.disabled ? dlg.querySelector('.fp-cancel') : confirmBtn)).focus();
     }
+    window.addEventListener('pageshow', function () { document.getElementById('fp-part-busy').hidden = true; });
     function finish() {
         if (!chosen || confirmBtn.disabled) { return; }
         form.elements.minutes.value = minutesWrap.hidden ? '' : minutesIn.value.trim();
@@ -214,6 +224,7 @@
         form.elements.name.value = opener.dataset.name;
         confirmBtn.disabled = true;
         closeDialog('confirm');
+        document.getElementById('fp-part-busy').hidden = false;
         form.submit();
     }
     document.querySelectorAll('#fp-participation .fp-kebab').forEach(function (kebab) {

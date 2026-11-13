@@ -193,11 +193,6 @@ class FairPlayClient:
         return self.request('POST', '/exams/%s/students/%s/release-device' % (_q(key), _q(netid)),
                             {'reason': reason})
 
-    def reissue_code(self, key, netid, reason):
-        """Answers ``{code, first_name, last_name}``; the new code is shown once and never kept."""
-        return self.request('POST', '/exams/%s/access-codes/reissue' % _q(key),
-                            {'netid': netid, 'reason': reason})
-
     def reopen(self, key, netid, minutes, reason):
         return self.request('POST', '/exams/%s/students/%s/reopen' % (_q(key), _q(netid)),
                             {'minutes': int(minutes), 'reason': reason})
@@ -228,9 +223,6 @@ class FairPlayClient:
         if class_id is not None:
             body['class_id'] = int(class_id)
         return self.request('POST', '/sync', body, read_timeout=read_timeout)
-
-    def access_codes_pdf(self, exam_key, acting):
-        return self.request('GET', '/exams/%s/access-codes.pdf' % _q(exam_key), acting_user=acting, binary=True)
 
     def student_report(self, key, netid):
         return self.request('GET', '/exams/%s/students/%s/report' % (_q(key), _q(netid)))

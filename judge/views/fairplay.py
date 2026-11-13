@@ -1,10 +1,10 @@
-"""The Download access codes (PDF) button and the instructor actions of a FairPlay exam's Participation tab."""
+"""The instructor actions of a FairPlay exam's Participation tab."""
 import logging
 from types import SimpleNamespace
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import Http404, HttpResponse, HttpResponseRedirect
+from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
@@ -16,7 +16,7 @@ from judge.utils.fairplay import fairplay_enabled, is_fairplay_exam, native_brow
 from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
 from judge.utils.fairplay_device_session import format_lock
 
-__all__ = ['ContestAccessCodesPdf', 'ContestStudentHelp']
+__all__ = ['ContestStudentHelp']
 
 logger = logging.getLogger('judge.fairplay')
 
@@ -30,24 +30,6 @@ def _fairplay_contest(request, key):
     if not fairplay_enabled() or not is_fairplay_exam(contest) or not contest.is_editable_by(request.user):
         raise Http404()
     return contest
-
-
-class ContestAccessCodesPdf(LoginRequiredMixin, View):
-    def get(self, request, contest):
-        contest = _fairplay_contest(request, contest)
-        back = HttpResponseRedirect(reverse('contest_participation_own', args=[contest.key]))
-        try:
-            pdf = _client(request).access_codes_pdf(contest.key, request.user.username)
-        except FairPlayError as e:
-            if e.status in (404, 409):
-                messages.error(request, _('The access codes are not ready yet.'))
-            else:
-                messages.error(request, _('The access codes could not be downloaded.'))
-            return back
-        response = HttpResponse(pdf, content_type='application/pdf')
-        response['Content-Disposition'] = 'attachment; filename="access-codes-%s.pdf"' % contest.key
-        response['Cache-Control'] = 'no-store'
-        return response
 
 
 ON_RECORD_ACTION = 'offline-exit-on-record'
@@ -68,7 +50,6 @@ ACTIONS = {
     'approve': (_l('Approve resume'), _l('Approve %(name)s to resume the exam?'), False),
     'release-device': (_l('Move to another computer'),
                        _l('Let %(name)s sign in again from another computer?'), False),
-    'reissue': (_l('Issue new code'), _l('Issue a new access code to %(name)s? The old code stops working.'), False),
     'reopen': (_l('Reopen exam'), _l('Reopen the exam for %(name)s, who has handed in?'), True),
     'extra-time': (_l('Give extra time'), _l('Give %(name)s extra time?'), True),
     'offline-exit': (_l('Offline exit code'), _l('Get the offline exit code for %(name)s?'), False),
@@ -317,7 +298,6 @@ CLASSIC_STATES = {
     'offline': ('in_progress', _l('In progress, offline')), 'waiting': ('waiting', _l('Waiting for approval')),
     'handed_in': ('completed', _l('Submitted')),
 }
-CLASSIC_CODE_LABELS = {'none': _l('none'), 'unused': _l('unused'), 'bound': _l('bound')}
 
 CLASSIC_FRESH_SECONDS = 15   # an answer this young is used as it is
 CLASSIC_STALE_SECONDS = 900  # an older one is still shown at once while a background refresh replaces it
@@ -415,9 +395,7 @@ def classic_rows(request, contest):
             notes.append(_('Asks to move to another computer.'))
         if s.get('reopened'):
             notes.append(_('Hand-in reopened.'))
-        notes.append(_('Code: %(code)s. Hand-ins: %(count)d.') % {
-            'code': CLASSIC_CODE_LABELS.get(s.get('code_state'), s.get('code_state') or '-'),
-            'count': s.get('hand_in_count') or 0})
+        notes.append(_('Hand-ins: %(count)d.') % {'count': s.get('hand_in_count') or 0})
         rows.append({'netid': s['netid'], 'name': s.get('name') or s['netid'], 'state': state, 'short_status': label,
                      'notes': notes})
     return sorted(rows, key=lambda row: row['netid']), exam, False, stale
@@ -663,14 +641,6 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                 client.approve(contest.key, netid, reason)
             elif action == 'release-device':
                 client.release_device(contest.key, netid, reason)
-            elif action == 'reissue':
-                issued = client.reissue_code(contest.key, netid, reason)
-                _forget_classic_exam(contest, request.user.username)
-                return _no_store(render(request, 'contest/fairplay_help_code.html', {
-                    'contest': contest, 'title': _('Participation'), 'code': issued.get('code'),
-                    'first_name': issued.get('first_name') or '', 'last_name': issued.get('last_name') or '',
-                    'netid': netid,
-                }))
             elif action == 'reopen':
                 client.reopen(contest.key, netid, minutes, reason)
             elif action == 'extra-time':

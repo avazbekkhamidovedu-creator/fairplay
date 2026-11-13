@@ -12,7 +12,7 @@
 <div class="fairplay-help">
     <h2>{{ contest.name }}</h2>
     <p>{{ first_name }} {{ last_name }} ({{ netid }})</p>
-    <p>{% if offline %}{{ _('Offline exit code') }}{% else %}{{ _('New access code') }}{% endif %}:</p>
+    <p>{{ _('Offline exit code') }}:</p>
     <p id="fairplay-help-code" style="font-family: monospace; font-size: 2em; letter-spacing: 0.15em; font-weight: bold">{{ code }}</p>
     {% if lock_code %}<p id="fairplay-help-lock">{{ _('For lock code') }} <strong style="font-family: monospace; letter-spacing: 0.1em">{{ lock_code }}</strong>.</p>{% endif %}
     <p><strong>{{ _('Write this down now. It is shown only once and is not kept in DKU OJ. Do not reload this page: that would issue another code.') }}</strong></p>
