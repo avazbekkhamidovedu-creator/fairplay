@@ -82,9 +82,14 @@ class StudentHelpTestCase(PagesMixin, TestCase):
     def test_every_menu_action_asks_before_it_acts(self):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
+        reopen = menu.split('data-action="reopen"')[1].split('</button>')[0]
+        self.assertIn('data-direct="1"', reopen)  # one click: no question, reason or minutes dialog for Reopen exam
+        for leftover in ('data-question', 'data-reasons', 'data-minutes="1"', 'data-reason="1"'):
+            self.assertNotIn(leftover, reopen)
+        self.assertNotIn('Reopen the exam for {who}', unescape(menu))
+        menu = menu.replace(reopen, '')
         self.assertNotIn('data-question=""', menu)
-        for text in ('Let {who} sign in again from another computer?', 'Reopen the exam for {who}, who has handed in?',
-                     'Approve {who} to resume the exam?', 'Give {who} extra time?'):
+        for text in ('Let {who} sign in again from another computer?', 'Approve {who} to resume the exam?', 'Give {who} extra time?'):
             self.assertIn(text, unescape(menu))
 
     def test_classic_actions_open_the_same_dialog_with_their_reason_lists(self):
@@ -93,12 +98,14 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertNotIn('window.prompt', html)
         self.assertEqual(html.count('<dialog'), 1)
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
-        for key in ('approve', 'reopen', 'extra-time', 'release-device'):
+        for key in ('approve', 'extra-time', 'release-device'):
             self.assertIn('data-reasons="%s"' % key, menu)
         self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
-        self.assertEqual(menu.count('data-minutes="1"'), 2)
-        for text in ('Approved retake of a part',
-                     'Disruption in the room', 's computer ran out of battery'):
+        self.assertNotIn('data-reasons="reopen"', menu)
+        self.assertEqual(menu.count('data-minutes="1"'), 1)  # only Give extra time asks for minutes
+        self.assertNotIn('Approved retake of a part', html)
+        self.assertNotIn('id="fp-part-reasons-reopen"', html)
+        for text in ('Disruption in the room', 's computer ran out of battery'):
             self.assertIn(text, html)
 
     def test_classic_rows_keep_the_swap_request_reopen_code_and_hand_in_count(self):

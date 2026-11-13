@@ -45,19 +45,18 @@
 <div class="fp-part-menu" id="fp-part-menu" role="menu" hidden>
 {% if fairplay_native_mode %}
     <button type="button" role="menuitem" data-action="quick-unlock" data-mode="continue" data-states="completed unlocked not_locked"
-            data-minutes="1" data-minutes-default="row" data-reason-default="{{ _('Reopened by the instructor') }}" data-reasons="unlock-reopen"
-            data-question="{{ _('Reopen the exam for {who}, who has handed in? If the computer is locked it is unlocked first, then the student can start the exam again.') }}">{{ _('Reopen exam') }}</button>
+            data-direct="1" data-reason-default="{{ _('Reopened from Participation') }}">{{ _('Reopen exam') }}</button>
     <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="in_progress" data-minutes="1" data-reason="1" data-reasons="extra-time"
             data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
     <button type="button" role="menuitem" data-action="offline-exit-on-record" data-mode="" data-states="not_started in_progress submitting completed unlocked reopened not_locked" data-reasons="offline-exit" data-reason-optional="1"
             data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ. You can choose the lock code shown on their screen or type it.') }}">{{ _('Offline exit code') }}</button>
-    <button type="button" role="menuitem" class="fp-danger" data-action="quick-unlock" data-mode="only" data-states="in_progress completed unlocked reopened not_locked" data-reasons="unlock-device" data-reason-optional="1"
+    <button type="button" role="menuitem" class="fp-danger" data-action="quick-unlock" data-mode="only" data-states="in_progress completed unlocked reopened not_locked"
             data-question="{{ _('Unlock the computer of {who}? It is unlocked and returns to the start page. The attempt is not ended: the student can start the exam again. Saved answers are kept.') }}">{{ _('Unlock student device') }}</button>
 {% else %}
     <button type="button" role="menuitem" data-action="approve" data-mode="" data-states="waiting" data-reason="1" data-reasons="approve"
             data-question="{{ _('Approve {who} to resume the exam?') }}">{{ _('Approve resume') }}</button>
-    <button type="button" role="menuitem" data-action="reopen" data-mode="" data-states="completed" data-minutes="1" data-reason="1" data-reasons="reopen"
-            data-question="{{ _('Reopen the exam for {who}, who has handed in?') }}">{{ _('Reopen exam') }}</button>
+    <button type="button" role="menuitem" data-action="reopen" data-mode="" data-states="completed"
+            data-direct="1" data-minutes-default="row" data-reason-default="{{ _('Reopened from Participation') }}">{{ _('Reopen exam') }}</button>
     <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="not_started in_progress waiting" data-minutes="1" data-reason="1" data-reasons="extra-time"
             data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
     <button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed" data-reason="1" data-reasons="release-device"
@@ -82,10 +81,7 @@
 
 {% macro reason_list(key, reasons) %}<template id="fp-part-reasons-{{ key }}">{% for r in reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</template>{% endmacro %}
 {{ reason_list('approve', [_('Student was stopped by mistake'), _('Technical problem during the exam')]) }}
-{{ reason_list('unlock-device', [_('Device is stuck'), _('Technical problem during the exam'), _('Instructor ended this session')]) }}
-{{ reason_list('unlock-reopen', [_("Student's computer failed"), _('Technical problem during the exam'), _('Student moves to another computer')]) }}
 {{ reason_list('release-device', [_("Student's computer failed"), _("Student's computer ran out of battery"), _('Student switched to a lab computer')]) }}
-{{ reason_list('reopen', [_('Submitted by mistake'), _('Technical problem at hand-in'), _('Approved retake of a part')]) }}
 {{ reason_list('extra-time', [_('Approved accommodation'), _('Technical problem during the exam'), _('Disruption in the room')]) }}
 {{ reason_list('offline-exit', [_('Student could not reach the server'), _('Lock stuck during the exam')]) }}
 
@@ -214,6 +210,24 @@
         (field || (confirmBtn.disabled ? dlg.querySelector('.fp-cancel') : confirmBtn)).focus();
     }
     window.addEventListener('pageshow', function () { document.getElementById('fp-part-busy').hidden = true; });
+    // One click, no dialog: the neutral defaults are filled here (reason text; minutes left empty so the server uses
+    // the student's remaining time or 30 minutes), then the same busy overlay and POST as a confirmed dialog.
+    function submitDirect(item) {
+        var kebab = current, minutes = '';
+        if (item.dataset.minutesDefault === 'row') {
+            minutes = String(Math.min(Number(kebab.dataset.reopenMinutes) || 30, {{ fairplay_max_minutes }}));
+        }
+        form.elements.minutes.value = minutes;
+        form.elements.reason.value = item.dataset.reasonDefault || '';
+        form.elements.action.value = item.dataset.action;
+        form.elements.mode.value = item.dataset.mode;
+        form.elements.netid.value = kebab.dataset.netid;
+        form.elements.name.value = kebab.dataset.name;
+        form.elements.confirm.value = '1';
+        close();
+        document.getElementById('fp-part-busy').hidden = false;
+        form.submit();
+    }
     function finish() {
         if (!chosen || confirmBtn.disabled) { return; }
         form.elements.minutes.value = minutesWrap.hidden ? '' : minutesIn.value.trim();
@@ -249,7 +263,10 @@
         });
     });
     menu.querySelectorAll('button').forEach(function (item) {
-        item.addEventListener('click', function () { if (current) { openDialog(item); } });
+        item.addEventListener('click', function () {
+            if (!current) { return; }
+            if (item.dataset.direct) { submitDirect(item); } else { openDialog(item); }
+        });
     });
     dform.addEventListener('submit', function (e) { e.preventDefault(); finish(); });
     dform.addEventListener('input', validate);

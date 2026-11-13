@@ -2344,18 +2344,27 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         for text in ('id="fp-part-minutes"', 'id="fp-part-reason"', 'id="fp-part-other"', 'maxlength="200"',
                      'id="fp-part-confirm"', 'id="fp-part-cancel"'):
             self.assertIn(text, html)
-        for text in ('Other...', 'Choose a reason...', 'Reopened by the instructor', 'Approved accommodation',
-                     'Technical problem during the exam', 'Device is stuck', 'Submitted by mistake',
-                     'Student could not reach the server', 
-                     'Student was stopped by mistake', 'Student switched to a lab computer',
-                     'id="fp-part-reasons-unlock-reopen"', 's computer failed'):
+        for text in ('Other...', 'Choose a reason...', 'Approved accommodation',
+                     'Technical problem during the exam', 'Student could not reach the server',
+                     'Student was stopped by mistake', 'Student switched to a lab computer'):
             self.assertIn(text, html)
+        for gone in ('id="fp-part-reasons-unlock-reopen"', 'id="fp-part-reasons-unlock-device"',
+                     'id="fp-part-reasons-reopen"', 'Device is stuck', 'Submitted by mistake'):
+            self.assertNotIn(gone, html)
         menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
-        self.assertIn('data-reasons="unlock-reopen"', menu)
+        self.assertNotIn('data-reasons="unlock-reopen"', menu)
+        self.assertNotIn('data-reasons="unlock-device"', menu)
         self.assertIn('data-reasons="extra-time"', menu)
         self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
-        self.assertIn('data-reasons="unlock-device" data-reason-optional="1"', menu)
-        self.assertEqual(menu.count('data-question="'), menu.count('role="menuitem"'))
+        reopen = menu.split('data-direct="1"')[1].split('</button>')[0]
+        self.assertIn('>Reopen exam', reopen)
+        for leftover in ('data-question', 'data-reasons', 'data-minutes="1"', 'data-reason="1"'):
+            self.assertNotIn(leftover, reopen)
+        self.assertEqual(menu.count('data-direct="1"'), 1)
+        unlock = menu.split('data-mode="only"')[1].split('</button>')[0]
+        self.assertIn('data-question=', unlock)  # a single OK/Cancel question, no reason field
+        self.assertNotIn('data-reasons', unlock)
+        self.assertEqual(menu.count('data-question="'), menu.count('role="menuitem"') - 1)
 
     def test_old_help_page_url_redirects_editors_to_participation(self):
         self.client.force_login(self.teacher)
@@ -2395,6 +2404,23 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         response = self.quick(mode='continue', back='participation')
         self.assertEqual(response['Location'], self.PARTICIPATION)
         self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'released')
+        self.assertEqual(self.decode(self.claim(fingerprint='b' * 64, cookie='new'))['state'], 'active')
+
+    def test_reopen_item_is_one_click_and_posting_it_without_reason_or_minutes_reopens(self):
+        from judge.models import FairPlayDeviceAudit
+        html = self.participation_html()
+        self.assertNotIn('Reopen the exam for {who}', html)
+        self.assertIn('Reopened from Participation', html)
+        self.assertIn('function submitDirect(item)', html)
+        payload = self.decode(self.claim())
+        self.client.force_login(self.teacher)
+        response = self.client.post(self.HELP, {'action': 'quick-unlock', 'mode': 'continue',
+                                                'netid': self.student.username, 'name': 'A', 'reason': '',
+                                                'minutes': '', 'confirm': '1'})
+        self.assertEqual(response.status_code, 302)  # no confirm page, no error
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        self.assertEqual(session.state, 'released')
+        self.assertTrue(FairPlayDeviceAudit.objects.filter(session=session, action='reopen').exists())
         self.assertEqual(self.decode(self.claim(fingerprint='b' * 64, cookie='new'))['state'], 'active')
 
     def test_offline_exit_without_a_typed_code_uses_the_lock_on_record(self):
@@ -2835,6 +2861,41 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             self.assertEqual(response.status_code, 302)
             texts = [(m.level_tag, str(m)) for m in get_messages(response.wsgi_request)]
             self.assertEqual(texts, [('info', "This student's computer is not locked by this exam right now.")], state)
+
+    def app_state_poll(self, session_id):
+        """The app's 5 s poll exactly as it is sent: GET session/<id>?nonce=<uuid>, through every middleware."""
+        nonce = str(uuid.uuid4())
+        response = self.client_request('GET', '/api/fairplay/native/session/%s?nonce=%s' % (session_id, nonce))
+        payload = self.decode(response)
+        self.assertEqual(payload['nonce'], nonce)
+        return payload
+
+    def test_unlock_from_the_participation_menu_reaches_the_app_poll_through_the_real_routes(self):
+        payload = self.joined()
+        session_id = payload['session']
+        self.assertEqual(self.app_state_poll(session_id)['state'], 'active')
+        teacher = Client()
+        teacher.force_login(self.teacher)
+        # The menu's hidden form: Unlock student device, no reason chosen.
+        response = teacher.post(self.HELP, {'action': 'quick-unlock', 'mode': 'only', 'netid': self.student.username,
+                                            'name': 'Avazbek', 'reason': '', 'minutes': '', 'confirm': '1'})
+        self.assertEqual(response.status_code, 302)
+        released = self.app_state_poll(session_id)
+        self.assertEqual((released['state'], released['session'], released['device'], released['contest']),
+                         ('released', session_id, 'a' * 64, 'fpexam'))
+        self.assertLessEqual(released['lease_until'], released['expires'])
+        self.assertEqual(released['sites'], [])
+        # What the exam tab does next (reload, a draft save, join, the launch page) never changes that answer.
+        for method, path, data in (('GET', '/contest/fpexam', None), ('POST', '/contest/fpexam/draft/fpshort',
+                                   {'content': '{"text":"x"}'}), ('POST', '/contest/fpexam/join', None)):
+            self.client_request(method, path, data)
+            self.assertEqual(self.app_state_poll(session_id)['state'], 'released')
+        # Even after the same computer started again by itself, the bound session still answers released.
+        again = self.decode(self.client_request('POST', '/api/fairplay/native/claim/fpexam', {'nonce': uuid.uuid4().hex}))
+        self.assertNotEqual(again['session'], session_id)
+        self.assertEqual(self.app_state_poll(session_id)['state'], 'released')
+        renew = self.client_request('POST', '/api/fairplay/native/session/%s/renew' % session_id, {'nonce': uuid.uuid4().hex})
+        self.assertEqual(self.decode(renew)['state'], 'released')
 
     def test_unlock_student_device_unlocks_and_the_student_starts_again_by_themselves(self):
         from judge.models import ContestParticipation
@@ -3319,7 +3380,6 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
             self.assertTrue(any('Minutes must be' in m for m in self.exit_messages(response)), minutes)
             self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'active')
         html = self.participation_html()
-        self.assertIn('data-minutes="1" data-minutes-default="row"', html)
         self.assertRegex(html, r'data-reopen-minutes="\d+"')
 
     def test_a_site_administrators_tag_is_added_once_even_after_a_stale_lock_re_render(self):
