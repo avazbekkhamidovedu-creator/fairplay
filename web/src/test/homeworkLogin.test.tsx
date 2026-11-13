@@ -212,15 +212,15 @@ describe("homework page", () => {
       <MemoryRouter initialEntries={["/student/homework"]}>
         <Routes>
           <Route path="/student/homework" element={<HomeworkPage />} />
-          <Route path="/student/login" element={<p>Code screen</p>} />
+          <Route path="/student/login" element={<p>App home</p>} />
         </Routes>
       </MemoryRouter>,
     );
   }
 
-  it("redirects to the code screen without a token and calls nothing", async () => {
+  it("redirects to the app home without a token and calls nothing", async () => {
     renderPage();
-    expect(await screen.findByText("Code screen")).toBeTruthy();
+    expect(await screen.findByText("App home")).toBeTruthy();
     expect(calls).toHaveLength(0);
   });
 
@@ -238,7 +238,7 @@ describe("homework page", () => {
     setHomeworkSession("OLD");
     replies["/api/homework/me"] = { status: 401, body: {} };
     renderPage();
-    expect(await screen.findByText("Code screen")).toBeTruthy();
+    expect(await screen.findByText("App home")).toBeTruthy();
     expect(getHomeworkToken()).toBeNull();
   });
 
@@ -249,7 +249,7 @@ describe("homework page", () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
-    expect(await screen.findByText("Code screen")).toBeTruthy();
+    expect(await screen.findByText("App home")).toBeTruthy();
     expect(getHomeworkToken()).toBeNull();
     expect(localStorage.getItem(EXAM_KEY)).toBe("EXAM-TOK");
     expect(posted.filter((m) => m.action === "clearHomeworkLogin")).toHaveLength(1);
@@ -261,7 +261,7 @@ describe("homework page", () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(await screen.findByRole("button", { name: "Sign out" }));
-    await screen.findByText("Code screen");
+    await screen.findByText("App home");
     expect(posted).toHaveLength(0);
   });
 });

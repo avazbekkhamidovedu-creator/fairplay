@@ -76,7 +76,7 @@ export function currentStudentId(): string | null {
   return tokenUserId(getToken("student"));
 }
 
-/** The exam a code sign-in is tied to (6th field of the token), or null for a normal sign-in.
+/** The scope of a sign-in ("homework" or "admin_test", 6th field of the token), or null for a normal sign-in.
  *  Read without checking the signature, like tokenUserId. */
 export function tokenScope(token: string | null): string | null {
   if (!token) return null;
@@ -94,7 +94,7 @@ export const ADMIN_SCOPE = "admin_test";
 
 let onScopedEnd: (() => void) | null = null;
 
-/** Registered by lib/studentSession: wipes the student's local state when a code sign-in ends. */
+/** Registered by lib/studentSession: wipes the student's local state when a scoped sign-in ends. */
 export function setScopedEndHandler(fn: (() => void) | null): void {
   onScopedEnd = fn;
 }

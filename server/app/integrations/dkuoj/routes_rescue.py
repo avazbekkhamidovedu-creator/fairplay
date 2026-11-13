@@ -1,5 +1,5 @@
 """Professor rescue actions from DKU OJ (signed oj->fp, same checks as routes_v2): free a
-student's device, give a new access code, reopen a handed-in attempt, add time for one
+student's device, reopen a handed-in attempt, add time for one
 student, give a locked Mac its offline exit code. Prefix /api/integrations/dkuoj/v1.
 
 Every call needs an editor of the exam as acting user, answers `Cache-Control: no-store`
@@ -118,7 +118,7 @@ async def release_device(key: str, netid: str, call: BridgeCall = Depends(signed
         text += f" (moved to the computer that asked, {target[:8]})"
     await _record(session, e, call, "device_released_oj", u, a, text, reason)
     log.info("DKU OJ exam %s: device released by %s", key, call.acting_user)
-    return _out({"ok": True, "released": "attempt" if a is not None else "code"})
+    return _out({"ok": True, "released": "attempt" if a is not None else "none"})
 
 
 @router.post("/exams/{key}/students/{netid}/reopen")

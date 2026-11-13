@@ -12,7 +12,7 @@ The app under test must connect to a FairPlay server with these features enabled
   - `HOMEWORK_WEBTEST_SITES` (allowed test websites)
 - At least one exam with:
   - `box_link` set (for Duke Box tests)
-  - A valid access code ready
+  - A test student account (username and password) on the exam's roster
 - (Confirm with the developer that all settings are in place.)
 
 ## Test Setup
@@ -20,7 +20,7 @@ The app under test must connect to a FairPlay server with these features enabled
 Confirm:
 - Server running and accessible (health check: `/api/health`)
 - At least one live exam with FairPlay set as the proctor
-- An access code ready for the exam
+- A student account on the exam's roster (there is no exam access code any more)
 - Network connection works on the device
 
 ## Device Test Sample Exam
@@ -37,18 +37,17 @@ Confirm:
 6. Start once more and wait for the timer to reach 0:00.
    - **Expected:** Auto-lock opens the dashboard after 1 minute; the sample is gone (one attempt per student, replaced on a fresh start).
 
-## Access Code & Early Entry
+## Sign-in & Early Entry
 
-1. Go to a live exam that is scheduled to start in the future (e.g., in 30 minutes).
-2. On the code-sign-in screen, enter the access code.
-   - **Expected:** "Your exam starts at [time]. Come back 30 minutes before." (countdown button shows time to 30-min-before mark).
-   - Do NOT proceed; go back to the dashboard.
-3. When the 30-min-before time arrives, return to the exam and enter the code again.
-   - **Expected:** The code is accepted; the app locks and shows the check-in screen.
+1. Open the app. The home screen shows **"Sign in"**, **"Test my device"** and (if enabled) the homework link. There is no box to type an exam code.
+2. Sign in with the student's username and password for an exam that is scheduled to start in the future (e.g., in 30 minutes).
+   - **Expected:** The dashboard shows the exam as not open yet (it is not offered as the student's exam until it opens).
+3. When the exam opens, return to the dashboard.
+   - **Expected:** The exam card shows "Open now"; starting it locks the app and shows the check-in screen.
 
 ## Device Test Preview (1-Minute Live Exam)
 
-1. From the code-sign-in screen, before entering the access code, look for **"Test my device"** (card or button).
+1. From the app home screen (nobody signed in), look for **"Test my device"** (button at the top).
 2. Tap **"Test my device"** — a pop-up appears: **"Try the exam"** with a "Start" button.
 3. Tap **"Start"** to begin the device test.
    - **Expected:** White paper-style exam screen with sample questions; lock bar at the top shows "Device test", timer "Leaves automatically in 1:00".
@@ -58,11 +57,11 @@ Confirm:
 4. Try to open another app or access the home screen.
    - **Expected:** Within 2 seconds, a red "close these apps" screen blocks the screen. Dismiss it by returning to the exam.
 5. Wait for the timer to reach 0:00 or tap **"Leave"**.
-   - **Expected:** Exam ends, device unlocks, and you return to the code-sign-in page (preview is not saved).
+   - **Expected:** Exam ends, device unlocks, and you return to the app home screen (preview is not saved).
 
 ## Real Exam Lock & Unlock
 
-1. Enter a valid access code and complete the check-in.
+1. Sign in, start the exam with the start code the invigilator reads out, and complete the check-in.
    - **Expected:** Lock bar shows the exam title, course (if set), lock symbol, save status, and a timer.
    - The app has closed windowed apps (Mac/iPad) or taken over the desktop (Windows, separate exam screen or taskbar hiding).
 2. Answer questions and let the timer count down to 0:00, or manually submit by selecting "Hand in" / "Submit".
@@ -90,20 +89,20 @@ Confirm:
 **Precondition:** Exam is in progress on Computer A; you have access to Computer B.
 
 1. Start an exam on Computer A, answer some questions, then switch to Computer B.
-2. On Computer B, go to the same exam and enter the access code.
+2. On Computer B, sign in as the same student and open the same exam.
    - **Expected:** An error appears: **"This exam is already open on another computer. Ask the invigilator to move it to this one."** (or similar device-swap message).
    - The page shows an option to request the teacher to move the exam (message to the live room).
 3. Go to the live room (as the professor on Computer C) and check the student list.
    - **Expected:** A badge appears next to the student: **"Wants to continue on another computer"** with an **"Approve swap"** button.
 4. Tap **"Approve swap"**.
-   - **Expected (Computer B):** The code screen reappears, ready to start the exam again. Tap "Start" to bind the exam to Computer B.
+   - **Expected (Computer B):** The start screen reappears, ready to start the exam again. Tap "Start" to bind the exam to Computer B.
    - **Expected (Computer A):** All future requests (answers, heartbeats) from Computer A are rejected; the `GET /handin` call (internal) returns "moved".
 5. After ~120 seconds, attempt to send answers from Computer A.
    - **Expected:** Rejected (session error).
 
 ## DKU OJ Homework Login Window
 
-1. On the code-sign-in screen (below the access code input), look for: **"Homework? Log in with DKU OJ"** (or the configured label).
+1. On the app home screen (below the Sign in button), look for: **"Homework? Log in with DKU OJ"** (or the configured label).
 2. Tap the link.
    - **Expected:** A secure browser window opens (isolated profile, no exam lock active).
    - Window shows the DKU OJ login page (username and password).
@@ -126,13 +125,13 @@ Confirm:
 
 ## Sign-Out on App Quit
 
-1. Sign in to homework (from the code-sign-in screen).
+1. Sign in to homework (from the app home screen).
 2. While on the homework page, close the FairPlay app (normal close, not force-quit).
    - **Mac:** Cmd-Q or the menu.
    - **Windows:** Alt-F4 or the close button.
    - **iPad:** Swipe from the bottom to close.
 3. Relaunch the app.
-   - **Expected:** You are back at the code-sign-in screen, signed out of homework (session is cleared on app close).
+   - **Expected:** You are back at the app home screen, signed out of homework (session is cleared on app close).
 
 ## 'Remember This Device' with Biometric Auth
 
@@ -143,7 +142,7 @@ Confirm:
    - Complete the biometric prompt.
    - The device is remembered for 14 days.
 4. Close the app and relaunch it.
-   - **Expected:** On the code-sign-in screen, a new button appears: **"Continue as [Name]"**.
+   - **Expected:** On the app home screen, a new button appears: **"Continue as [Name]"**.
 5. Tap **"Continue as [Name]"**.
    - **Expected:** Biometric prompt appears (or no prompt if within the grace period — confirm with the developer).
    - You are signed in to homework without re-entering credentials.
@@ -229,10 +228,7 @@ Duke Box is only available while an exam is in progress (status "in_progress").
    - **Professor view:** In the student list, tap **"Move to another computer"** (or **"Release device"**).
    - **Expected:** The student's device binding is cleared; they can now start the exam on a new device.
 
-3. **Reissue / Re-issue Access Code:** The student lost or forgot the access code.
-   - **Professor view:** Tap **"Issue code"** (or similar).
-   - **Expected:** A one-time code is generated and sent to the student (or a link to claim it).
-   - The student enters the new code on any device to bind a new device to the exam.
+3. **(Removed) Reissue Access Code:** there are no per-student exam access codes any more, so there is nothing to reissue. A student on a new device uses Release Device / Move to Another Computer (step 2).
 
 4. **Reopen Exam:** The exam was closed early (manually by the professor), but a student did not finish.
    - **Professor view:** Tap **"Reopen"** next to the student.

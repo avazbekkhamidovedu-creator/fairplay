@@ -2,83 +2,27 @@
 import time
 from datetime import timedelta
 
-from sqlalchemy import select, update
-
 from app import security
-from app.integrations.dkuoj.models import OjRosterEntry
-from app.models import Attempt, Exam
 from app.timeutil import utcnow
 
 from .conftest import login
-from .s_helpers import db_update
-from .oj_helpers import DEV_A, KEY, bearer, db, patch_exam, ready, sign_in, start as code_start  # noqa: F401
+from .oj_helpers import DEV_A, bearer, ready, sign_in  # noqa: F401
 from .test_app_session import app_client, beat, events, exam, start  # noqa: F401  (fixtures)
-from .test_dkuoj_bridge import oj_exam
 from .test_dkuoj_bridge_v2 import fake, oj  # noqa: F401  (fixtures)
 from .test_s5_sealed_submit import mcq_answer, post, seal, setup
 
 
-def at(monkeypatch, delta):
-    monkeypatch.setattr(security, "_now", lambda: utcnow() + delta)
-
-
-# ---------------------------------------------------------------- 3 + 5. exam-scoped token window
-def _open_and_start(oj, ready):
-    teacher = login(oj, "teacher")
-    eid = oj_exam(oj, teacher)["id"]
-    oj.post(f"/api/exams/{eid}/open", headers=teacher)
+# ---------------------------------------------------------------- 3 + 5. (removed 2026-11)
+# The exam-scoped token window went with the access-code sign-in: no such token is issued, and
+# one from an older build is refused (test_scoped_tokens_are_refused below).
+def test_scoped_tokens_are_refused(oj, ready):
+    from app.security import make_token
     body = sign_in(oj, ready["alice"], DEV_A)
-    aid = code_start(oj, body, eid, DEV_A).json()["attempt_id"]
-    return body, eid, aid
-
-
-def _forget_scope(oj, body, eid):
-    import asyncio
-    from app import security
     uid = security.parse_scoped_token(oj.app.state.settings.secret, body["token"])[0]
-    asyncio.run(security.forget_scope(uid, eid))
-
-
-def _end_exam_minutes_ago(oj, minutes):
-    meta = db(oj, lambda s: s.scalar(select(Exam.external_meta).where(Exam.external_key == KEY)))
-    patch_exam(oj, external_meta={**meta, "end_time": (utcnow() - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")})
-
-
-def test_extra_time_keeps_the_token_alive_past_close_plus_30_minutes(oj, ready, monkeypatch):
-    body = sign_in(oj, ready["alice"], DEV_A)
-    _end_exam_minutes_ago(oj, 20)
-
-    async def extra(s):
-        await s.execute(update(OjRosterEntry).values(extra_time_seconds=3600))
-        await s.commit()
-    db(oj, extra)
-    at(monkeypatch, timedelta(minutes=40))
     assert oj.get("/api/student/exams", headers=bearer(body)).status_code == 200
-    at(monkeypatch, timedelta(minutes=95))
-    assert oj.get("/api/student/exams", headers=bearer(body)).status_code == 401
-
-
-def test_a_running_attempt_keeps_its_token_until_its_deadline_plus_30_minutes(oj, ready, monkeypatch):
-    body, eid, aid = _open_and_start(oj, ready)
-    db_update(oj, aid, deadline_at=utcnow() + timedelta(hours=2))
-    _end_exam_minutes_ago(oj, 20)
-    _forget_scope(oj, body, eid)
-    at(monkeypatch, timedelta(minutes=90))
-    assert oj.get("/api/student/exams", headers=bearer(body)).status_code == 200
-    at(monkeypatch, timedelta(hours=2, minutes=35))
-    assert oj.get("/api/student/exams", headers=bearer(body)).status_code == 401
-
-
-def test_a_hand_in_made_by_the_server_close_leaves_time_for_a_sealed_upload(oj, ready, monkeypatch):
-    body, eid, aid = _open_and_start(oj, ready)
-    db_update(oj, aid, deadline_at=utcnow() + timedelta(hours=1), status="submitted",
-              submitted_at=utcnow(), auto_submitted=True)
-    _end_exam_minutes_ago(oj, 20)
-    _forget_scope(oj, body, eid)
-    at(monkeypatch, timedelta(minutes=20))
-    assert oj.get("/api/student/exams", headers=bearer(body)).status_code == 200
-    at(monkeypatch, timedelta(hours=1, minutes=35))
-    assert oj.get("/api/student/exams", headers=bearer(body)).status_code == 401
+    for scope in ("e_123", "sealed-e_123"):
+        tok = make_token(oj.app.state.settings.secret, uid, "student", 600, scope=scope)
+        assert oj.get("/api/student/exams", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
 
 
 # ---------------------------------------------------------------- 4. sealed clock

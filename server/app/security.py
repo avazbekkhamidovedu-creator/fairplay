@@ -10,13 +10,11 @@ import os
 import secrets
 import threading
 import time
-from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends, HTTPException, Request
 
 from .config import Settings
-from .timeutil import utcnow
 
 
 def hash_password(password: str, iterations: int, salt: bytes | None = None) -> str:
@@ -84,8 +82,8 @@ def key_id(secret: str) -> str:
 def make_token(secret: str, user_id: int, role: str, ttl_s: int, now: float | None = None,
                version: int = 0, scope: str = "", login_at: int | None = None,
                exp: int | None = None, remembered: bool = False) -> str:
-    """payload = "<uid>:<role>:<exp>:<token_version>:<key id>[:<exam id>]" (audit S-15). A scope
-    (an access-code sign-in) ties the token to that one exam."""
+    """payload = "<uid>:<role>:<exp>:<token_version>:<key id>[:<scope>]" (audit S-15). The only
+    scopes are HOMEWORK_SCOPE and ADMIN_SCOPE; current_principal refuses any other."""
     exp = int(exp) if exp is not None else int((now or time.time()) + ttl_s)
     tail = f":{scope}" if scope else ""
     if scope == HOMEWORK_SCOPE and login_at is not None:
@@ -105,7 +103,7 @@ def parse_token(secret: str, token: str) -> tuple[int, str, int] | None:
 
 
 def parse_scoped_token(secret: str, token: str) -> tuple[int, str, int, str] | None:
-    """Like parse_token plus the exam id the token is scoped to ("" = not scoped)."""
+    """Like parse_token plus the token's scope ("" = not scoped)."""
     try:
         payload, sig = token.split(".")
         expected = _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
@@ -205,14 +203,13 @@ async def current_principal(request: Request) -> Principal:
     if not parsed:
         raise HTTPException(401, "Invalid or expired token")
     uid, role, ver, scope = parsed
-    if scope.startswith(SEALED_SCOPE) and (request.method != "POST" or not _SEALED_PATH.match(request.url.path)):
-        raise HTTPException(403, "This sign-in can only upload the sealed answers.")
+    # 2026-11: the exam-scoped (access-code) and sealed-scoped tokens are gone. Nothing issues them,
+    # and one still held from an older build is refused here instead of becoming a full sign-in.
+    if scope and scope not in (ADMIN_SCOPE, HOMEWORK_SCOPE):
+        raise HTTPException(401, "Signed out. Please sign in again.")
     # Audit S-15: signed out everywhere (version bumped), deleted, or role changed -> refused.
     cur = await _current_user(uid)
     if cur is None or cur[0] != role or cur[1] != ver:
-        raise HTTPException(401, "Signed out. Please sign in again.")
-    if scope and scope not in (ADMIN_SCOPE, HOMEWORK_SCOPE) and not scope.startswith(SEALED_SCOPE) \
-            and await scope_over(uid, scope):
         raise HTTPException(401, "Signed out. Please sign in again.")
     return Principal(uid, role, scope)
 
@@ -226,9 +223,6 @@ async def require_teacher(p: Principal = Depends(current_principal)) -> Principa
 
 
 ADMIN_SCOPE = "admin_test"
-SEALED_SCOPE = "sealed-"
-SEALED_TTL_S = 15 * 60
-_SEALED_PATH = re.compile(r"^/api/student/attempts/[^/]+/sealed-submit/?$")
 HOMEWORK_SCOPE = "homework"
 HOMEWORK_REMEMBERED = "rm"
 HOMEWORK_IDLE_S = 30 * 60
@@ -242,57 +236,6 @@ def homework_expiry(login_at: int, now: float | None = None) -> tuple[int, int]:
     return min(int((now or time.time()) + HOMEWORK_IDLE_S), absolute), absolute
 ADMIN_TESTER_USER = "admin-tester"
 _ADMIN_PATHS = ("/api/student/exams",)
-SCOPED_AFTER_HANDIN_S = 300
-SCOPED_AFTER_END_S = 30 * 60
-_EXAM_PATH = re.compile(r"^/api/student/exams/([^/]+)")
-_UNSCOPED_PATHS = ("/api/student/trial", "/api/student/practice", "/api/student/classes", "/api/student/materials")
-
-
-def _now() -> datetime:
-    return utcnow()
-
-
-async def scope_over(uid: int, exam_id: str) -> bool:
-    """A code sign-in stops working 5 minutes after its exam was handed in, and 30 minutes
-    after the exam's end (plus the largest extra time, or the student's own deadline when
-    later) for the rest. A student who handed in on the server's close (a sealed hand-in
-    may still be on its way) keeps the longer window. The end moment is cached."""
-    from .closing import max_extra
-    from .db import get_database
-    from .models import Attempt, Exam
-    from .services import exam_closes_at
-    from .store import get_store
-    from sqlalchemy import select
-    store = get_store()
-    key = f"scope:{uid}:{exam_id}"
-    raw = await store.get(key)
-    if raw is None:
-        async with get_database().sessionmaker() as s:
-            row = (await s.execute(select(Attempt.submitted_at, Attempt.deadline_at, Attempt.auto_submitted).where(
-                Attempt.exam_id == exam_id, Attempt.student_id == uid))).first()
-            sub, deadline, auto = (row[0], row[1], bool(row[2])) if row else (None, None, False)
-            e = await s.get(Exam, exam_id)
-            closes = exam_closes_at(e) if e is not None else None
-            if closes is not None:
-                closes += await max_extra(s, e)
-        late_end = None
-        if closes is not None or deadline is not None:
-            late_end = max(x for x in (closes, deadline) if x is not None) + timedelta(seconds=SCOPED_AFTER_END_S)
-        end = None
-        if sub is not None:
-            end = sub + timedelta(seconds=SCOPED_AFTER_HANDIN_S)
-            if auto and late_end is not None:
-                end = max(end, late_end)
-        else:
-            end = late_end
-        raw = end.isoformat() if end else "-"
-        await store.set(key, raw, 600 if sub is not None else 30)
-    return raw != "-" and _now() >= datetime.fromisoformat(raw)
-
-
-async def forget_scope(uid: int, exam_id: str) -> None:
-    from .store import get_store
-    await get_store().delete(f"scope:{uid}:{exam_id}")
 
 
 async def require_student(request: Request, p: Principal = Depends(current_principal)) -> Principal:
@@ -302,13 +245,7 @@ async def require_student(request: Request, p: Principal = Depends(current_princ
         raise HTTPException(403, "This sign-in is for homework only.")
     if p.scope == ADMIN_SCOPE:
         if request.method != "GET" or request.url.path.rstrip("/") not in _ADMIN_PATHS:
-            raise HTTPException(403, "This sign-in is for one exam. Use a new code for another exam.")
-        return p
-    if p.scope:
-        path = request.url.path
-        m = _EXAM_PATH.match(path)
-        if (m and m.group(1) != p.scope) or path.startswith(_UNSCOPED_PATHS):
-            raise HTTPException(403, "This sign-in is for one exam. Use a new code for another exam.")
+            raise HTTPException(403, "This preview sign-in can only list the exams.")
     return p
 
 

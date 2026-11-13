@@ -11,7 +11,7 @@ vi.mock("../api/client", async (importOriginal) => {
   };
 });
 
-import { getToken, setToken, studentApi } from "../api/client";
+import { studentApi } from "../api/client";
 import { StudentLayout } from "../components/student/StudentLayout";
 import * as bridge from "../lib/bridge";
 import { _resetFeaturesForTests } from "../lib/features";
@@ -36,7 +36,7 @@ function renderDone(state: Record<string, unknown> | null = receipt) {
       <Routes>
         <Route path="/student/done/:attemptId" element={<DonePage />} />
         <Route path="/student" element={<StudentLayout><h1>Student dashboard</h1></StudentLayout>} />
-        <Route path="/student/login" element={<p>Code screen</p>} />
+        <Route path="/student/login" element={<p>App home</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -106,17 +106,6 @@ it("restores normal dashboard navigation only after leaving the completion page"
   expect(nav.getByRole("link", { name: "Grades" })).toBeInTheDocument();
   expect(await nav.findByRole("link", { name: "Practice" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-});
-
-it("preserves the code-session countdown and Sign out now action", async () => {
-  const payload = btoa("7:student:9999999999:0:abc12345:e_1").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  setToken("student", `${payload}.sig`);
-  renderDone();
-  expect(await screen.findByTestId("signout-timer")).toHaveTextContent("5:00");
-  expectCompletionHeader();
-  fireEvent.click(screen.getByRole("button", { name: "Sign out now" }));
-  expect(await screen.findByText("Code screen")).toBeInTheDocument();
-  expect(getToken("student")).toBeNull();
 });
 
 it("keeps trial completion navigation hidden until its automatic return home", async () => {

@@ -118,8 +118,8 @@ def test_homework_token_accepted_exam_token_refused(wt):
     uid = db(wt, find)
     assert wt.get(LIST, headers=hw_token(wt, uid)).status_code == 200
     exam = {"Authorization": "Bearer " + make_token(SECRET, uid, "student", 600, scope="exam-1")}
-    assert wt.get(LIST, headers=exam).status_code == 403
-    assert wt.post(OPEN, json={"id": "wikipedia"}, headers=exam).status_code == 403
+    assert wt.get(LIST, headers=exam).status_code == 401      # exam-scoped tokens are no longer accepted anywhere
+    assert wt.post(OPEN, json={"id": "wikipedia"}, headers=exam).status_code == 401
 
 
 def test_routes_not_exam_routes(wt):

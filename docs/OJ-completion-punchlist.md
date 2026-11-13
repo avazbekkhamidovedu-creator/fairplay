@@ -18,13 +18,13 @@ server `test_native_exit*.py` 49 passed. Local stack was DOWN (`status.sh`), so 
 | M6 | OJ https gateway `https://10.200.31.64:8443/` (mTLS) + enrollment at dku.speakupai.uz, as hardcoded in mac/Sources/Proctora/NativeBrowserProfile.swift:16 | needs owner | owner with sudo | OJ VM gateway config; FairPlay env (enrollment CA) | from a Mac: no cert -> refused, enrolled cert -> 200 (same checks as verify.py lines 134-160) |
 | M7 | Signed release Mac build with FAIRPLAY_NATIVE_EXIT_PUBLIC_KEY (key in fairplay_vm_deploy_notes), published as "Latest" without a version bump | not built | owner (signing) | mac/build.sh, release-mac.yml; public repo fairplay-download | downloaded app's Leave code -> fairplay-help "Offline exit code" -> 6 digits unlock it |
 | M8 | Real-Mac run of the local e2e script steps 1-11, then once against the VM + live OJ | never done | owner on real Mac | ~/code/fairplay-local-e2e (run-app.sh, panic.sh ready) | every step's "Expected" holds; plus signed-build Keychain relock after a kill in the same boot, ATS to the OJ IP, and after a restart: no relock, home screen, Wi-Fi and AnyConnect work |
-| M9 | VM: FAIRPLAY_ADMIN_TEST_CODE >= 12 chars or unset BEFORE any new server deploy (server/app/config.py:334 refuses to start) | needs owner | owner (fairplay.env, no sudo) | /home/fairplay/fairplay.env | `systemctl --user restart fairplay` then /api/health ok |
+| M9 | VM: FAIRPLAY_ADMIN_TEST_CODE >= 12 chars or unset BEFORE any new server deploy (server/app/config.py refuses to start) | done (VM value is 20 chars) | owner (fairplay.env, no sudo) | /home/fairplay/fairplay.env | `systemctl --user restart fairplay` then /api/health ok |
 | M10 | VM: bind uvicorn 8200 to 127.0.0.1 or restrict FORWARDED_ALLOW_IPS (spoofed client IP defeats the per-IP escrow/exit caps); set login_school_nets | needs owner | owner (maybe sudo for nginx) | fairplay.service drop-in, fairplay.env | curl with forged X-Forwarded-For from outside gets the real IP in logs |
 | M11 | Deadline auto-unlock (e2e step 8) relies on Celery harvest + ASSIGNMENT_HARVEST_ENABLED on the live OJ (local stack has no worker) | built-untested [R] | owner with sudo (check) | OJ celery container, dmoj settings | FP2-style exam on live OJ: app unlocks by itself at the deadline |
 | M12 | Native "Give extra time": hidden in native mode (templates/contest/fairplay_help.html:113); the old path only tells the FairPlay server, the OJ end_time is unchanged | not built | needs owner (drop from scope or build via M2 real_start shift) | judge/views/fairplay.py, judge/utils/fairplay_device_session.py, fairplay_help.html | active timed native student gets +N min; OJ and app both end N min later |
 
 Professor actions in native mode today [R]: Unlock device, Unlock and reopen, Reopen exam (after hand-in), Offline exit code.
-"Issue new code" and "Approve resume" are hidden by design (no access codes in design B): not applicable.
+"Approve resume" is hidden by design: not applicable. "Issue new code" is gone (the access code was removed everywhere).
 
 ## 2. Can wait
 

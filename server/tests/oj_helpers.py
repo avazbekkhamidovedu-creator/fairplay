@@ -37,7 +37,7 @@ def _events(kind):
 
 # -- signing a roster student in without the removed access code ------------------------------
 # These tests used to type a per-student code; the "code" of a student is now just the NetID and
-# sign_in() issues the exam-scoped student token directly, so the start/attempt/device rules that
+# sign_in() issues a plain student token directly, so the start/attempt/device rules that
 # come after sign-in are still exercised exactly as before.
 import pytest  # noqa: E402
 
@@ -60,7 +60,7 @@ def sign_in(c, netid, device=None):
         e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
         await remember_user(u.id, u.role, int(u.token_version or 0))
         return make_token(c.app.state.settings.secret, u.id, u.role, c.app.state.settings.student_token_ttl_s,
-                          version=u.token_version or 0, scope=e.id), u.name
+                          version=u.token_version or 0), u.name
     token, name = db(c, go)
     return {"token": token, "role": "student", "name": name, "resume": False}
 

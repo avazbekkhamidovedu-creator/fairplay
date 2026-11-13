@@ -39,7 +39,7 @@ describe("AppVersion", () => {
     expect(screen.getByTestId("app-version")).toHaveTextContent("FairPlay 0.7.3 · Windows");
   });
 
-  it("code sign-in shows a short version under the logo, once the state arrives, and nothing without one", () => {
+  it("the app home shows a short version under the logo, once the state arrives, and nothing without one", () => {
     render(
       <MemoryRouter>
         <NativeHome onUseAccount={() => {}} />

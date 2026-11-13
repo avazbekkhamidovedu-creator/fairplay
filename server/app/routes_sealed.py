@@ -27,7 +27,7 @@ from .grading import handin_grade
 from .models import Attempt, Exam
 from .routes_student import LATE_GRACE, _known_answers, _own_attempt, count_answered
 from .schemas import AnswersIn, SealedSubmitIn
-from .security import SEALED_SCOPE, Principal, require_student
+from .security import Principal, require_student
 from .services import cache_attempt, new_receipt
 from .store import get_store
 from .timeutil import iso, utcnow
@@ -68,8 +68,6 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
     if await store.incr(f"sealrate:{aid}", 60) > SEALED_PER_MIN:
         raise HTTPException(429, "Too many tries, wait a minute")
     a = await _own_attempt(session, aid, p)
-    if p.scope.startswith(SEALED_SCOPE) and p.scope[len(SEALED_SCOPE):] != a.exam_id:
-        raise HTTPException(403, "This sign-in is for another exam.")
     seal, answers = open_seal(ac.settings_of(request).secret, aid, body)
     now = utcnow()
     if seal.sealed_at < a.started_at:

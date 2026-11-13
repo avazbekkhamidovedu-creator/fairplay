@@ -200,7 +200,6 @@ async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: in
     released, or reopened before. Returns the new deadline."""
     from .integrations.outbox import REOPENED, freeze_unsent
     from .models import IntegrityEvent
-    from .security import forget_scope
     if a.status != "submitted":
         raise HTTPException(409, "This student has not handed in")
     if e.status != "live":
@@ -230,7 +229,6 @@ async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: in
     store = get_store()
     await store.delete(attempt_key(a.id), f"abt:{a.id}", f"entry:{a.id}")
     await store.hdel(f"ab:{a.exam_id}", a.id)
-    await forget_scope(a.student_id, a.exam_id)
     return deadline
 
 

@@ -172,7 +172,7 @@ def test_same_device_restart_is_a_resume(oj, room):
 def test_release_without_an_attempt_changes_nothing(oj, room):
     eid, codes, _, _ = room
     r = call(oj, "POST", f"{STU}/carol/release-device", {"reason": "wrong laptop"})
-    assert r.json() == {"ok": True, "released": "code"}
+    assert r.json() == {"ok": True, "released": "none"}
     assert attempts_of(oj) == []
 
 

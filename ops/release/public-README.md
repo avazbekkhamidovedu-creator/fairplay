@@ -2,6 +2,13 @@
 
 Secure exam app for universities. This repository hosts the app downloads.
 
+## What's new in 0.8.7
+
+- "Test my device" covers the whole screen on every monitor, never asks you to close other apps, and tells you clearly (and returns to the home screen) if it cannot cover the screen.
+- The old 6-digit exam code is gone: FairPlay always opens on its home screen.
+- When an instructor unlocks a student's computer, the app returns to its home screen on its next check (about 5 seconds). The check now also recovers if a security prompt appeared or the computer restarted unexpectedly.
+- Windows: a log of the app's connection checks is kept on the computer so a problem can be diagnosed quickly.
+
 ## What's new in 0.8.6
 
 - Instructors can unlock a student with one button and one confirmation on the DKU OJ help page, with no codes or typing. The student's computer is released within about 25 seconds and the app returns to its first screen.
@@ -65,7 +72,6 @@ Good to know:
 - FairPlay only allows Apple's own keyboards (third-party keyboards are switched off).
 
 ### Before the exam
-- In FairPlay, enter the exam access code supplied by your instructor.
-- On DKU OJ, use **Start exam in FairPlay** after installing this version. If the browser does not open the app, open FairPlay manually and enter the code.
+- On DKU OJ, open the exam and use **Start exam in FairPlay** after installing this version. If the browser does not open the app, open FairPlay yourself and sign in. There is no exam access code to type.
 - Use **Check this Mac / Check this PC** any day before the exam and fix anything red.
 - Exam server: https://dku.speakupai.uz

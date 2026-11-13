@@ -1,17 +1,17 @@
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getToken, setToken, tokenScope } from "../api/client";
 import type { StudentExamSummary } from "../api/types";
-import { HandInSignOut } from "../components/student/HandInSignOut";
 import { _resetFeaturesForTests } from "../lib/features";
 import { hasPendingDeviceCheck, keepDeviceCheck } from "../lib/pendingDeviceCheck";
+import "../lib/studentSession";
 import ExamsPage from "../pages/student/ExamsPage";
 import StudentHome from "../pages/student/StudentHome";
 
 const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const scopedToken = (exam = "e_1") => `${b64(`7:student:9999999999:0:abc12345:${exam}`)}.sig`;
+const scopedToken = (exam = "homework") => `${b64(`7:student:9999999999:0:abc12345:${exam}`)}.sig`;
 const plainToken = () => `${b64("7:student:9999999999:0:abc12345")}.sig`;
 
 let exams: StudentExamSummary[];
@@ -21,7 +21,7 @@ let status401: boolean;
 
 const exam = (over: Partial<StudentExamSummary> = {}): StudentExamSummary => ({
   id: "e_1",
-  title: "Demo exam: access codes",
+  title: "Demo exam",
   duration_min: 60,
   question_count: null,
   status: "draft",
@@ -75,7 +75,7 @@ describe("dashboard", () => {
   });
 
   it("an exam that is not open yet is not shown as the student's exam", async () => {
-    setToken("student", scopedToken());
+    setToken("student", plainToken());
     exams = [exam({ scheduled_at: new Date(Date.now() + 5 * 60_000).toISOString() })];
     home();
     expect(await screen.findByRole("heading", { name: "Hi Olivia" })).toBeInTheDocument();
@@ -83,14 +83,12 @@ describe("dashboard", () => {
     expect(screen.queryByTestId("newest-exam")).toBeNull();
   });
 
-  it("shows the sign-out line, and no courses, join box or grades", async () => {
-    setToken("student", scopedToken());
+  it("shows Sign out now without any code sign-in countdown line, and no courses, join box or grades", async () => {
+    setToken("student", plainToken());
     exams = [exam({ status: "live", scheduled_at: new Date(Date.now() - 60_000).toISOString() })];
     home();
     await screen.findByText("Open now");
-    expect(
-      screen.getByText(/After you hand in, you are signed out after 5 minutes\./),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/signed out after 5 minutes/)).toBeNull();
     expect(screen.queryByText(/Your courses/)).toBeNull();
     expect(screen.queryByText(/Join another class/i)).toBeNull();
     expect(screen.queryByText(/Grades/)).toBeNull();
@@ -136,17 +134,7 @@ describe("grades switch", () => {
   });
 });
 
-describe("sign-out after the hand-in", () => {
-  function counting() {
-    return render(
-      <MemoryRouter initialEntries={["/student/done/a_1"]}>
-        <Routes>
-          <Route path="/student/done/:aid" element={<HandInSignOut />} />
-          <Route path="/student/login" element={<p>App home</p>} />
-        </Routes>
-      </MemoryRouter>,
-    );
-  }
+describe("scoped sign-in ends", () => {
   const seedLocal = () => {
     localStorage.setItem("fairplay:me:student:7", '{"name":"Olivia","netId":"ob996"}');
     localStorage.setItem("fairplay:pkg:e_1", "{}");
@@ -154,45 +142,6 @@ describe("sign-out after the hand-in", () => {
     localStorage.setItem("proctora:token:teacher", "T");
     keepDeviceCheck({ problems: [], apps_to_close: [], checks: [], platform: "mac", app_version: "1", os_version: "1" });
   };
-
-  it("counts down 5:00 and at zero clears the token and every local student copy", async () => {
-    vi.useFakeTimers();
-    setToken("student", scopedToken());
-    seedLocal();
-    counting();
-    expect(screen.getByText(/You will be signed out in/)).toHaveTextContent("You will be signed out in 5:00");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(61_000);
-    });
-    expect(screen.getByText(/You will be signed out in/)).toHaveTextContent("You will be signed out in 3:59");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(240_000);
-    });
-    expect(screen.getByText("App home")).toBeInTheDocument();
-    expect(getToken("student")).toBeNull();
-    expect(localStorage.getItem("fairplay:me:student:7")).toBeNull();
-    expect(localStorage.getItem("fairplay:pkg:e_1")).toBeNull();
-    expect(localStorage.getItem("fairplay:pkgkey:e_1")).toBeNull();
-    expect(hasPendingDeviceCheck()).toBe(false);
-    expect(localStorage.getItem("proctora:token:teacher")).toBe("T");
-  });
-
-  it("Sign out now does the same at once", async () => {
-    setToken("student", scopedToken());
-    seedLocal();
-    counting();
-    await userEvent.click(screen.getByRole("button", { name: "Sign out now" }));
-    expect(await screen.findByText("App home")).toBeInTheDocument();
-    expect(getToken("student")).toBeNull();
-    expect(localStorage.getItem("fairplay:pkg:e_1")).toBeNull();
-    expect(hasPendingDeviceCheck()).toBe(false);
-  });
-
-  it("a normal sign-in gets no countdown", () => {
-    setToken("student", plainToken());
-    counting();
-    expect(screen.queryByTestId("signout-timer")).toBeNull();
-  });
 
   it("a 401 on a scoped token signs out at once and clears the local copies", async () => {
     setToken("student", scopedToken());

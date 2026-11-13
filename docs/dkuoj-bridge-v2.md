@@ -6,8 +6,8 @@ without schema changes §11 2026-10-24). Extends `docs/dkuoj-bridge.md` (v1: exa
 assets, uploads, submissions, results). Everything in v1 stays, except where this file changes it
 (§1 signing replaces the Bearer token; §6 retires the live-room link).
 
-Class login is disabled by default (2026-10-31): students sign in with a per-student access code or
-through DKU OJ. The class login, status, reset and `/api/setup/*` routes answer 404 unless the server
+Class login is disabled by default (2026-10-31): students sign in through DKU OJ. (The per-student
+exam access code was removed in 2026-11; see §12.) The class login, status, reset and `/api/setup/*` routes answer 404 unless the server
 sets `FAIRPLAY_CLASS_LOGIN=1`.
 
 Product rules (from Mister):
@@ -244,11 +244,10 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
   Optional keys on each student row (2026-11-01, ignore if absent): `fp_mode` = `"not_started"` (no attempt) |
   `"on"` (attempt in progress, the last signed app beat said the lock is engaged and is at most 180 s old) |
   `"off"` (in progress but not locked, no recent signed beat, or opened without the app) | `"submitted"`;
-  `device_state` = `"unused"` | `"bound"` (the access code's device, `"unused"` also when there is no code);
-  `second_device_attempts` = number of `access_code_second_device` / `second_device` events for the student on
+  `device_state` = `"unused"` | `"bound"` (an attempt in progress bound to a device);
+  `second_device_attempts` = number of `second_device` events (plus `access_code_second_device` events recorded before 2026-11) for the student on
   this exam; `last_beat_at` = ISO time of the last signed app beat or null (beats expire after a while).
-  `code_state` = `"bound"` (used on this device), `"unused"` (freed by release or reissue),
-  or `"none"` (no code); `reopened` = attempt was reopened once; `hand_in_count` = reopens + 1
+  `code_state` = legacy alias of `device_state` (kept for older DKU OJ builds); `reopened` = attempt was reopened once; `hand_in_count` = reopens + 1
   if submitted; `waiting_since` = ISO time when pending resume began (null if not waiting).
   `settings.websites` = the sites the lock really opens; `settings.websites_blocked` = the
   ones DKU OJ asked for that FairPlay refused, each with its reason (always present, `[]`
@@ -310,9 +309,9 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
 
 Five endpoints let a professor fix student emergencies without restarting them. All answers and timer stay when appropriate. Every call requires a reason (a string, 1–200 characters), an audit event with the acting user and reason, and replies `Cache-Control: no-store`.
 
-- **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"code"}` (200 if not handed in; 409 if submitted). Unbinds the access code and frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device using the same access code. Rate limit: 3 per student per exam, counted over 30 days.
+- **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"none"}` (200 if not handed in; 409 if submitted; `"none"` = the student had no attempt, older servers said `"code"`). Frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device after signing in again. Rate limit: 3 per student per exam, counted over 30 days.
 
-- **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "...", "reason": "..."}` → `{"ok": true, "code": "...", "first_name": "...", "last_name": "..."}` (200; 404 if the student is not on the roster). Issues a new access code for the student; when the student has an attempt that is not handed in, the attempt is freed from its device in the same transaction exactly like release-device (answers and timer kept, new session, the old device is cut off), so the new code resumes it on the same or a new device without teacher approval. A handed-in attempt is left alone. The code is returned once in the response and never logged or stored in events. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
+- *(Removed 2026-11)* `POST /exams/<key>/access-codes/reissue`: the per-student access code is gone; the route answers 404.
 
 - **`POST /exams/<key>/students/<netid>/reopen`** body `{"minutes": 5..60, "reason": "..."}` → `{"ok": true, "deadline_at": "..."}` (200; 409 if not handed in, exam not live, graded, or already reopened once). The first hand-in receipt is kept on file; answers are restored, device freed, and a new deadline is set. Rate limit: once per attempt, while live and not graded.
 
@@ -345,11 +344,11 @@ App/web flow (all on the FairPlay server; the app shows the FairPlay web pages):
    calls). Expired / stopped class login → 401 "This class login has expired. Ask your professor
    for a new one."
 2. `POST /api/setup/identify` (Authorization: Bearer <setup_token>) body
-   `{"first_name","last_name","netid","access_code":""}` → FairPlay fetches the class roster from DKU OJ (§2; if
+   `{"first_name","last_name","netid"}` → FairPlay fetches the class roster from DKU OJ (§2; if
    unreachable: 503 "Can't check the class list right now, try again in a minute"), then
    requires: the NetID is in it (case-insensitive), first and last name equal after
    normalisation (trim, collapse spaces, case-fold, strip accents), that NetID is not set up
-   yet, and (if `DKUOJ_SETUP_ACCESS_CODE` is not `"off"`) the student's own exam access code (if issued, or always if the setting is `"always"`). `access_code` is optional in the body; if required but missing: `400 "Enter the access code from your own exam sheet to set up your account."` If given but wrong: `400 "That access code does not match this NetID."` Success → `{"identity_token": "...", "name": "Bob Li", "netid": "bl642"}` (valid 10 minutes, bound to that NetID and that class login). Any failure → 400 with ONE generic message ("This name and NetID are not on the class list, or this NetID is already set up. Check them, or ask your professor.") for identity/name/NetID errors — never which part was wrong; access code errors return their own messages.
+   yet. (An `access_code` field sent by an older app is ignored.) Success → `{"identity_token": "...", "name": "Bob Li", "netid": "bl642"}` (valid 10 minutes, bound to that NetID and that class login). Any failure → 400 with ONE generic message ("This name and NetID are not on the class list, or this NetID is already set up. Check them, or ask your professor.") for identity/name/NetID errors — never which part was wrong.
    Limits: 5 tries a minute per setup token. 5 failed tries in an hour for the same typed NetID
    (normalised: trimmed, lower case) on one class login → that NetID is refused for the rest of
    the hour, with the same generic message. Failed tries for 40 DIFFERENT NetIDs in an hour on
@@ -359,7 +358,6 @@ App/web flow (all on the FairPlay server; the app shows the FairPlay web pages):
    Signing in with the class login itself (`POST /api/auth/login`) has no per-username lockout
    (a whole lab shares that username, often behind one NAT): per IP, after 60 wrong class-login
    passwords in 5 minutes wrong ones get 429; the right password is always accepted.
-   `DKUOJ_SETUP_ACCESS_CODE` (env var): `"issued"` (default, a NetID already with an exam access code must give one), `"always"` (every set-up must give one; codes must be printed first), or `"off"` (codes are never checked; no new codes issued to the class).
 3. `POST /api/setup/account` (Bearer <identity_token>) body `{"username","password","password2"}`
    → username 3–32 of [a-z0-9._-], unique (409 "That username is taken"); password (2026-10-24,
    the FairPlay web set-up shows the same rules as you type): at least 10 characters with at
@@ -372,7 +370,7 @@ App/web flow (all on the FairPlay server; the app shows the FairPlay web pages):
    (role student, `set_up_at` = now), increments the class login's `used`, returns the normal
    login response (`token`, role, etc.). Identity tokens are single-use.
 
-Once set up, a student can also log in with an access code (one per exam). `POST /api/student/code-login` body `{"code": "...", "client": {...}}` → `{"first_name": "...", "last_name": "...", "netid": "...", "exam_title": "...", "resume": false, "confirm_token": "..."}` (2026-10-30, for app and web sign-in). The `resume` flag tells the app whether the student already has an in-progress attempt (same device restart, or another device if the professor released it): resume shows "Resume exam", not "Start exam", and the next `POST /api/student/code-login/confirm` returns the same `resume` flag and does NOT create a second attempt.
+(Removed 2026-11: `POST /api/student/code-login` and `/code-login/confirm`, the per-exam access-code sign-in. Both answer 404.)
 
 Student's classes (course cards, 2026-10-24): `GET /api/student/classes` (FairPlay student
 sign-in) lists the student's FairPlay classes (joined with a join code) AND, for a student with a
@@ -685,36 +683,12 @@ FairPlay side:
 - The hand-in body (v1 submissions) gains `"exam_closes_at": "<iso Z>"` (FairPlay's close: DKU OJ's
   end time + the minutes added).
 
-## 12. Per-student access codes (2026-10-28)
+## 12. Per-student access codes (2026-10-28, removed 2026-11)
 
-Signed oj->fp (§1) like the exam endpoints of §3, for an acting editor of the exam (403
-otherwise). The codes are made for the students on the exam's synced list.
-
-- **`GET /exams/<key>/access-codes.pdf`** → `200 application/pdf`, `Content-Disposition:
-  attachment; filename="access-codes-<key>.pdf"`, `Cache-Control: no-store`. A code is made for
-  every student on the list who has none (existing codes never change, so a second download is the
-  same sheet); students without a NetID are skipped. Query `layout=both` (default) | `list` | `slips`
-  (anything else: 422). One PDF with up to two parts: **Class list** for the invigilator (sorted by last
-  name, then first name; columns #, Last name, First name, NetID, Access code in bold monospace and an
-  empty Present box; 28 rows a page, header with exam title, course, generated time (UTC) and "Do not
-  share. One code per student." repeated on each page) and **Slips** to cut out (same order, 12 per A4
-  page, 2 x 6, dashed cut lines; last name, first name, NetID, the code in Courier-Bold 26 pt and the exam
-  title in small type). Every page has "Page x of y". 50 students: both = 2 + 5 pages; 60 students: list
-  3 pages, slips 5. Names are the roster's `first_name` / `last_name` (kept on the roster row at each
-  sync, refreshed on every download; an entry with neither falls back to the account name split at
-  its first space); a text with characters outside Latin-1 (Chinese names) is printed in the
-  built-in CJK font. Unknown exam → 404; no student with a NetID on the list → 409
-  `{"detail": "..."}`. Each download is an event `access_codes_downloaded` (acting user, number of
-  codes, never a code) in the class's `recent` list.
-- **`POST /exams/<key>/access-codes/reissue`** body `{"netid": "ep530"}` → `{"ok": true}`. The
-  student's old code stops matching and a new one is made (event `access_code_reissued`). NetID
-  missing → 400; not on the exam's list → 404.
-
-Codes: 6 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, random, unique within the exam,
-matched ignoring case, spaces and dashes. Stored as an HMAC-SHA256 (key derived from the server
-secret) and sealed (`app.lms.secretbox`) so the same sheet can be printed again; table
-`exam_access_codes` (unique `(exam_id, netid)` and `(exam_id, code_hmac)`). Student sign-in with
-a code is not part of this version. No new signing vectors: the format is unchanged.
+Removed by owner decision on every platform (Mac, Windows, iPad, web). `GET /exams/<key>/access-codes.pdf`
+and `POST /exams/<key>/access-codes/reissue` answer 404, and no code is made or checked anywhere. The table
+`exam_access_codes` is left in the database (no schema drop) and is no longer read or written. Old events
+`access_codes_downloaded`, `access_code_reissued` and `access_code_second_device` may still appear in history.
 
 ## 13. Immediate sync (2026-10-29)
 

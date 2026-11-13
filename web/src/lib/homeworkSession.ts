@@ -63,7 +63,7 @@ export function noteActivity(): void {
   lastActivity = Date.now();
 }
 
-/** True once, after a timed sign-out, so the code screen can say why. */
+/** True once, after a timed sign-out, so the app home can say why. */
 export function takeSignedOutNotice(): boolean {
   const n = notice;
   notice = false;

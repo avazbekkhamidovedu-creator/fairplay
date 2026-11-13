@@ -128,8 +128,7 @@ Rescue actions the professor uses from DKU OJ when a student hits a problem mid-
 
 | Emergency | Action | Who |
 |---|---|---|
-| Laptop dies / keyboard breaks / broken wifi | Release device (frees device, unbinds code) | Professor via FairPlay tab |
-| Lost their access code | Reissue code (new code given once) | Professor via FairPlay tab |
+| Laptop dies / keyboard breaks / broken wifi | Release device (frees the device) | Professor via FairPlay tab |
 | Accidental hand-in | Reopen (restore answers, new 5–60 min window) | Professor via FairPlay tab |
 | Running out of time | Extra time (add 1–120 min, capped 240 total) | Professor via FairPlay tab |
 | Mac locked, offline | Offline exit code | Professor via FairPlay tab |

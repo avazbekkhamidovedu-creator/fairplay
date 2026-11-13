@@ -35,8 +35,8 @@ FairPlay locked webview for Canvas/LMS exams is 70% complete (Mac app, server, O
 | **Windows app** | 30% | Device test clean-up done; shell/guard/watchdog not compiled on this Mac; core logic tested in isolation; no real Windows hardware |
 | **iPad app** | 45% | 214 core tests pass (verified 2026-10-30); Assessment Mode not available without Apple entitlement; Canvas integration same as Mac |
 | **FairPlay server** | 85% | 1307 tests pass (verified 2026-10-30); native-exit endpoints, Canvas, DKU OJ bridge live; admin key length bug not deployed; no TLS cert automation; unverified on real 10+ student load |
-| **DKU OJ bridge** | 60% | Homework login, access codes, rescue actions, device-key remember-me built; patch 0222 adds migration (violates zero-schema rule); patches 0013–0020 applied but not committed to OJ repo; roster sync and professor materials patches unstarted |
-| **Professor tooling** | 40% | Unlock code, move device, issue code, reopen, extra time built and untested; no professor materials upload (PDF handouts); no roster-scoped access code revocation |
+| **DKU OJ bridge** | 60% | Homework login, rescue actions (access codes removed 2026-11), device-key remember-me built; patch 0222 adds migration (violates zero-schema rule); patches 0013–0020 applied but not committed to OJ repo; roster sync and professor materials patches unstarted |
+| **Professor tooling** | 40% | Unlock code, move device, reopen, extra time built and untested (issue code removed with the access codes); no professor materials upload (PDF handouts) |
 | **LMS support (Canvas)** | 60% | Canvas mode locks, restricts scope, finish detection; SAML/Duo never tested; New Quizzes not tested; real Canvas quiz rendering unverified |
 | **Ops & deploy** | 40% | deploy.sh works for prior version; no-prune script needed; native-exit keys generated; cert renewal manual; VM rollback process documented but untested; secret .acmedns.json cleanup pending |
 | **Security audit** | 45% | Phase 1 recon complete (both repos); architecture.md and findings.json pending; 21 confirmed findings, none fixed yet; no validation on real hardware; shared app key still in binaries |
@@ -75,7 +75,7 @@ FairPlay locked webview for Canvas/LMS exams is 70% complete (Mac app, server, O
 ### Milestone 3: Vision Completeness (4–6 weeks, medium effort)
 - Easy-unlock design & implementation (unlocked-until-start-exam with https and signed start-links).
 - Sealed hand-in and offline answer safety for external websites (local recorder, encrypted journal, page snapshots).
-- Professor materials upload (PDF handouts, roster-scoped access codes).
+- Professor materials upload (PDF handouts).
 - Duo and multi-factor authentication real flow testing.
 - Connection/"Saved" indicator in the locked bar (offline tolerance UI).
 

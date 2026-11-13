@@ -139,6 +139,10 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         var showError: (WKWebView, String, URL) -> WKNavigation? = { $0.loadHTMLString($1, baseURL: $2) }
         var presentLeave: (NativeLeavePrompt, NSWindow?) -> Void = { _, _ in }
         var setup: NativeLockSetup = .dev
+        /// Test seams for the native state poll; nil in the app (real pinned session, bundled key, certificate fingerprint).
+        var nativeTransport: ((URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void)?
+        var policyKey: Data?
+        var deviceFingerprint: String?
         var now: () -> Date = Date.init
         var monotonic: () -> NativeExit.Monotonic = NativeExit.systemMonotonic
         var random: () -> Double = { Double.random(in: 0..<1) }
@@ -495,6 +499,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     func setReleasedPracticeVisible(_ visible: Bool) { overlay?.isHidden = visible }
 
+    func showNotice(_ text: String) { notice?.stringValue = text }
+
     func deviceTestChanged(_ message: [String: Any]) {
         guard flow.state == .setup else { return }
         let active = message["state"] as? String == "started"
@@ -634,6 +640,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     private var recoveringLock = false
     private var recoverUncleanPending = false
+    /// The last recover after a crash was refused (for example 409 other_device after a resumable unlock): the next poll
+    /// uses the bound session's renew, which can return a signed release, instead of recover.
+    private var uncleanRecoverRefused = false
     var pendingUncleanRecover: Bool { recoverUncleanPending }
 
     private func open(_ policy: ProtectedBrowserPolicy, rules: WKContentRuleList) {
@@ -735,7 +744,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.captureDraft(); self?.refreshEditShortcuts() }
         RunLoop.main.add(timer, forMode: .common)
         draftTimer = timer
-        if Config.universityPolicyPublicKey != nil, policy.startURL.host == UniversityDestination.dkuOJ.url.host {
+        if (effects.policyKey ?? Config.universityPolicyPublicKey) != nil, policy.startURL.host == UniversityDestination.dkuOJ.url.host {
             if renewCancel == nil {
                 let first: TimeInterval = nativeExam.requiresTerminalReceipt || recoverUncleanPending ? 0 : renewSchedule.interval(.renew)
                 renewCancel = effects.schedule(first) { [weak self] in self?.renewCancel = nil; self?.refreshExamContext() }
@@ -868,7 +877,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private func refreshExamContext() {
         renewDeviceCertificateIfNeeded()
         dropExpiredSites()
-        if recoverUncleanPending, let contest = nativeExam.contest {
+        if recoverUncleanPending, !(uncleanRecoverRefused && nativeExam.binding != nil), let contest = nativeExam.contest {
             if !requestNative("recover/" + contest) { scheduleNext(.other) }
             return
         }
@@ -1497,8 +1506,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         guard lockIsOwned else { return false }
         if nativeRequestInFlight { return true }
         guard let cookieStore = (orderedTabs.first?.configuration.websiteDataStore ?? retainedWebsiteStore)?.httpCookieStore,
-              let device = nativeIdentity.fingerprint, selection.url.scheme == "https",
-              let key = Config.universityPolicyPublicKey else { return false }
+              let device = effects.deviceFingerprint ?? nativeIdentity.fingerprint,
+              selection.url.scheme == "https" || effects.nativeTransport != nil,
+              let key = effects.policyKey ?? Config.universityPolicyPublicKey else { return false }
         let page = orderedTabs.first
         nativeRequestInFlight = true
         let generation = nativeGeneration, nonce = UUID().uuidString
@@ -1516,7 +1526,8 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                 ? Self.nativeStateRequest(endpoint: endpoint, origin: self.selection.url, nonce: nonce, cookies: cookies)
                 : Self.nativeRequest(endpoint: endpoint, origin: self.selection.url, nonce: nonce,
                                      unclean: reportsUnclean, lockId: lockId, cookies: cookies)
-            self.nativeHTTP.dataTask(with: request) { [weak self, weak page] data, response, error in
+            let send = self.effects.nativeTransport ?? { [nativeHTTP = self.nativeHTTP] req, done in nativeHTTP.dataTask(with: req, completionHandler: done).resume() }
+            send(request) { [weak self, weak page] data, response, error in
                 DispatchQueue.main.async {
                     guard let self, generation == self.nativeGeneration else { return }
                     self.nativeRequestInFlight = false
@@ -1537,6 +1548,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     guard error == nil, status == 200, let envelope,
                           let context = NativeDeviceContext.verify(envelope, publicKey: key, nonce: nonce, device: device),
                           self.nativeExam.accept(context) else {
+                        if reportsUnclean, error == nil, let code = status, (400...499).contains(code) { self.uncleanRecoverRefused = true }   // a definitive refusal only, never a timeout or a 5xx
                         if sendsLock, Self.isLockConflict(status: status, data: data) {
                             self.notice?.stringValue = Self.lockConflictText
                             self.scheduleNext(.refused(after: 30))
@@ -1577,6 +1589,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     }
                     if reportsUnclean {
                         self.recoverUncleanPending = false
+                        self.uncleanRecoverRefused = false
                         self.effects.setup.markRecovered()
                     }
                     self.persistNativeProgress()
@@ -1627,7 +1640,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     self.notice?.stringValue = context.state == "finishing" ? "DKU OJ is still receiving your answers." : "Exam in progress"
                     self.scheduleNext(.success, immediate: entered)
                 }
-            }.resume()
+            }
         }
         }
         }
@@ -1846,6 +1859,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
 
     /// Existing lock-integrity/permission blockers must remain above this browser too.
     func setHeld(_ held: Bool) {
+        let wasHeld = self.held
         self.held = held
         overlay?.isHidden = held
         if held, browser != nil {
@@ -1855,6 +1869,9 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             notice?.stringValue = "Browsing paused for a security check. Your exam session is retained."
         } else if !held, browser == nil, holdLabel == nil {
             restoreBrowser()
+        } else if !held, wasHeld, isOpen, lockIsOwned, holdLabel != nil {
+            // Only when the overlay really went away: a poll that fired while held sent nothing and set no timer. (The checks call this every few seconds; a poll already scheduled must keep its time.)
+            scheduleNext(.other)
         }
     }
 

@@ -52,7 +52,7 @@ describe("admin preview dashboard", () => {
       <MemoryRouter initialEntries={["/student"]}>
         <Routes>
           <Route path="/student" element={<StudentHome />} />
-          <Route path="/student/login" element={<p>Code screen</p>} />
+          <Route path="/student/login" element={<p>App home</p>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -65,7 +65,7 @@ describe("admin preview dashboard", () => {
     expect(screen.queryByRole("button", { name: /start|continue exam/i })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Sign out now" }));
-    await waitFor(() => expect(screen.getByText("Code screen")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("App home")).toBeInTheDocument());
     expect(getToken("student")).toBeNull();
   });
 });

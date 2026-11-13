@@ -84,7 +84,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("code screen has no remember option", () => {
+describe("app home has no remember option", () => {
   it.each([
     ["unavailable", { available: false, name: null }],
     ["missing", undefined],

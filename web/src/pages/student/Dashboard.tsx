@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { clearToken, getToken, tokenScope } from "../../api/client";
+import { clearToken } from "../../api/client";
 import type { StudentExamSummary } from "../../api/types";
 import { NotLockedBanner } from "../../components/LockBanner";
 import { firstName, examName, plural, shortTime } from "../../components/student/format";
@@ -84,7 +84,6 @@ export default function Dashboard() {
   const me = useMe("student");
   const { exams, error } = useStudentExams(POLL_MS);
   const [exitNotice, setExitNotice] = useState(takeExitNotice);
-  const scoped = !!tokenScope(getToken("student"));
   const exam = exams ? newestExam(exams) : null;
   const open = !!exam && (exam.attempt?.status === "in_progress" || exam.status === "live");
   const name = firstName(me?.name);
@@ -120,7 +119,6 @@ export default function Dashboard() {
         )}
         {exam ? <ExamCard exam={exam} /> : exams && <div className="sd-empty">Your exam shows up here when it is ready.</div>}
         <div className="sd-foot">
-          {scoped && "After you hand in, you are signed out after 5 minutes. "}
           <button type="button" className="sd-link" onClick={signOut}>
             Sign out now
           </button>

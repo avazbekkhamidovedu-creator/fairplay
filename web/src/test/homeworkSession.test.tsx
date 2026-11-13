@@ -144,7 +144,7 @@ describe("warnings and sign-out", () => {
     expect(screen.queryByTestId("session-warning")).toBeNull();
   });
 
-  it("signs out at the idle expiry and explains it on the code screen", async () => {
+  it("signs out at the idle expiry and explains it on the app home", async () => {
     session(30, 240);
     renderPage();
     await advance(31 * MIN);

@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import * as bridge from "../../lib/bridge";
 import { studentApi } from "../../api/client";
 import { CheckIcon } from "../../components/student/icons";
-import { HandInSignOut } from "../../components/student/HandInSignOut";
 import { StudentLayout } from "../../components/student/StudentLayout";
 import { TrialExit } from "../../components/student/TrialExit";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
@@ -137,7 +136,6 @@ function ExamDone({ fromState }: { fromState: DoneState | null }) {
           </p>
           <p className="stu-done-foot">Your laptop unlocks now.</p>
           {pending && bridge.isLocked() && <StillLocked />}
-          <HandInSignOut />
           <Link to="/student" className="stu-btn" style={{ marginTop: 12 }}>
             Back to home
           </Link>

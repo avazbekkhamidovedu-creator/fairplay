@@ -145,7 +145,6 @@ async def my_exams(request: Request, p: Principal = Depends(require_student),
                         member_of_exam(p.user_id))))
         # slice 6: paper exams are printed; students never see them in the app
         .where(or_(Exam.delivery.is_(None), Exam.delivery != "paper"))
-        .where(Exam.id == p.scope if p.scope else true())     # a code sign-in sees its own exam only
         .where(Exam.is_trial == false())     # the sample exam lives only in its own card
         .where(or_(Exam.source != "dkuoj", oj_source.roster_condition(p.user_id)))
         .order_by(Exam.created_at.desc(), Exam.id))).all()
@@ -787,8 +786,6 @@ async def submit(aid: str, body: AnswersIn, request: Request,
     if a.status != "submitted":
         raise HTTPException(409, "Answers changed while handing in, try again")
     await cache_attempt(get_store(), a)
-    from .security import forget_scope
-    await forget_scope(a.student_id, a.exam_id)
     return {"status": "submitted", "submitted_at": iso(a.submitted_at), "receipt": a.receipt}
 
 

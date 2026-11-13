@@ -13,13 +13,6 @@
 .cs-title-sm { font-size: 22px; margin-bottom: 14px; }
 .cs-sub { margin: 0 0 20px; color: #667085; }
 .cs-muted { color: #667085; font-size: 14px; margin: 12px 0 0; }
-.cs-boxes { display: flex; gap: 10px; justify-content: space-between; }
-.cs-box { width: 100%; min-width: 0; max-width: 52px; height: 62px; box-sizing: border-box; padding: 0; text-align: center; border: 1.5px solid var(--border); border-radius: 12px; background: #fff; color: #1c2230; font: 700 26px ui-monospace, Menlo, monospace; text-transform: uppercase; caret-color: transparent; }
-.cs-box:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px #dfe3fb; }
-.cs-invalid .cs-box { border-color: var(--error); background: #fff6f5; }
-.cs-invalid { animation: cs-shake 0.35s; }
-@keyframes cs-shake { 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
-@media (prefers-reduced-motion: reduce) { .cs-invalid { animation: none; } }
 .cs-error { margin: 12px 0 0; color: var(--error); font-weight: 600; font-size: 14px; }
 .cs-info { margin: 12px 0 0; color: var(--text-2); font-size: 14px; line-height: 1.45; }
 .cs-btn { border: 0; border-radius: 10px; padding: 13px 18px; font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
@@ -28,15 +21,6 @@
 .cs-btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
 .cs-btn-secondary { background: #eceef3; color: #1c2230; }
 .cs-block { display: block; width: 100%; margin-top: 22px; }
-.cs-actions { display: flex; gap: 12px; }
-.cs-actions .cs-btn-primary { flex: 1; }
-.cs-slip { margin: 0; border: 2px dashed #c9cee0; border-radius: 14px; padding: 18px 22px; background: #fff; }
-.cs-slip dt { color: #667085; font-size: 11px; margin-top: 10px; }
-.cs-slip dt:first-child { margin-top: 0; }
-.cs-slip dd { margin: 0; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
-.cs-slip dd.cs-slip-code { font: 700 34px "Courier New", monospace; letter-spacing: 0.12em; margin-top: 6px; }
-.cs-exam { color: #667085; font-size: 14px; margin: 14px 0; }
-.cs-legacy { margin: 18px 0 0; text-align: center; }
 .cs-homework { margin: 18px 0 0; text-align: center; color: #667085; font-size: 14px; }
 .cs-link { background: none; border: 0; color: var(--primary); text-decoration: underline; cursor: pointer; font: inherit; }
 .cs-overlay { position: fixed; inset: 0; background: rgba(28, 34, 48, 0.5); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
@@ -54,10 +38,6 @@
 @media (max-width: 400px) {
   .cs-top { padding: 14px 14px; }
   .cs-card { padding: 20px 16px; }
-  .cs-boxes { gap: 6px; }
-  .cs-box { height: 52px; font-size: 22px; }
-  .cs-actions { flex-direction: column; }
-  .cs-slip dd.cs-slip-code { font-size: 28px; }
 }
 .cs-dialog:focus { outline: none; }
 .cs-update { margin-bottom: 18px; padding: 12px 14px; border-radius: 12px; background: #eef1fd; border: 1px solid #c9d0f5; }
@@ -65,8 +45,6 @@
 .cs-update-line { margin: 0; font-size: 14px; font-weight: 600; }
 .cs-update-actions { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
 .cs-btn-sm { padding: 8px 14px; font-size: 14px; }
-.cs-try-list { margin: 0; padding-left: 20px; font-size: 15px; line-height: 1.55; color: #1c2230; }
-.cs-try-list li + li { margin-top: 6px; }
 .cs-remembered { margin: 0 0 12px; }
 .cs-remembered .cs-block { margin-top: 0; margin-bottom: 8px; }
 .cs-remember-card { margin: 16px 0; padding: 12px 14px; border: 1px solid #e4e7ec; border-radius: 10px; text-align: left; }

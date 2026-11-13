@@ -113,9 +113,8 @@ class ClassLoginEvent(Base):
 
 
 class ExamAccessCode(Base):
-    """A per-student access code for one exam, printed on a sheet for the professor. The
-    code is stored as an HMAC (to look it up) and sealed (so the same sheet can be printed
-    again); bound_device is for the code login that comes later and is not used yet."""
+    """Legacy (removed 2026-11): the per-student exam access code. Nothing reads or writes this
+    table any more; the model stays only so the existing table is kept (no schema drop)."""
     __tablename__ = "exam_access_codes"
     __table_args__ = (UniqueConstraint("exam_id", "netid", name="uq_access_code_netid"),
                       UniqueConstraint("exam_id", "code_hmac", name="uq_access_code_hmac"))

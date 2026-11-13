@@ -102,7 +102,7 @@ public struct DeviceBinding {
         }
     }
 
-    /// Fields for the start / trial / code-login proof. `message` builds the signed start
+    /// Fields for the start / trial proof. `message` builds the signed start
     /// message for a device id. If the key cannot sign, the proof is the legacy one.
     public func proof(message: (String) -> String) -> DeviceProof {
         guard let key else { return DeviceProof(deviceId: legacyId, publicKey: nil, signature: nil) }

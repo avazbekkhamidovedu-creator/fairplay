@@ -1654,6 +1654,10 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         deviceTestTapOn = EventTap.isTrusted && EventTap.shared.start()
         NSApp.presentationOptions = LockdownController.previewOptions
         enterLockedMode()
+        verifyPreviewCoverage("start")
+        // Once after a layout pass, and again about 0.8 s later: a cover that cannot be held means no preview.
+        DispatchQueue.main.async { [weak self] in self?.confirmPreviewCoverage("after layout") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.confirmPreviewCoverage("0.8 s") }
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.deviceTest.tick()
             // Every screen, the menu bar and the Dock area, also after a display is added or moved during the preview.
@@ -1661,6 +1665,40 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         }
         RunLoop.main.add(t, forMode: .common)
         deviceTestTimer = t
+    }
+
+    private func previewSnapshot() -> PreviewCoverage.Snapshot? {
+        guard let win = window else { return nil }
+        return .init(window: win.frame, screens: NSScreen.screens.map { $0.frame },
+                     presentation: NSApp.presentationOptions, isVisible: win.isVisible, isKey: win.isKeyWindow)
+    }
+
+    /// Logs the placement result (always on) and returns whether the preview covers every screen.
+    @discardableResult
+    private func verifyPreviewCoverage(_ why: String) -> Bool {
+        guard let s = previewSnapshot() else { PreviewCoverage.diag("placement NOT covered (no window) [\(why)]"); return false }
+        let failure = PreviewCoverage.evaluate(s)
+        PreviewCoverage.diag(PreviewCoverage.line(why: why, failure: failure, snapshot: s,
+                                                  scales: NSScreen.screens.map { $0.backingScaleFactor }))
+        return failure == nil
+    }
+
+    /// Re-asserts the cover once, then checks again; a preview that still does not cover is ended, never left half-covered.
+    private func confirmPreviewCoverage(_ why: String) {
+        guard deviceTest.isRunning else { return }
+        if verifyPreviewCoverage(why) { return }
+        NSApp.presentationOptions = LockdownController.previewOptions
+        coverAllScreens()
+        NSApp.activate(ignoringOtherApps: true)
+        takeFocus()
+        if verifyPreviewCoverage("\(why), retry") { return }
+        PreviewCoverage.diag("refused: the full-screen placement failed, no preview")
+        let wasReleased = releasedDeviceTestVisible
+        deviceTest.end(.error)
+        if wasReleased {
+            restoreReleasedDeviceTest("placement-failed")
+            protectedBrowser.showNotice(PreviewCoverage.refusedMessage)
+        }
     }
 
     func deviceTestRestore() {

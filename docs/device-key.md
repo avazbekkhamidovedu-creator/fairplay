@@ -1,6 +1,6 @@
 # Device key binding (client contract)
 
-One exam attempt and one access code stay on the device they first bound to. The device id is
+One exam attempt stays on the device it first bound to. The device id is
 no longer a client-chosen string: it is derived from a key pair whose private half never leaves
 the device. Old apps keep working until the server sets `FAIRPLAY_REQUIRE_DEVICE_KEY=1`.
 
@@ -15,8 +15,8 @@ the device. Old apps keep working until the server sets `FAIRPLAY_REQUIRE_DEVICE
 
 ## Where it is sent
 
-The existing `client` object of `POST /api/student/exams/{id}/start`,
-`POST /api/student/trial/start` and `POST /api/student/code-login` gets two optional fields next
+The existing `client` object of `POST /api/student/exams/{id}/start`
+and `POST /api/student/trial/start` gets two optional fields next
 to `device_id`, `nonce`, `signature`:
 
 ```
@@ -43,18 +43,18 @@ single-use nonce from the challenge endpoint, as before. The signature may be AS
 
 - Key present: `device_sig` must verify and `device_id` must be the derived id, otherwise 403
   with the normal app-proof error ("The FairPlay app could not be verified...").
-- First bind of an attempt or access code stores `device_pub` next to the device id.
-- After that, the same attempt/code needs the same `device_pub` with a valid signature. A
+- First bind of an attempt stores `device_pub` next to the device id.
+- After that, the same attempt needs the same `device_pub` with a valid signature. A
   missing or different key, even with the same `device_id`, is a different device: start answers
-  409 `swap_needed`, code login answers the generic 400 "That code is not valid.", and a
-  `second_device` / `access_code_second_device` event is recorded.
-- Upgrade of an existing install: an attempt or code bound before this feature (device id stored,
+  409 `swap_needed` and a `second_device` event is recorded. (The removed access-code sign-in
+  also recorded `access_code_second_device`; old events may still show it.)
+- Upgrade of an existing install: an attempt bound before this feature (device id stored,
   no key) accepts the first request that carries a valid key together with that same legacy
   `device_id` (the id is then not the derived one; keep sending the legacy id and the key).
   The key is stored once and an event `device_key_upgraded` is recorded. New installs must use
   the derived id.
 - Teacher release-device and an approved swap clear the stored key together with the device id.
-- With `FAIRPLAY_REQUIRE_DEVICE_KEY=1`, a start or code login without a valid key is refused with
+- With `FAIRPLAY_REQUIRE_DEVICE_KEY=1`, a start without a valid key is refused with
   426 `{"detail": "Update FairPlay to continue", "min_app_version": ""}` (same shape as the
   version gate).
 - Re-sending the start within 15 s from the same device and key returns the same session.

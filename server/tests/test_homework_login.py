@@ -407,9 +407,9 @@ def test_me_accepts_plain_student_refuses_exam_and_other_tokens(hw, fake):
     r = hw.get(ME, headers=login(hw, "alice"))
     assert r.status_code == 200 and r.json()["name"]
     alice = db(hw, lambda s: s.execute(select(User).where(User.username == "alice"))).scalar_one()
-    for scope in ("some-exam-id", ADMIN_SCOPE):
+    for scope, status in (("some-exam-id", 401), (ADMIN_SCOPE, 403)):     # exam scopes are gone: refused outright
         tok = make_token(SECRET, alice.id, "student", 600, version=alice.token_version or 0, scope=scope)
-        assert hw.get(ME, headers=bearer(tok)).status_code == 403
+        assert hw.get(ME, headers=bearer(tok)).status_code == status
     assert hw.get(ME, headers=login(hw, "teacher")).status_code == 403
     assert hw.get(ME).status_code == 401
 

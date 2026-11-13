@@ -6,7 +6,7 @@ Estimates below are honest judgement from the code, the 2026-10 security audit a
 
 One FairPlay app a university buys, and students use for every exam:
 
-1. Install FairPlay (Mac, iPad, Windows). Open it. Sign in with the exam access code (exams) or the university login (homework).
+1. Install FairPlay (Mac, iPad, Windows). Open it. Sign in with the class account (exams; there is no exam access code) or the university login (homework).
 2. FairPlay shows ONE locked exam screen. Inside it runs either FairPlay's own question UI, or the university's ORIGINAL website (Canvas, Moodle, Blackboard, Brightspace, Schoology, DKU OJ, Chaoxing, Learning Mall, custom sites). No LMS integration, no plugin, no change on the university side.
 3. The lock stays on from the first page to hand-in: no other apps, no new browser windows, no external links, no clipboard or screenshots leaving the exam (as far as each OS allows).
 4. The student's work is never lost. If the internet drops, the exam keeps working, answers are kept on the device, and everything syncs or is handed in sealed when the connection comes back.
@@ -35,8 +35,8 @@ Be honest about what is possible:
 
 | Area | Done | Rough completion |
 |---|---|---|
-| FairPlay own-question exam (server, web, Mac, iPad, Windows): access code, lock, hand-in, resume, sealed offline hand-in, teacher monitoring | Built, audited (21 confirmed findings fixed), unit and local E2E tested. Not run on real Windows/iPad; stress test in progress | ~85% |
-| DKU OJ bridge (exam sync, access codes, rescue, homework app login) | Built, audited, patched. DKU OJ tests not run here; homework UI unfinished | ~75% |
+| FairPlay own-question exam (server, web, Mac, iPad, Windows): sign-in, start code, lock, hand-in, resume, sealed offline hand-in, teacher monitoring | Built, audited (21 confirmed findings fixed), unit and local E2E tested. Not run on real Windows/iPad; stress test in progress | ~85% |
+| DKU OJ bridge (exam sync, rescue, homework app login; access codes removed 2026-11) | Built, audited, patched. DKU OJ tests not run here; homework UI unfinished | ~75% |
 | Canvas restricted browser (Mac, iPad, Windows) | Built; scope fixes just made; New Quizzes and real Canvas not tested | ~60% |
 | Universal website mode (any LMS) | Opens and locks any https site with a host allow-list. Missing: uploads, popups, JS dialogs, clipboard policy, camera, SSO host sets, per-LMS scoping | ~40% |
 | Local answer saving for external sites | Not started (own-question exams only) | ~10% |
@@ -50,7 +50,7 @@ Be honest about what is possible:
 
 ## 3. Next steps, in order
 
-1. Finish what is in flight: the exam stress test, then commit, then an end-to-end exam click-through (selected students, access code, hand-in, teacher view).
+1. Finish what is in flight: the exam stress test, then commit, then an end-to-end exam click-through (selected students, sign-in, hand-in, teacher view).
 2. Verify on real hardware: compile and run Windows in CI and on a PC; run the Mac and iPad apps on real devices; a small pilot exam with 3-5 volunteers.
 3. Universal-mode blockers (see FAIRPLAY-UNIVERSAL-WEBVIEW.md): uploads, clipboard policy, popups/child windows, JS dialogs, camera permission, IdP host sets in site profiles.
 4. Local answer safety for external sites (section 1 layers) plus the connection/"saved" indicator in the bar.
