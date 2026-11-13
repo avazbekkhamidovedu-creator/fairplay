@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { AppVersion } from "../components/AppVersion";
-import CodeSignIn from "../pages/student/CodeSignIn";
+import NativeHome from "../pages/student/NativeHome";
 import * as bridge from "../lib/bridge";
 
 const send = (detail: unknown) => act(() => void window.dispatchEvent(new CustomEvent("proctora-native", { detail })));
@@ -42,7 +42,7 @@ describe("AppVersion", () => {
   it("code sign-in shows a short version under the logo, once the state arrives, and nothing without one", () => {
     render(
       <MemoryRouter>
-        <CodeSignIn onUseAccount={() => {}} />
+        <NativeHome onUseAccount={() => {}} />
       </MemoryRouter>,
     );
     expect(screen.queryByTestId("app-version")).toBeNull();

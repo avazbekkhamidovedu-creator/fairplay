@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../api/client";
 import { _resetUpdatePromptForTests } from "../components/code-signin/UpdatePrompt";
 import * as bridge from "../lib/bridge";
-import CodeSignIn from "../pages/student/CodeSignIn";
+import NativeHome from "../pages/student/NativeHome";
 import StudentHome from "../pages/student/StudentHome";
 
 const send = (detail: unknown) => act(() => void window.dispatchEvent(new CustomEvent("proctora-native", { detail })));
@@ -25,7 +25,7 @@ function native(update?: { version: string }) {
 const renderSignIn = () =>
   render(
     <MemoryRouter>
-      <CodeSignIn onUseAccount={() => {}} />
+      <NativeHome onUseAccount={() => {}} />
     </MemoryRouter>,
   );
 
@@ -43,7 +43,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("update prompt on the code sign-in screen", () => {
+describe("update prompt on the app home", () => {
   it("counts down 5 s, then installs exactly once", () => {
     native({ version: "0.7.6" });
     renderSignIn();
@@ -54,7 +54,7 @@ describe("update prompt on the code sign-in screen", () => {
     tick(3000);
     expect(installs()).toBe(1);
     expect(screen.getByTestId("update-notice")).toHaveTextContent("Updating FairPlay… the app will reopen");
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sign in with username and password" })).toBeDisabled();
     tick(10000);
     expect(installs()).toBe(1);
   });
@@ -77,7 +77,7 @@ describe("update prompt on the code sign-in screen", () => {
     expect(screen.queryByTestId("update-notice")).not.toBeInTheDocument();
   });
 
-  it("updateFailed shows the message and a manual button, code box stays usable", () => {
+  it("updateFailed shows the message and a manual button, sign-in button stays usable", () => {
     native({ version: "0.7.6" });
     renderSignIn();
     tick(5000);
@@ -85,7 +85,7 @@ describe("update prompt on the code sign-in screen", () => {
     const n = screen.getByTestId("update-notice");
     expect(n).toHaveTextContent("The update could not be installed. You can keep using this version.");
     expect(n).toHaveTextContent("not installed with the installer");
-    expect(screen.getAllByLabelText(/^Character \d of 6$/)[0]).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Sign in with username and password" })).toBeEnabled();
     act(() => screen.getByRole("button", { name: "Update now" }).click());
     expect(installs()).toBe(2);
   });
@@ -97,7 +97,7 @@ describe("update prompt on the code sign-in screen", () => {
     send({ type: "updateProgress", stage: "downloading" });
     tick(60000);
     expect(screen.getByTestId("update-notice")).toHaveTextContent("could not be installed");
-    expect(screen.getAllByLabelText(/^Character \d of 6$/)[0]).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Sign in with username and password" })).toBeEnabled();
   });
 
   it("shows nothing without an update, and nothing in a plain browser", () => {

@@ -4,7 +4,6 @@ from app.models import Attempt
 
 from .s_helpers import forget_double_click
 from .conftest import login
-from .test_access_code_login import DEV_A as OJ_DEV_A, bearer, start as oj_start, sign_in
 from .test_app_session import DEV_A, app_client, exam, start  # noqa: F401  (fixtures)
 from .test_dkuoj_bridge import db
 from .test_dkuoj_bridge_v2 import oj  # noqa: F401  (fixture)
@@ -118,35 +117,3 @@ def test_release_device_clears_the_exit(app_client, exam):
                           json={"answers": {}, "client_seq": 1}).status_code == 200
 
 
-def test_access_code_student_is_asked_for_the_start_code_only_after_an_exit(oj, room):
-    eid, codes, start_code, teacher = room
-    body = sign_in(oj, codes["alice"], OJ_DEV_A)
-    r = oj_start(oj, body, eid, OJ_DEV_A)
-    assert r.status_code == 200, r.text
-    a = r.json()
-    q5 = qid_of(a)
-    put(oj, body, a, {q5: "kept"}, 1)
-
-    forget_double_click(a["attempt_id"])
-    r = oj_start(oj, body, eid, OJ_DEV_A)                    # crash restart: no code, as before
-    assert r.status_code == 200, r.text
-    a = r.json()
-
-    async def inv(s):
-        from app.models import Exam
-        return (await s.get(Exam, eid)).invigilator_code
-    exit_r = oj.post(f"/api/student/attempts/{a['attempt_id']}/exit-code",
-                     headers={**bearer(body), "X-FairPlay-Session": a["session"]}, json={"code": db(oj, inv)})
-    assert exit_r.status_code == 200, exit_r.text
-    assert attempts_of(oj)[0].exited_at is not None
-
-    forget_double_click(a["attempt_id"])
-    r = oj_start(oj, body, eid, OJ_DEV_A)
-    assert r.status_code == 403 and r.json()["detail"]["code"] == "start_code_required"
-    r = oj_start(oj, body, eid, OJ_DEV_A, start_code=start_code)
-    assert r.status_code == 200, r.text
-    b = r.json()
-    assert b["session"] != a["session"] and b["answers"] == {q5: "kept"}
-    assert attempts_of(oj)[0].exited_at is None
-    forget_double_click(a["attempt_id"])
-    assert oj_start(oj, body, eid, OJ_DEV_A).status_code == 200

@@ -8,7 +8,6 @@ from app.config import MIN_ADMIN_TEST_CODE, Settings
 from app.security import hash_password
 
 from .conftest import login
-from .test_access_codes import codes_of
 from .test_dkuoj_bridge import run
 from .test_dkuoj_bridge_v2 import CLASS_ID, V1, call, fake, make_login, oj, setup_token  # noqa: F401
 
@@ -124,38 +123,16 @@ def test_unsynced_exam_calls_need_a_named_non_student(oj):
     assert call(oj, "POST", path + "/settings", body, acting="teacher").status_code == 200
 
 
-# ---------------------------------------------------------------- set-up needs the student's own code
-def _identify(c, first="Bob", last="Li", netid="bl642", code=None):
+# ---------------------------------------------------------------- set-up needs no exam code
+def _identify(c, first="Bob", last="Li", netid="bl642"):
     tok = setup_token(c, make_login(c))
     body = {"first_name": first, "last_name": last, "netid": netid}
-    if code is not None:
-        body["access_code"] = code
     return c.post("/api/setup/identify", json=body, headers={"Authorization": f"Bearer {tok}"})
 
 
-def test_setup_without_codes_issued_still_works(oj):
+def test_setup_never_asks_for_an_access_code(oj):
     run(oj)
     assert _identify(oj).status_code == 200
-
-
-def test_setup_needs_own_access_code_once_issued(oj):
-    run(oj)
-    codes = codes_of(oj)
-    miss = _identify(oj)
-    assert miss.status_code == 400 and "access code" in miss.json()["detail"].lower()
-    classmate = _identify(oj, code=codes["alice"])
-    assert classmate.status_code == 400 and "does not match" in classmate.json()["detail"]
-    assert _identify(oj, code=codes["bl642"].lower()).status_code == 200
-    assert _identify(oj, code=" " + codes["bl642"][:3] + "-" + codes["bl642"][3:] + " ").status_code == 200
-
-
-def test_setup_code_modes(oj, monkeypatch):
-    run(oj)
-    codes_of(oj)
-    monkeypatch.setenv("DKUOJ_SETUP_ACCESS_CODE", "off")
-    assert _identify(oj).status_code == 200
-    monkeypatch.setenv("DKUOJ_SETUP_ACCESS_CODE", "always")
-    assert _identify(oj).status_code == 400
 
 
 # ---------------------------------------------------------------- config

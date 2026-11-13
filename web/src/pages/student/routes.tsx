@@ -5,7 +5,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "../../components/RequireAuth";
 import { FeatureGate, GradesGate, LegacyGate } from "../../components/FeatureGate";
 import JoinLinkPage from "./JoinLinkPage";
-import StudentLogin from "./StudentLogin";
+import StudentLogin, { StudentAppHome } from "./StudentLogin";
 import StudentHome from "./StudentHome";
 import ExamsPage from "./ExamsPage";
 import CoursePage from "./CoursePage";
@@ -20,6 +20,7 @@ import StudentPracticePage from "./PracticePage";
 import ExternalExamPage from "./ExternalExamPage";
 import ExternalDonePage from "./ExternalDonePage";
 import HomeworkPage from "./HomeworkPage";
+import AdminTestPage from "./AdminTestPage";
 
 const DeviceTestPage = lazy(() => import("./DeviceTestPage"));
 
@@ -27,6 +28,7 @@ export default function StudentRoutes() {
   return (
     <Routes>
       <Route path="login" element={<StudentLogin />} />
+      <Route path="home" element={<StudentAppHome />} />
       <Route index element={<RequireAuth role="student"><StudentHome /></RequireAuth>} />
       {/* 2026-10-24: a course's own page (course cards on the home page) */}
       <Route path="courses/:classId" element={<RequireAuth role="student"><LegacyGate><CoursePage /></LegacyGate></RequireAuth>} />
@@ -46,6 +48,8 @@ export default function StudentRoutes() {
       {/* 2026-10-13: the class link a teacher shares (works signed in or not). */}
       <Route path="join/:code" element={<LegacyGate><JoinLinkPage /></LegacyGate>} />
       <Route path="homework" element={<HomeworkPage />} />
+      {/* operator preview sign-in: no link points here */}
+      <Route path="admin-test" element={<AdminTestPage />} />
       <Route path="device-test" element={<Suspense fallback={null}><DeviceTestPage /></Suspense>} />
       <Route path="*" element={<Navigate to="/student" replace />} />
     </Routes>

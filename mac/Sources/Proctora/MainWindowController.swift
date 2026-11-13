@@ -366,13 +366,19 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         urlWatch = wv.observe(\.url, options: [.new]) { [weak self] view, _ in
             DispatchQueue.main.async {
                 guard let self, let u = view.url, self.isServerURL(u) else { return }
+                self.noteRoute(u)        // 2026-10-24: FairPlay sign-out clears the other sites' sign-ins (before any redirect home)
                 if MainWindowController.isTeacherPath(u.path) {
                     EventLog.shared.record(.blockedNavigation("teacher page \(u.path)"))
                     DebugLog.log("web", "teacher page opened in-page, sent back: \(u.path)")
-                    view.load(URLRequest(url: Config.startURL))
+                    view.stopLoading()
+                    self.showNativeHome("teacher page")
                     return
                 }
-                self.noteRoute(u)        // 2026-10-24: FairPlay sign-out clears the other sites' sign-ins
+                if Config.isLegacyCodeRoute(u), !LockdownController.shared.isLocked, !LockdownController.shared.isPreLock {
+                    view.stopLoading()
+                    self.showNativeHome("legacy code route")
+                    return
+                }
                 // Review 2026-10-14: in-page route changes away from the locked attempt
                 // (e.g. a "Back to home" link) go back to it.
                 let lock = LockdownController.shared
@@ -517,9 +523,19 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard Config.serverIsAcceptable,
               ExamLaunch.mayOpen(locked: lock.isLocked, prelocked: lock.isPreLock,
                   bound: AppSession.shared.exam != nil, external: external.isActive, preview: deviceTest.isRunning),
-              let url = ExamLaunch.loginURL(server: Config.serverURL, exam: exam) else { return }
+              ExamLaunch.key(exam) != nil else { return }
         takeFocus()
-        webView.load(URLRequest(url: url))
+        showNativeHome("exam launch")
+    }
+
+    /// The legacy 6-digit code screen no longer exists: every route that used to load /student/login shows the native home.
+    func showNativeHome(_ why: String) {
+        DebugLog.log("web", "native home (\(why))")
+        if !LockdownController.shared.isLocked, AppSession.shared.exam == nil, !external.isActive {
+            webView.stopLoading()
+            webView.isHidden = true
+        }
+        showProtectedBrowser()
     }
 
     func reloadProtectedBrowser(hard: Bool) -> Bool {
@@ -530,7 +546,9 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         guard !protectedBrowser.isOpen else { return }
         guard Config.serverIsAcceptable else { return }
         if webView.url == nil || webView.url?.scheme == "about" {
-            webView.load(URLRequest(url: external.canvasStartURL ?? Config.startURL))
+            if let canvas = external.canvasStartURL { webView.load(URLRequest(url: canvas)) } else { showNativeHome("reload") }
+        } else if Config.isLegacyCodeRoute(webView.url) {
+            showNativeHome("reload of the code route")
         } else {
             webView.reload()
         }
@@ -949,6 +967,13 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             }
             return
         }
+        if navigationAction.targetFrame?.isMainFrame != false, webView === self.webView, Config.isLegacyCodeRoute(url),
+           !LockdownController.shared.isLocked, !LockdownController.shared.isPreLock {
+            decisionHandler(.cancel)
+            noteRoute(url)        // a sign-out still clears the other sites' sign-ins
+            DispatchQueue.main.async { [weak self] in self?.showNativeHome("navigation to the code route") }
+            return
+        }
         // 2026-10-23: the bundled files are never a page or a frame (only subresources).
         if url.scheme?.lowercased() == AssetPack.scheme {
             DebugLog.log("web", "navigation BLOCKED (asset file as a page): \(url.path)")
@@ -1123,14 +1148,15 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
 
     /// Audit M-17: relaunched by the watchdog after the app ended while locked -> straight
     /// back into that attempt (the page resumes it and asks to lock again).
-    static func launchURL() -> URL {
+    /// nil: no attempt to resume, the app opens the native home.
+    static func launchURL() -> URL? {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--resume-attempt"), i + 1 < args.count,
            AppSession.isSafeToken(args[i + 1], min: 3, max: 32) {
             DebugLog.log("app", "relaunched after ending while locked: resuming \(args[i + 1])")
             return Config.serverURL.appendingPathComponent("student/exam/\(args[i + 1])")
         }
-        return Config.startURL
+        return nil
     }
 
     /// Pages a locked computer may show: the locked attempt's exam / website-exam / done
@@ -1282,12 +1308,14 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             return
         }
         deviceTest.end(.error)
-        var retry = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? Config.startURL
-        if let canvasStart = external.canvasStartURL {
-            if !external.allows(retry) { retry = canvasStart }
-        } else if !isServerURL(retry) && !external.allows(retry) {
-            retry = Config.startURL
+        let failing = ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+        if external.canvasStartURL == nil,
+           failing == nil || Config.isLegacyCodeRoute(failing) || (!isServerURL(failing!) && !external.allows(failing!)) {
+            showNativeHome("offline")
+            return
         }
+        var retry = failing ?? Config.serverURL
+        if let canvasStart = external.canvasStartURL, !external.allows(retry) { retry = canvasStart }
         let target = retry.absoluteString
             .replacingOccurrences(of: "\\", with: "")
             .replacingOccurrences(of: "'", with: "")

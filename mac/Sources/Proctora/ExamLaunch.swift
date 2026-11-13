@@ -29,12 +29,6 @@ enum ExamLaunch {
         return key(payload.exam_key)
     }
 
-    static func loginURL(server: URL, exam: String) -> URL? {
-        guard let exam = key(exam), var c = URLComponents(url: server.appendingPathComponent("student/login"), resolvingAgainstBaseURL: false) else { return nil }
-        c.queryItems = [URLQueryItem(name: "launch_exam", value: exam)]
-        return c.url
-    }
-
     static func mayOpen(locked: Bool, prelocked: Bool, bound: Bool, external: Bool, preview: Bool) -> Bool {
         !locked && !prelocked && !bound && !external && !preview
     }

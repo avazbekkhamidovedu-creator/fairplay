@@ -2,7 +2,6 @@ import type {
   AnswerMap,
   AnswerUpload,
   AttemptView,
-  CodeLoginPrompt,
   DeviceCheckInput,
   EventsResponse,
   HeartbeatResponse,
@@ -97,21 +96,16 @@ async function setupRequest<T>(bearer: string | null, path: string, body?: unkno
 
 export const setupApi = {
   /** Step 1: who the student is, checked against the class list (setup token). */
-  identify: (setupToken: string, input: { first_name: string; last_name: string; netid: string; access_code?: string }) =>
+  identify: (setupToken: string, input: { first_name: string; last_name: string; netid: string }) =>
     setupRequest<SetupIdentifyResponse>(setupToken, "/api/setup/identify", input),
   /** Step 2: the student's own login (identity token, single use) → the normal login response. */
   account: (identityToken: string, input: { username: string; password: string; password2: string }) =>
     setupRequest<LoginResponse>(identityToken, "/api/setup/account", input),
 };
 
-/** Sign-in with a per-student access code (no account, no password). Nothing here is stored:
- *  the caller keeps the token only after the student confirmed who they are. */
-export const codeLoginApi = {
-  challenge: () => setupRequest<{ nonce: string; expires_in: number }>(null, "/api/student/code-login/challenge"),
-  enter: (code: string, client: bridge.ClientProof | null) =>
-    setupRequest<CodeLoginPrompt>(null, "/api/student/code-login", client ? { code, client } : { code }),
-  confirm: (confirmToken: string) =>
-    setupRequest<LoginResponse>(null, "/api/student/code-login/confirm", { confirm_token: confirmToken }),
+/** The operator's exam-list preview sign-in (hidden page /student/admin-test). */
+export const adminTestApi = {
+  enter: (code: string) => setupRequest<LoginResponse>(null, "/api/student/admin-test", { code }),
 };
 
 /**

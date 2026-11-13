@@ -26,7 +26,6 @@ from ...models import Attempt, Exam, User
 from ...services import attempt_key, exam_closes_at
 from ...store import get_store
 from ...timeutil import iso, utcnow
-from . import access_codes
 from .models import OjRosterEntry, OjStudentGrant
 from .routes_v2 import PREFIX, BridgeCall, _attempt_of, _editor_exam, _event_class, signed_call
 from .setup import add_event
@@ -39,8 +38,6 @@ REASON_MAX = 200
 MONTH_S = 30 * 24 * 3600
 HOUR_S = 3600
 RELEASES_PER_STUDENT = 3
-REISSUES_PER_STUDENT = 3
-REISSUES_PER_EXAM_HOUR = 30
 OFFLINE_EXITS_PER_STUDENT_HOUR = 20
 REOPEN_MINUTES = (5, 60)
 EXTRA_MINUTES = (1, 120)
@@ -111,7 +108,6 @@ async def release_device(key: str, netid: str, call: BridgeCall = Depends(signed
     if a is not None and a.status == "submitted":
         raise HTTPException(409, "This student has already handed in")
     await _limit(f"oj:release:{e.id}:{u.id}", RELEASES_PER_STUDENT, MONTH_S)
-    await access_codes.unbind(session, e.id, u.netid)
     moved = target = None
     if a is not None:
         moved, target = await control.release_attempt_device(session, a, swap=True, clear_pending=True)
@@ -123,34 +119,6 @@ async def release_device(key: str, netid: str, call: BridgeCall = Depends(signed
     await _record(session, e, call, "device_released_oj", u, a, text, reason)
     log.info("DKU OJ exam %s: device released by %s", key, call.acting_user)
     return _out({"ok": True, "released": "attempt" if a is not None else "code"})
-
-
-@router.post("/exams/{key}/access-codes/reissue")
-async def reissue(key: str, request: Request, call: BridgeCall = Depends(signed_call),
-                  session: AsyncSession = Depends(get_session)):
-    netid = call.data.get("netid")
-    if not isinstance(netid, str) or not netid.strip():
-        raise HTTPException(400, "netid is required")
-    netid = netid.strip()[:64]
-    e = await _editor_exam(session, key, call, required=False)
-    if e is None:
-        raise HTTPException(404, "Unknown exam")
-    reason = _reason(call.data)
-    u, a = await _on_list(session, e, netid)
-    await _limit(f"oj:reissue:{e.id}:{u.id}", REISSUES_PER_STUDENT, MONTH_S)
-    await _limit(f"oj:reissue:exam:{e.id}", REISSUES_PER_EXAM_HOUR, HOUR_S)
-    free = a is not None and a.status != "submitted"
-    made = await access_codes.reissue(session, request.app.state.settings.secret, e, netid, commit=not free)
-    if made is None:
-        raise HTTPException(404, "This student is not on this exam's list")
-    code, first, last = made
-    text = "new access code made"
-    if free:
-        await control.release_attempt_device(session, a, swap=True, clear_pending=True)
-        text += "; running attempt freed from its device, answers and timer kept"
-    await _record(session, e, call, "access_code_reissued", u, a, text, reason)
-    log.info("DKU OJ exam %s: access code reissued by %s", key, call.acting_user)
-    return _out({"ok": True, "code": code, "first_name": first, "last_name": last})
 
 
 @router.post("/exams/{key}/students/{netid}/reopen")
@@ -168,7 +136,6 @@ async def reopen(key: str, netid: str, call: BridgeCall = Depends(signed_call),
     cap = closes + await max_extra(session, e) if closes is not None else None
     receipt, handed_in = a.receipt, a.submitted_at
     deadline = await control.reopen_attempt(session, e, a, minutes, cap)
-    await access_codes.unbind(session, e.id, u.netid)
     await session.commit()
     await _record(session, e, call, "attempt_reopened", u, a,
                   f"reopened for {minutes} min until {iso(deadline)}; first hand-in receipt {receipt or '-'} "

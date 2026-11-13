@@ -8,7 +8,6 @@ vi.mock("../api/client", async (importOriginal) => {
 });
 
 import { studentApi } from "../api/client";
-import { rememberResume } from "../lib/resumeState";
 import BeforeStartPage from "../pages/student/BeforeStartPage";
 import CheckInPage from "../pages/student/CheckInPage";
 
@@ -23,7 +22,6 @@ const EXAM = {
   room: "",
   scheduled_at: null,
   attempt: null,
-  access_code: true,
 };
 
 beforeEach(() => {
@@ -31,7 +29,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.clearAllMocks();
-  rememberResume(false, "");
 });
 
 function renderBefore() {
@@ -60,41 +57,19 @@ async function toCodeScreen() {
   fireEvent.click(screen.getByRole("button", { name: "Lock and continue" }));
 }
 
-describe("resume wording on the start screens", () => {
-  it("before-start rules and lock screen keep Start wording without resume", async () => {
+describe("start screens always ask for the start code", () => {
+  it("before-start rules and lock screen ask for the start code", async () => {
     renderBefore();
     expect(await screen.findByText("Before you start")).toBeInTheDocument();
-    expect(screen.getByText(/Then start the exam\./)).toBeInTheDocument();
+    expect(screen.getByText(/Then type the start code/)).toBeInTheDocument();
     await toCodeScreen();
-    expect(await screen.findByRole("heading", { name: "Start the exam" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start exam" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Enter the start code" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume exam" })).toBeNull();
   });
 
-  it("before-start rules and lock screen say resume when the student is resuming", async () => {
-    rememberResume(true, "Avazbek Khamidov");
-    renderBefore();
-    expect(await screen.findByText("Welcome back")).toBeInTheDocument();
-    expect(screen.getByText(/Then resume the exam\./)).toBeInTheDocument();
-    expect(screen.queryByText(/start the exam/i)).toBeNull();
-    await toCodeScreen();
-    expect(await screen.findByRole("heading", { name: "Resume the exam" })).toBeInTheDocument();
-    expect(screen.getByText("Welcome back, Avazbek. Your answers are saved. Continue where you stopped.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Resume exam" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Start exam" })).toBeNull();
-  });
-
-  it("check-in keeps Start exam without resume", async () => {
+  it("check-in asks for the start code", async () => {
     renderCheckIn();
     expect(await screen.findByRole("button", { name: "Start exam" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Start" })).toBeInTheDocument();
-  });
-
-  it("check-in says Resume exam when the student is resuming", async () => {
-    rememberResume(true, "Avazbek Khamidov");
-    renderCheckIn();
-    expect(await screen.findByRole("button", { name: "Resume exam" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Resume" })).toBeInTheDocument();
-    expect(screen.getByText("Welcome back, Avazbek. Your answers are saved. Continue where you stopped.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Start exam" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Start code" })).toBeInTheDocument();
   });
 });

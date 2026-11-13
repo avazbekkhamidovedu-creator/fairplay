@@ -7,11 +7,17 @@ const FOCUSABLE = "button:not([disabled]), [href], input, select, textarea, [tab
 export function TryExamScreenDialog({ onClose }: { onClose: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  const [trying, setTrying] = useState(false);
+  const [trying, setTrying] = useState(true);
   const [refused, setRefused] = useState(false);
   const stop = useRef<(() => void) | null>(null);
 
-  useEffect(() => () => stop.current?.(), []);
+  // The test starts as soon as the dialog opens: nothing to confirm, no apps to close.
+  useEffect(() => {
+    // Deferred so a replayed effect (React Strict Mode) cancels the first start instead of sending two.
+    const first = window.setTimeout(start, 0);
+    return () => { window.clearTimeout(first); if (stop.current) { stop.current(); deviceTestLeave(); } };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function start() {
     setRefused(false);
@@ -85,12 +91,11 @@ export function TryExamScreenDialog({ onClose }: { onClose: () => void }) {
     <div className="cs-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={box} className="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-try-title" tabIndex={-1} onKeyDown={keyDown}>
         <h2 id="cs-try-title">Try the exam screen</h2>
-        <ul className="cs-try-list">
-          <li>It shows a sample exam screen for 1 minute, like a real exam.</li>
-          <li>Nothing is saved or graded.</li>
-          <li>No apps are closed and nothing is installed.</li>
-          <li>Press Leave any time. It also leaves by itself after 1 minute.</li>
-        </ul>
+        {trying && (
+          <p className="cs-muted" role="status">
+            Starting a sample exam screen for 1 minute. Nothing is saved or graded.
+          </p>
+        )}
         {refused && (
           <p className="cs-muted" role="status">
             The test can't start right now.
@@ -98,11 +103,13 @@ export function TryExamScreenDialog({ onClose }: { onClose: () => void }) {
         )}
         <div className="cs-dialog-actions">
           <button type="button" className="cs-btn cs-btn-secondary" onClick={onClose}>
-            Cancel
+            {refused ? "Close" : "Cancel"}
           </button>
-          <button type="button" className="cs-btn cs-btn-primary" onClick={start} disabled={trying} autoFocus>
-            Start
-          </button>
+          {refused && (
+            <button type="button" className="cs-btn cs-btn-primary" onClick={start} autoFocus>
+              Try again
+            </button>
+          )}
         </div>
       </div>
     </div>

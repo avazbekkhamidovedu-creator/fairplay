@@ -93,7 +93,7 @@ describe("homework login link", () => {
     health = { ok: true, homework_login: null };
     native(true);
     renderLogin();
-    await screen.findByText("Enter your exam code");
+    await screen.findByRole("heading", { name: "Sign in" });
     await waitFor(() => expect(calls.some((c) => c.url === "/api/health")).toBe(true));
     expect(link()).toBeNull();
   });
@@ -102,7 +102,7 @@ describe("homework login link", () => {
     health = { ok: true };
     native(true);
     renderLogin();
-    await screen.findByText("Enter your exam code");
+    await screen.findByRole("heading", { name: "Sign in" });
     expect(link()).toBeNull();
   });
 
@@ -116,7 +116,7 @@ describe("homework login link", () => {
   it.each([false, undefined])("is hidden when the app lacks support (%s)", async (flag) => {
     native(flag);
     renderLogin();
-    await screen.findByText("Enter your exam code");
+    await screen.findByRole("heading", { name: "Sign in" });
     await waitFor(() => expect(calls.some((c) => c.url === "/api/health")).toBe(true));
     expect(link()).toBeNull();
   });

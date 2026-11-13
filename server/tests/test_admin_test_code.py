@@ -11,10 +11,11 @@ from app.security import ADMIN_SCOPE, parse_scoped_token
 from app.timeutil import utcnow
 
 from .conftest import login
-from .test_access_code_login import NOT_VALID, URL, confirm, enter
 from .test_dkuoj_bridge import db, oj_settings, run
 from .test_dkuoj_bridge_v2 import fake  # noqa: F401  (fixture)
 
+URL = "/api/student/admin-test"
+NOT_VALID = {"detail": "That code is not valid."}
 DUMMY = "QZ7M4K2XR9TD"
 SECRET_START = "STARTSECRET"
 SECRET_PROMPT = "PROMPT-SECRET-TEXT"
@@ -51,15 +52,21 @@ def add_exams(c):
     db(c, go)
 
 
+def enter(c, code):
+    return c.post(URL, json={"code": code})
+
+
 def admin_session(c):
     r = enter(c, DUMMY)
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert (body["first_name"], body["last_name"], body["netid"], body["exam_title"]) == (
-        "Admin", "Tester", "", "All exams (preview)")
-    r = confirm(c, body["confirm_token"])
-    assert r.status_code == 200, r.text
+    assert r.headers["cache-control"] == "no-store"
     return {"Authorization": f"Bearer {r.json()['token']}"}, r.json()
+
+
+def test_the_old_code_login_routes_are_gone(adm):
+    assert adm.post("/api/student/code-login", json={"code": DUMMY}).status_code in (404, 405)
+    assert adm.get("/api/student/code-login/challenge").status_code in (404, 405)
+    assert adm.post("/api/student/code-login/confirm", json={"confirm_token": "x"}).status_code in (404, 405)
 
 
 def test_disabled_by_default_gives_the_generic_400(off):
@@ -68,7 +75,7 @@ def test_disabled_by_default_gives_the_generic_400(off):
         assert (r.status_code, r.json()) == (400, NOT_VALID)
 
 
-def test_right_code_confirms_then_issues_a_scoped_student_token(adm):
+def test_right_code_issues_a_scoped_student_token(adm):
     h, body = admin_session(adm)
     assert body["role"] == "student" and body["name"] == "Admin Tester"
     uid, role, _, scope = parse_scoped_token(adm.app.state.settings.secret, body["token"])
@@ -88,12 +95,6 @@ def test_token_lives_at_most_four_hours(adm):
     payload = body["token"].split(".")[0]
     exp = int(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode().split(":")[2])
     assert exp - time.time() <= 4 * 3600 + 5
-
-
-def test_confirm_token_is_single_use(adm):
-    tok = enter(adm, DUMMY).json()["confirm_token"]
-    assert confirm(adm, tok).status_code == 200
-    assert confirm(adm, tok).status_code == 400
 
 
 def test_list_shows_every_dkuoj_exam_in_every_status_and_no_secrets(adm):
@@ -144,9 +145,8 @@ def test_teacher_endpoints_are_forbidden(adm):
     assert adm.get("/api/practice/students", headers=h).status_code == 403
 
 
-def test_wrong_codes_count_like_student_codes(adm):
-    adm.app.state.settings.codelogin_ip_fails = 30
-    for _ in range(30):
+def test_wrong_codes_are_rate_limited(adm):
+    for _ in range(10):
         assert enter(adm, "AAAAAA").status_code == 400
     assert enter(adm, "AAAAAA").status_code == 429
     r = enter(adm, DUMMY)

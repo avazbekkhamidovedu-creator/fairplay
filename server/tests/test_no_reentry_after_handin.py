@@ -7,13 +7,11 @@ import pytest
 from sqlalchemy import func, inspect as sa_inspect, select
 
 from app import app_client as ac
-from app.integrations.dkuoj.models import ExamAccessCode
 from app.models import Attempt, IntegrityEvent
 from app.timeutil import utcnow
 
 from .conftest import login
-from .test_access_code_login import DEV_A as OJ_DEV_A, DEV_B as OJ_DEV_B, bearer, confirm, enter, patch_exam, sign_in
-from .test_access_code_login import APP_KEY
+from .oj_helpers import APP_KEY, DEV_A as OJ_DEV_A, DEV_B as OJ_DEV_B, bearer, patch_exam, sign_in
 from .test_app_session import DEV_A, DEV_B, KEY, app_client, beat, exam, proof, start  # noqa: F401  (fixtures)
 from .test_dkuoj_bridge import db, run
 from .test_dkuoj_bridge_v2 import call, oj  # noqa: F401  (fixture)
@@ -196,12 +194,12 @@ def test_a_student_cannot_reopen_or_add_time(app_client, exam, handed_in):
     assert snapshot(app_client, aid) == before
 
 
-# ---------------------------------------------------------------- access codes (DKU OJ exam)
+# ---------------------------------------------------------------- DKU OJ exam
 def attempt_of(c):
     return attempts_of(c)[0]
 
 
-def test_access_code_student_cannot_get_back_in_after_hand_in(oj, room, fake):
+def test_oj_student_cannot_get_back_in_after_hand_in(oj, room, fake):
     eid, codes, start_code, _ = room
     body, a, receipt = hand_in(oj, eid, codes, "carol", OJ_DEV_A, "first answer")
     aid, q5 = a["attempt_id"], qid_of(a)
@@ -210,10 +208,7 @@ def test_access_code_student_cannot_get_back_in_after_hand_in(oj, room, fake):
     assert [r[:2] for r in sent] == [(1, "sent")]
     before = snapshot(oj, aid)
 
-    step = enter(oj, codes["carol"], OJ_DEV_A)
-    assert step.status_code == 200 and step.json()["resume"] is False
-    again = confirm(oj, step.json()["confirm_token"]).json()
-    assert again["resume"] is False
+    again = sign_in(oj, codes["carol"], OJ_DEV_A)
     for tok in (body, again):
         for code in ("", start_code, "000000"):
             r = oj_start(oj, tok, eid, OJ_DEV_A, start_code=code)
@@ -229,7 +224,7 @@ def test_access_code_student_cannot_get_back_in_after_hand_in(oj, room, fake):
     assert revisions(oj) == sent
 
 
-def test_reissue_gives_only_a_new_code_and_release_device_is_refused(oj, room, fake):
+def test_release_device_is_refused_after_hand_in(oj, room, fake):
     eid, codes, start_code, _ = room
     body, a, receipt = hand_in(oj, eid, codes, "carol", OJ_DEV_A, "first answer")
     aid = a["attempt_id"]
@@ -238,21 +233,6 @@ def test_reissue_gives_only_a_new_code_and_release_device_is_refused(oj, room, f
 
     r = call(oj, "POST", f"{STU}/carol/release-device", {"reason": "r"})
     assert r.status_code == 409
-    assert snapshot(oj, aid) == before
-
-    r = call(oj, "POST", "/api/integrations/dkuoj/v1/exams/" + oj_key() + "/access-codes/reissue",
-             {"netid": "carol", "reason": "lost it"})
-    assert r.status_code == 200, r.text
-    new_code = r.json()["code"]
-    assert new_code != codes["carol"]
-    assert snapshot(oj, aid) == before          # the attempt was not freed, moved or reset
-
-    tok = sign_in(oj, new_code, OJ_DEV_A)
-    assert tok["resume"] is False
-    for code in ("", start_code):
-        r = oj_start(oj, tok, eid, OJ_DEV_A, start_code=code)
-        assert (r.status_code, r.json()["detail"]) == (409, "Already submitted")
-    assert enter(oj, new_code, OJ_DEV_B).status_code == 400      # bound to the first computer now
     assert snapshot(oj, aid) == before
     assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 10, "reason": "r"}).status_code == 409
     assert snapshot(oj, aid) == before
@@ -266,39 +246,7 @@ def test_a_student_token_cannot_call_the_professor_actions(oj, room, fake):
                          ("release-device", {"reason": "r"})):
         r = oj.post(f"{STU}/carol/{action}", headers=bearer(body), json=data)
         assert r.status_code in (401, 403, 404), action
-    r = oj.post("/api/integrations/dkuoj/v1/exams/" + oj_key() + "/access-codes/reissue",
-                headers=bearer(body), json={"netid": "carol", "reason": "r"})
-    assert r.status_code in (401, 403, 404)
     assert snapshot(oj, a["attempt_id"]) == before
-
-
-def test_sealed_only_token_after_a_server_close_cannot_start_or_apply_a_seal(oj, room, fake):
-    eid, codes, _, teacher = room
-    body = sign_in(oj, codes["alice"], OJ_DEV_A)
-    a = started(oj, body, eid, OJ_DEV_A)
-    q2 = next(q["id"] for q in a["questions"] if q["label"] == "Q2")
-    assert oj.post(f"/api/exams/{eid}/close", headers=teacher).status_code == 200
-    patch_exam(oj, closed_at=utcnow() - timedelta(hours=3))
-    row = snapshot(oj, a["attempt_id"])
-    assert row["status"] == "submitted" and row["auto_submitted"] is True
-
-    step = enter(oj, codes["alice"], OJ_DEV_A)
-    assert step.status_code == 200 and step.json()["resume"] is False
-    sealed_tok = confirm(oj, step.json()["confirm_token"]).json()
-    assert sealed_tok["resume"] is False
-    r = oj_start(oj, sealed_tok, eid, OJ_DEV_A)
-    assert r.status_code in (403, 409)
-    assert oj.get(surl(a), headers=bearer(sealed_tok)).status_code in (403, 409)
-    hs = {**bearer(sealed_tok), "X-FairPlay-Session": a["session"]}
-    assert oj.put(surl(a, "answers"), headers=hs, json={"answers": {q2: [1]}, "client_seq": 9}).status_code in (403, 409)
-
-    before = snapshot(oj, a["attempt_id"])
-    s = seal(a["attempt_id"], a["session"], {q2: [1]}, device=OJ_DEV_A, secret=oj.app.state.settings.secret)
-    r = oj.post(surl(a, "sealed-submit"), headers=bearer(sealed_tok), json=s)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "already_submitted"
-    after = snapshot(oj, a["attempt_id"])
-    assert after["late_answers"] == {q2: [1]} and after["answers"] == before["answers"]
-    assert after["status"] == "submitted" and after["receipt"] == before["receipt"]
 
 
 def test_teacher_reopen_lets_the_student_in_once_and_then_it_is_locked_again(oj, room, fake):
@@ -313,9 +261,7 @@ def test_teacher_reopen_lets_the_student_in_once_and_then_it_is_locked_again(oj,
     mine = snapshot(oj, aid)
     assert mine["status"] == "in_progress" and mine["receipt"] is None and mine["answers"] == {q5: "first answer"}
 
-    step = enter(oj, codes["carol"], OJ_DEV_B)
-    assert step.json()["resume"] is True
-    body2 = confirm(oj, step.json()["confirm_token"]).json()
+    body2 = sign_in(oj, codes["carol"], OJ_DEV_B)
     b = started(oj, body2, eid, OJ_DEV_B)
     assert b["attempt_id"] == aid and b["deadline_at"] == new_deadline and b["answers"] == {q5: "first answer"}
     put(oj, body2, b, {q5: "second answer"}, 10)
@@ -336,8 +282,3 @@ def test_teacher_reopen_lets_the_student_in_once_and_then_it_is_locked_again(oj,
     assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 10, "reason": "again"}).status_code == 409
     run(oj)
     assert [r[:2] for r in revisions(oj)] == [(1, "sent"), (2, "sent")]
-
-
-def oj_key():
-    from .test_access_codes import KEY as EXAM_KEY
-    return EXAM_KEY

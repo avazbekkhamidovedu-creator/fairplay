@@ -1,4 +1,4 @@
-"""Professor rescue actions from DKU OJ (routes_rescue): release a device, reissue a code,
+"""Professor rescue actions from DKU OJ (routes_rescue): release a device,
 reopen a handed-in attempt, add time for one student, offline exit code. Against a FAKE DKU OJ."""
 import logging
 import json
@@ -12,18 +12,17 @@ from sqlalchemy import create_engine, delete, select, text, update
 
 from app.integrations import outbox
 from app.integrations.dkuoj import routes_rescue as rescue
-from app.integrations.dkuoj.models import ClassLoginEvent, ExamAccessCode, OjEditor, OjStudentGrant
+from app.integrations.dkuoj.models import ClassLoginEvent, OjEditor, OjStudentGrant
 from app.integrations.models import ExternalDelivery
 from app.models import Attempt, Exam, IntegrityEvent, User
 from app.timeutil import iso, parse_iso, utcnow
 
 from .conftest import login
-from .test_access_code_login import DEV_A, DEV_B, bearer, enter, confirm, sign_in, soon, start
-from .test_access_codes import KEY, codes_of
+from .oj_helpers import DEV_A, DEV_B, bearer, sign_in, soon, start
+from .oj_helpers import KEY, codes_of
 from .test_dkuoj_bridge import db, oj_exam, run
 from .test_dkuoj_bridge_v2 import RosterOJ, V1, call, oj  # noqa: F401  (fixtures)
 
-NOT_VALID = {"detail": "That code is not valid."}
 STU = f"{V1}/exams/{KEY}/students"
 
 
@@ -149,15 +148,12 @@ def test_release_device_then_resume_on_a_second_device(oj, room):
                    headers={**bearer(body), "X-FairPlay-Session": a["session"]})
     assert stale.status_code == 409
 
-    step = enter(oj, codes["alice"], DEV_B)
-    assert step.status_code == 200 and step.json()["resume"] is True
-    body2 = confirm(oj, step.json()["confirm_token"]).json()
-    assert body2["resume"] is True
+    body2 = sign_in(oj, codes["alice"], DEV_B)
     b = started(oj, body2, eid, DEV_B)
     assert b["attempt_id"] == a["attempt_id"] and b["answers"] == {q5: "kept answer"}
     assert b["session"] != a["session"] and b["needs_approval"] is False
     assert len(attempts_of(oj)) == 1
-    assert db(oj, lambda s: s.scalar(select(ExamAccessCode.bound_device).where(ExamAccessCode.netid == "alice"))) == DEV_B
+    assert attempts_of(oj)[0].device_id == DEV_B
 
     cls = kinds(oj, ClassLoginEvent, "device_released_oj")
     assert len(cls) == 1 and cls[0][0] == "alice" and cls[0][1] == "teacher" and "laptop died" in cls[0][2]
@@ -169,19 +165,14 @@ def test_same_device_restart_is_a_resume(oj, room):
     eid, codes, _, _ = room
     body = sign_in(oj, codes["carol"], DEV_A)
     a = started(oj, body, eid, DEV_A)
-    step = enter(oj, codes["carol"], DEV_A)
-    assert step.json()["resume"] is True
     assert started(oj, sign_in(oj, codes["carol"], DEV_A), eid, DEV_A)["attempt_id"] == a["attempt_id"]
     assert len(attempts_of(oj)) == 1
 
 
-def test_release_without_an_attempt_unbinds_the_code_only(oj, room):
+def test_release_without_an_attempt_changes_nothing(oj, room):
     eid, codes, _, _ = room
-    sign_in(oj, codes["carol"], DEV_A)
-    assert enter(oj, codes["carol"], DEV_B).status_code == 400
     r = call(oj, "POST", f"{STU}/carol/release-device", {"reason": "wrong laptop"})
     assert r.json() == {"ok": True, "released": "code"}
-    assert enter(oj, codes["carol"], DEV_B).json()["resume"] is False
     assert attempts_of(oj) == []
 
 
@@ -231,8 +222,6 @@ def test_reason_is_required_and_bounded(oj, room, data):
     assert call(oj, "POST", f"{STU}/carol/release-device", data).status_code == 400
     assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 5, **data}).status_code == 400
     assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 5, **data}).status_code == 400
-    assert call(oj, "POST", f"{V1}/exams/{KEY}/access-codes/reissue", {"netid": "carol", **data}).status_code == 400
-    assert db(oj, lambda s: s.scalar(select(ExamAccessCode.bound_device).where(ExamAccessCode.netid == "carol"))) == DEV_A
 
 
 def test_reason_of_200_characters_is_kept(oj, room):
@@ -275,8 +264,6 @@ def test_only_an_editor_of_the_exam_may_act(oj, room, action, data):
         r = call(oj, "POST", url, data, acting=who)
         assert r.status_code == 403, (who, r.status_code, r.text)
     assert call(oj, "POST", f"{V1}/exams/{KEY}-native/students/alice/{action}", data).status_code == 409
-    assert call(oj, "POST", f"{V1}/exams/{KEY}/access-codes/reissue", {"netid": "alice", "reason": "r"},
-                acting="t2").status_code == 403
     assert [(x.device_id, x.deadline_at, x.status) for x in attempts_of(oj)] == before
     assert db(oj, lambda s: s.scalar(select(OjStudentGrant.id))) is None
     assert a["attempt_id"]
@@ -305,50 +292,6 @@ def test_the_student_must_be_on_this_exam(oj, room):
     for action, data in ACTIONS:
         assert call(oj, "POST", f"{STU}/bob/{action}", data).status_code == 404, action
         assert call(oj, "POST", f"{STU}/zz-unknown/{action}", data).status_code == 404, action
-
-
-# ---------------------------------------------------------------- reissue
-def test_reissue_returns_the_code_once_and_never_logs_it(oj, room, caplog):
-    eid, codes, _, _ = room
-    caplog.set_level(logging.DEBUG)
-    r = call(oj, "POST", f"{V1}/exams/{KEY}/access-codes/reissue", {"netid": "alice", "reason": "lost the slip"})
-    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
-    j = r.json()
-    assert set(j) == {"ok", "code", "first_name", "last_name"} and j["ok"] is True
-    assert (j["first_name"], j["last_name"]) == ("Alice", "Chen")
-    assert len(j["code"]) == 6 and j["code"] != codes["alice"]
-    assert enter(oj, codes["alice"]).json() == NOT_VALID
-    assert enter(oj, j["code"]).status_code == 200
-    assert j["code"] not in caplog.text
-
-    async def texts(s):
-        out = [e.detail for e in (await s.execute(select(ClassLoginEvent))).scalars()]
-        return out + [e.detail for e in (await s.execute(select(IntegrityEvent))).scalars()]
-    assert not any(j["code"] in t or codes["alice"] in t for t in db(oj, texts))
-    ev = kinds(oj, ClassLoginEvent, "access_code_reissued")
-    assert ev[0][0] == "alice" and ev[0][1] == "teacher" and "lost the slip" in ev[0][2]
-
-
-def test_reissue_names_the_actor_on_the_attempt_when_there_is_one(oj, room):
-    eid, codes, _, _ = room
-    body = sign_in(oj, codes["alice"], DEV_A)
-    started(oj, body, eid, DEV_A)
-    assert call(oj, "POST", f"{V1}/exams/{KEY}/access-codes/reissue",
-                {"netid": "alice", "reason": "shared a photo of it"}).status_code == 200
-    det = kinds(oj, IntegrityEvent, "access_code_reissued")
-    assert len(det) == 1 and "teacher" in det[0] and "shared a photo of it" in det[0]
-
-
-def test_reissue_limits(oj, room, monkeypatch):
-    path = f"{V1}/exams/{KEY}/access-codes/reissue"
-    for _ in range(3):
-        assert call(oj, "POST", path, {"netid": "alice", "reason": "r"}).status_code == 200
-    assert call(oj, "POST", path, {"netid": "alice", "reason": "r"}).status_code == 429
-    monkeypatch.setattr(rescue, "REISSUES_PER_EXAM_HOUR", 3)      # alice's three count against the exam
-    assert call(oj, "POST", path, {"netid": "carol", "reason": "r"}).status_code == 429
-    monkeypatch.setattr(rescue, "REISSUES_PER_EXAM_HOUR", 5)      # the refused call above counted too
-    assert call(oj, "POST", path, {"netid": "carol", "reason": "r"}).status_code == 200
-    assert call(oj, "POST", path, {"netid": "ax19", "reason": "r"}).status_code == 429
 
 
 # ---------------------------------------------------------------- reopen and revisions
@@ -387,9 +330,7 @@ def test_reopen_gives_a_second_hand_in_and_both_are_delivered(oj, room, fake):
     row = view(oj)["carol"]
     assert (row["reopened"], row["hand_in_count"], row["code_state"]) == (True, 1, "unused")
 
-    step = enter(oj, codes["carol"], DEV_B)
-    assert step.json()["resume"] is True
-    body2 = confirm(oj, step.json()["confirm_token"]).json()
+    body2 = sign_in(oj, codes["carol"], DEV_B)
     b = started(oj, body2, eid, DEV_B)
     assert b["attempt_id"] == aid and b["answers"] == {q5: "first answer"} and len(attempts_of(oj)) == 1
     put(oj, body2, b, {q5: "second answer"}, 10)
@@ -635,14 +576,8 @@ def test_exam_view_student_fields(oj, room):
             ("swap_requested", "code_state", "reopened", "hand_in_count", "waiting_since")} == {
         "swap_requested": False, "code_state": "unused", "reopened": False, "hand_in_count": 0,
         "waiting_since": None}
-    sign_in(oj, codes["carol"], DEV_A)
+    started(oj, sign_in(oj, codes["carol"], DEV_A), eid, DEV_A)
     assert view(oj)["carol"]["code_state"] == "bound"
-    db(oj, lambda s: _del_codes(s, "ax19"))
-    assert view(oj)["ax19"]["code_state"] == "none"
+    assert view(oj)["ax19"]["code_state"] == "unused"
     body, a, _ = hand_in(oj, eid, codes, "alice", DEV_A, "x")
     assert view(oj)["alice"]["hand_in_count"] == 1 and view(oj)["alice"]["reopened"] is False
-
-
-async def _del_codes(s, netid):
-    await s.execute(delete(ExamAccessCode).where(ExamAccessCode.netid == netid))
-    await s.commit()

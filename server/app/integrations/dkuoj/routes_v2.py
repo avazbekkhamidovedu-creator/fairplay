@@ -426,9 +426,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
         w = warnings.setdefault(aid, [])
         if len(w) < MAX_WARNINGS:
             w.append((detail or typ.replace("_", " "))[:200])
-    from . import access_codes
     from ..outbox import REOPENED
-    code_states = await access_codes.states(session, e.id)
     reopens = dict((await session.execute(
         select(IntegrityEvent.attempt_id, func.count()).where(
             IntegrityEvent.exam_id == e.id, IntegrityEvent.type == REOPENED)
@@ -481,8 +479,9 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
         else:
             fresh = b is not None and t - float(b.get("t") or 0) <= FP_MODE_WINDOW_S
             fp_mode = "on" if fresh and b.get("locked") else "off"
+        device_state = "bound" if a is not None and a.status == "in_progress" and a.device_id else "unused"
         students.append({
-            "fp_mode": fp_mode, "device_state": code_states.get(u.netid or "", "unused"),
+            "fp_mode": fp_mode, "device_state": device_state,
             "second_device_attempts": (int(second.get((a.id, "second_device")) or 0) if a else 0) + max(
                 int(second.get((a.id, "access_code_second_device")) or 0) if a else 0,
                 int(second_by_netid.get(u.netid or "") or 0)),
@@ -490,7 +489,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "netid": u.netid or u.username, "name": u.name, "set_up": up, "status": status,
             "answered": min(int((a.answered if a else 0) or 0), nq), "questions": nq,
             "swap_requested": bool(a is not None and a.status == "in_progress" and a.swap_requested_at),
-            "code_state": code_states.get(u.netid or "", "none"),
+            "code_state": device_state,
             "reopened": bool(a is not None and reopens.get(a.id)),
             "hand_in_count": (int(reopens.get(a.id) or 0) + int(a.status == "submitted")) if a else 0,
             "waiting_since": iso(a.pending_since) if a is not None and a.status == "in_progress"
@@ -944,39 +943,9 @@ async def exam_report(key: str, netid: str, call: BridgeCall = Depends(signed_ca
 
 
 
-NO_ROSTER = "This exam has no student list in FairPlay yet, so there are no access codes to print."
-
-
 def _event_class(e: Exam) -> int | None:
     for c in (e.external_meta or {}).get("classes") or []:
         if isinstance(c, dict) and isinstance(c.get("id"), int) and not isinstance(c.get("id"), bool):
             return c["id"]
     return None
 
-
-@router.get("/exams/{key}/access-codes.pdf")
-async def exam_access_codes_pdf(key: str, request: Request, call: BridgeCall = Depends(signed_call),
-                                layout: str = Query("both", pattern="^(both|list|slips)$"),
-                                session: AsyncSession = Depends(get_session)):
-    from . import access_codes, access_codes_pdf
-    e = await _editor_exam(session, key, call, required=False)
-    if e is None:
-        raise HTTPException(404, "Unknown exam")
-    sheet = await access_codes.ensure_codes(session, request.app.state.settings.secret, e)
-    if not sheet.rows:
-        raise HTTPException(409, NO_ROSTER)
-    students = sorted(({"last": r.last_name, "first": r.first_name, "netid": r.netid, "code": code}
-                       for r, code in sheet.rows),
-                      key=lambda s: (s["last"].casefold(), s["first"].casefold(), s["netid"]))
-    pdf = access_codes_pdf.render(e.title, e.course, utcnow(), students, layout)
-    class_id = _event_class(e)
-    if class_id is not None:
-        await add_event(session, class_id, "access_codes_downloaded", actor=call.acting_user,
-                        detail=f"exam {key}: {len(students)} codes"[:300])
-        await session.commit()
-    log.info("DKU OJ exam %s: access codes downloaded by %s (%d students, %d without a NetID)", key,
-             call.acting_user, len(students), len(sheet.skipped))
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", key)
-    return Response(pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="access-codes-{name}.pdf"',
-                             "Cache-Control": "no-store"})

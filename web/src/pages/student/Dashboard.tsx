@@ -120,7 +120,7 @@ export default function Dashboard() {
         )}
         {exam ? <ExamCard exam={exam} /> : exams && <div className="sd-empty">Your exam shows up here when it is ready.</div>}
         <div className="sd-foot">
-          {scoped && "After you hand in, you are signed out after 5 minutes and asked for the next exam's code. "}
+          {scoped && "After you hand in, you are signed out after 5 minutes. "}
           <button type="button" className="sd-link" onClick={signOut}>
             Sign out now
           </button>

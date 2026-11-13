@@ -15,7 +15,17 @@ import Testing
             #expect(ExamLaunch.parseFile(Data(raw.utf8)) == nil)
         }
         #expect(ExamLaunch.parseFile(Data(repeating: 32, count: 4097)) == nil)
-        #expect(ExamLaunch.loginURL(server: URL(string: "https://beta.example.test")!, exam: "c1")?.absoluteString == "https://beta.example.test/student/login?launch_exam=c1")
+    }
+    @Test func legacyCodeRouteIsRecognisedOnlyOnTheServer() {
+        let server = URL(string: "https://beta.example.test")!
+        #expect(Config.isLegacyCodeRoute(URL(string: "https://beta.example.test/student/login"), server: server))
+        #expect(Config.isLegacyCodeRoute(URL(string: "https://beta.example.test/student/login/?launch_exam=c1"), server: server))
+        #expect(!Config.isLegacyCodeRoute(URL(string: "https://beta.example.test/student/device-test"), server: server))
+        #expect(!Config.isLegacyCodeRoute(URL(string: "https://other.example/student/login"), server: server))
+        #expect(!Config.isLegacyCodeRoute(nil, server: server))
+    }
+    @Test func relaunchWithoutAttemptOpensTheNativeHome() {
+        #expect(MainWindowController.launchURL() == nil)
     }
     @Test func activeSessionsAreNeverReplaced() {
         #expect(ExamLaunch.mayOpen(locked: false, prelocked: false, bound: false, external: false, preview: false))

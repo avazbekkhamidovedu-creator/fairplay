@@ -459,8 +459,6 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
         await _replace(session, OjRosterEntry, e.id, {u.id: {"extra_time_seconds": x, **roster_names.get(u.id, {})}
                                                            for u, x in students})
     await _classes(session, e, item, [u for u, _ in students])
-    from .access_codes import revoke_missing
-    await revoke_missing(session, e.id, {u.netid for u, _ in students if u.netid}, preserve_running=not confirmed)
     new_end = _time(meta.get("end_time"))
     if e.status == "live" and old_end is not None and new_end is not None and new_end > old_end:
         e.moved_attempts = await follow_end_time(session, e, new_end + timedelta(minutes=extra_close_minutes(e)))
@@ -468,9 +466,7 @@ async def apply_listing(session: AsyncSession, item: dict, cfg, now: datetime) -
 
 
 async def revoke_authority(session, exam):
-    from .access_codes import revoke_missing
     await _replace(session, OjEditor, exam.id, {})
-    await revoke_missing(session, exam.id, set(), preserve_running=True)
     if exam.class_id is not None:
         await session.execute(delete(ClassMember).where(ClassMember.class_id == exam.class_id))
 

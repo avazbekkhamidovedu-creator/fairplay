@@ -6,7 +6,7 @@ from app.models import Exam
 from app.timeutil import iso, utcnow
 
 from .conftest import login
-from .test_access_code_login import _events
+from .oj_helpers import _events
 from .test_dkuoj_bridge import KEY, db, run
 from .test_dkuoj_bridge_v2 import fake, oj  # noqa: F401  (fixtures)
 

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, auth, setToken } from "../api/client";
+import { sendPendingDeviceCheck } from "../lib/pendingDeviceCheck";
 import { isClassLoginSetup, type ClassLoginSetupResponse, type Role } from "../api/types";
 const ClassLoginSetup = lazy(() => import("./ClassLoginSetup"));
 import { Icon, LogoMark, Wordmark } from "../components/ui/Icon";
@@ -82,6 +83,7 @@ export default function LoginPage({ role, copy = TEACHER_COPY }: { role: Role; c
         return;
       }
       setToken(role, res.token);
+      if (role === "student") await sendPendingDeviceCheck();
       navigate(`/${role}`, { replace: true });
     } catch (err) {
       // Bridge v2: an expired or stopped class login says so (and who to ask).

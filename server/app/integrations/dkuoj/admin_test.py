@@ -8,29 +8,63 @@ and the list never carries questions, answers, keys or start codes.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
 
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ... import app_client as ac
+from ...db import get_session
 from ...models import Exam, User
-from ...security import ADMIN_TESTER_USER
+from ...routes_auth import client_ip
+from ...security import ADMIN_SCOPE, ADMIN_TESTER_USER, make_token, remember_user
+from ...store import get_store
 from ...timeutil import iso, utcnow
-from . import access_codes
 from .setup import add_event
 
 log = logging.getLogger("proctora.dkuoj")
+
+router = APIRouter(prefix="/api/student", tags=["student"])
+
+NOT_VALID = "That code is not valid."
+TOO_MANY = "Too many tries. Wait a moment and try again."
+FAILS_PER_MIN = 10
 
 EXAM_TITLE = "All exams (preview)"
 MAX_TTL_S = 4 * 3600
 
 
+def normalise(code: str) -> str:
+    return "".join(ch for ch in (code or "").upper() if not ch.isspace() and ch != "-")
+
+
 def matches(configured: str, entered: str) -> bool:
-    want = access_codes.normalise(configured)
+    want = normalise(configured)
     if not want:
         return False
-    return hmac.compare_digest(want.encode(), access_codes.normalise(entered).encode())
+    return hmac.compare_digest(want.encode(), normalise(entered).encode())
+
+
+def _network_of(ip: str) -> str:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(a, ipaddress.IPv6Address):
+        if a.ipv4_mapped is not None:
+            return str(a.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{a}/64", strict=False))
+    return str(a)
+
+
+class AdminTestIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    code: str = Field(default="", max_length=128)
 
 
 async def record_use(session: AsyncSession, ip: str) -> None:
@@ -64,3 +98,29 @@ async def preview_exams(session: AsyncSession) -> list[dict]:
              "mode": "questions", "delivery": "computer", "open_for_me": False, "attempt": None,
              "package_id": None, "tools": {}, "upload_window": None, "class_ids": [],
              "source": "dkuoj"} for r in rows]
+
+
+@router.post("/admin-test")
+async def admin_test_login(body: AdminTestIn, request: Request, session=Depends(get_session)):
+    """The operator's own sign-in for the exam-list preview (a hidden form in the web app).
+    Answers like a student login: {token, role, name, resume}. Wrong guesses are counted per
+    source network and answered with the same 400 whether or not the feature is configured."""
+    s = ac.settings_of(request)
+    store = get_store()
+    ip = client_ip(request)
+    key = f"admintest:fail:{_network_of(ip)}"
+    if int(await store.get(key) or 0) >= FAILS_PER_MIN:
+        wait = max(1, int(await store.ttl(key)))
+        raise HTTPException(429, {"message": TOO_MANY, "code": "too_many_codes", "retry_after": wait},
+                            headers={"Retry-After": str(wait)})
+    if not (s.admin_test_code and matches(s.admin_test_code, body.code)):
+        await store.incr(key, 60)
+        raise HTTPException(400, NOT_VALID)
+    await record_use(session, ip)
+    u = await tester_user(session)
+    await remember_user(u.id, "student", int(u.token_version or 0))
+    ttl = min(s.student_token_ttl_s, MAX_TTL_S)
+    return JSONResponse({"token": make_token(s.secret, u.id, "student", ttl, version=u.token_version or 0,
+                                             scope=ADMIN_SCOPE),
+                         "role": "student", "name": u.name, "resume": False},
+                        headers={"Cache-Control": "no-store"})

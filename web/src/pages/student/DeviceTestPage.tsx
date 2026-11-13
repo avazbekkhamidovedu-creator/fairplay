@@ -39,14 +39,14 @@ function NoPreview() {
   const navigate = useNavigate();
   function back() {
     bridge.deviceTestLeave();
-    navigate("/student/login", { replace: true });
+    navigate("/student/home", { replace: true });
   }
   return (
     <div className="stu" data-testid="device-test-missing">
       <main className="stu-alert warn" role="alert">
-        <p>The device test is not running. Start it again from the sign-in screen.</p>
+        <p>The device test is not running. Start it again from the home screen.</p>
         <button type="button" className="stu-btn primary" onClick={back}>
-          Back to sign in
+          Back to home
         </button>
       </main>
     </div>
@@ -63,17 +63,17 @@ function DeviceTest() {
   const left = useRef(false);
   const nativeStarted = useRef(false);
 
-  function leaveToLogin() {
+  function leaveToHome() {
     if (left.current) return;
     left.current = true;
     bridge.setDeviceTestConfirmed(false);
-    navigate("/student/login", { replace: true });
+    navigate("/student/home", { replace: true });
   }
 
   useEffect(
     () =>
       bridge.onDeviceTest((m) => {
-        if (m.state === "ended") leaveToLogin();
+        if (m.state === "ended") leaveToHome();
         else if (typeof m.remaining === "number" && m.remaining > 0) setRemaining(m.remaining);
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,14 +94,14 @@ function DeviceTest() {
   useEffect(() => {
     if (remaining <= 0 && !left.current) {
       bridge.deviceTestLeave();
-      leaveToLogin();
+      leaveToHome();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remaining]);
 
   function leave() {
     bridge.deviceTestLeave();
-    leaveToLogin();
+    leaveToHome();
   }
 
   const q = SAMPLE[current]!;

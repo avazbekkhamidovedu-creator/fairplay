@@ -17,7 +17,7 @@ import { ADMIN_SCOPE, getToken, tokenScope } from "../../api/client";
 import { AdminPreview } from "../../components/student/AdminPreview";
 import Dashboard from "./Dashboard";
 import { useMe } from "../../lib/useMe";
-import { NOT_OPEN_FOR_YOU, isWaiting, pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
+import { NOT_OPEN_FOR_YOU, pastExams, upcomingExams, uploadWindowExams, useStudentExams } from "./useStudentExams";
 
 /** 2026-10-24: open exams listed on the home page; the rest are on the Exams page. */
 export const HOME_OPEN_SHOWN = 6;
@@ -51,9 +51,7 @@ function FullHome() {
         : upcoming.length === 1
           ? upcoming[0]?.attempt?.status === "in_progress"
             ? "You have an exam in progress."
-            : isWaiting(upcoming[0]!)
-              ? "Waiting for your exam to open."
-              : "One exam is open now."
+            : "One exam is open now."
           : `${upcoming.length} exams are open now.`;
 
   const renderLive = (live: StudentExamSummary[]) =>
@@ -229,15 +227,12 @@ function ExamHero({
   const navigate = useNavigate();
   const inProgress = exam.attempt?.status === "in_progress";
   const notForMe = !inProgress && exam.open_for_me === false;   // 2026-10-23: selected students only
-  const waiting = isWaiting(exam);
   const headId = `hero-${exam.id}`;
   const when = inProgress
     ? "In progress"
     : notForMe
       ? NOT_OPEN_FOR_YOU
-      : waiting
-        ? "Waiting for the exam to open"
-        : exam.scheduled_at
+      : exam.scheduled_at
       ? `Open now · ${isToday(exam.scheduled_at) ? "today" : shortDate(exam.scheduled_at)} ${shortTime(exam.scheduled_at)}`
       : "Open now";
   const meta = [
@@ -254,11 +249,7 @@ function ExamHero({
       <h3 id={headId}>{examName(exam.course, exam.title)}</h3>
       <span className="stu-exam-hero-meta">{meta}</span>
 
-      {waiting ? (
-        <div className="stu-exam-hero-note" data-testid="waiting-to-open" role="status">
-          Your teacher has not opened the exam yet. This page updates by itself.
-        </div>
-      ) : notForMe ? (
+      {notForMe ? (
         <div className="stu-exam-hero-note" data-testid="not-open-for-you">
           Your teacher opened this exam for some students first. It shows a Start button here when it opens for you.
         </div>
@@ -287,9 +278,7 @@ function ExamHero({
       ) : (
         <>
           <div className="stu-exam-hero-note">
-            {exam.access_code
-              ? "Read the rules, lock this computer, then start the exam."
-              : "Read the rules, lock this computer, then type the start code your teacher reads out."}
+            Read the rules, lock this computer, then type the start code your teacher reads out.
           </div>
           <div className="stu-row">
             <button

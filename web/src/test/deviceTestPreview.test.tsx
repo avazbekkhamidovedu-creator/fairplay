@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import CodeSignIn from "../pages/student/CodeSignIn";
+import NativeHome from "../pages/student/NativeHome";
 import * as bridge from "../lib/bridge";
 import DeviceTestPage from "../pages/student/DeviceTestPage";
 
@@ -20,7 +20,7 @@ function dialog() {
   return render(
     <MemoryRouter initialEntries={["/student/login"]}>
       <Routes>
-        <Route path="/student/login" element={<CodeSignIn onUseAccount={() => {}} />} />
+        <Route path="/student/login" element={<NativeHome onUseAccount={() => {}} />} />
         <Route path="/student/device-test" element={<p>Preview page</p>} />
       </Routes>
     </MemoryRouter>,
@@ -33,7 +33,8 @@ function page(state?: unknown, search = "", confirmed = true) {
     <MemoryRouter initialEntries={[{ pathname: "/student/device-test", search, state }]}>
       <Routes>
         <Route path="/student/device-test" element={<DeviceTestPage />} />
-        <Route path="/student/login" element={<p>Login screen</p>} />
+        <Route path="/student/home" element={<p>App home</p>} />
+        <Route path="/student/login" element={<p>App home</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -58,16 +59,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("device test pop-up", () => {
-  it("shows only the short pop-up with Start focused when the app reports deviceTest", async () => {
+describe("device test start", () => {
+  it("starts the test at once when the app reports deviceTest: no Start button, no apps to close", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
     await open();
-    expect(screen.getByRole("dialog", { name: "Try the exam screen" })).toBeInTheDocument();
-    expect(screen.getAllByRole("listitem")).toHaveLength(4);
-    expect(screen.getByRole("button", { name: "Start" })).toHaveFocus();
+    expect(post).toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
+    expect(screen.queryByRole("button", { name: BUTTON })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Test my device" })).toBeNull();
     expect(screen.queryByLabelText("Device check results")).toBeNull();
+    expect(post.mock.calls.some(([m]) => m.action === "quitApps" || m.action === "preflight")).toBe(false);
   });
 
   it("falls back to the device check dialog without deviceTest", async () => {
@@ -76,23 +77,21 @@ describe("device test pop-up", () => {
     await open();
     expect(await screen.findByRole("dialog", { name: "Test my device" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: BUTTON })).toBeNull();
+    expect(post.mock.calls.some(([m]) => m.action === "quitApps")).toBe(false);
   });
 
-  it("Cancel closes and posts nothing", async () => {
+  it("Cancel closes the dialog while it is starting", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
     await open();
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(post).not.toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
   });
 
-  it("posts deviceTestStart(60) and opens the page when the app says started", async () => {
+  it("opens the page when the app says started", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
     await open();
-    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
-    expect(post).toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
     send({ type: "deviceTest", state: "started", remaining: 60 });
     expect(screen.getByText("Preview page")).toBeInTheDocument();
   });
@@ -100,9 +99,8 @@ describe("device test pop-up", () => {
   it("shows the line and stays when no answer comes in 1.5 s", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
-    await open();
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await open();
     await act(async () => void vi.advanceTimersByTime(1600));
     expect(screen.getByText("The test can't start right now.")).toBeInTheDocument();
     expect(screen.queryByText("Preview page")).toBeNull();
@@ -112,9 +110,8 @@ describe("device test pop-up", () => {
   it("leaves at once when a late started arrives after the timeout", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
-    await open();
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
+    await open();
     await act(async () => void vi.advanceTimersByTime(1600));
     post.mockClear();
     send({ type: "deviceTest", state: "started", remaining: 59 });
@@ -126,22 +123,22 @@ describe("device test pop-up", () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
     await open();
-    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
     send({ type: "deviceTest", state: "ended", reason: "timeout", remaining: 0 });
     expect(screen.queryByText("The test can't start right now.")).toBeNull();
-    expect(screen.getByRole("button", { name: BUTTON })).toBeDisabled();
     send({ type: "deviceTest", state: "started", remaining: 60 });
     expect(screen.getByText("Preview page")).toBeInTheDocument();
   });
 
-  it("shows one line and stays when refused", async () => {
+  it("shows one line and offers Try again when refused", async () => {
     send({ type: "state", locked: false, trusted: true, version: "1", deviceTest: true });
     dialog();
     await open();
-    await userEvent.click(screen.getByRole("button", { name: BUTTON }));
     send({ type: "deviceTest", state: "ended", reason: "refused", remaining: 0 });
     expect(screen.getByText("The test can't start right now.")).toBeInTheDocument();
     expect(screen.queryByText("Preview page")).toBeNull();
+    post.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(post).toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
   });
 });
 
@@ -180,20 +177,20 @@ describe("device test page", () => {
     page({ remaining: 30 });
     await userEvent.click(screen.getByRole("button", { name: "Leave" }));
     expect(post).toHaveBeenCalledWith({ action: "deviceTestLeave" });
-    expect(screen.getByText("Login screen")).toBeInTheDocument();
+    expect(screen.getByText("App home")).toBeInTheDocument();
   });
 
   it("goes back to login when the app says ended", () => {
     page({ remaining: 30 });
     send({ type: "deviceTest", state: "ended", reason: "timeout", remaining: 0 });
-    expect(screen.getByText("Login screen")).toBeInTheDocument();
+    expect(screen.getByText("App home")).toBeInTheDocument();
   });
 
   it("goes back to login when the countdown reaches 0", async () => {
     vi.useFakeTimers();
     page({ remaining: 2 });
     await act(async () => void vi.advanceTimersByTime(2100));
-    expect(screen.getByText("Login screen")).toBeInTheDocument();
+    expect(screen.getByText("App home")).toBeInTheDocument();
     expect(post).toHaveBeenCalledWith({ action: "deviceTestLeave" });
   });
 
@@ -202,8 +199,8 @@ describe("device test page", () => {
     expect(screen.getByTestId("device-test-missing")).toBeInTheDocument();
     expect(screen.queryByTestId("device-test-countdown")).toBeNull();
     expect(post).not.toHaveBeenCalledWith({ action: "deviceTestStart", seconds: 60 });
-    await userEvent.click(screen.getByRole("button", { name: "Back to sign in" }));
-    expect(screen.getByText("Login screen")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back to home" }));
+    expect(screen.getByText("App home")).toBeInTheDocument();
   });
 
   it("never calls fetch and keeps answers in memory", async () => {
@@ -216,6 +213,6 @@ describe("device test page", () => {
   it("goes to the login screen without a bridge", () => {
     delete (window as unknown as { webkit?: unknown }).webkit;
     page({ remaining: 30 });
-    expect(screen.getByText("Login screen")).toBeInTheDocument();
+    expect(screen.getByText("App home")).toBeInTheDocument();
   });
 });

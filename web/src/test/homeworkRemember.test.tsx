@@ -255,27 +255,11 @@ describe("sign out and forget", () => {
     const user = userEvent.setup();
     renderApp("/student/homework");
     await user.click(await screen.findByRole("button", { name: "Forget this device" }));
-    await screen.findByText("Enter your exam code");
+    await screen.findByRole("heading", { name: "Sign in" });
     const c = called("/api/homework/remember/forget-all");
     expect(c).toHaveLength(1);
     expect((c[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer HW1");
     expect(sent("rememberForget")).toHaveLength(1);
     expect(getHomeworkToken()).toBeNull();
-  });
-});
-
-describe("exam code entry", () => {
-  it("drops the homework token and sends nothing to the app about it", async () => {
-    native({ available: true, name: null });
-    setHomeworkSession("HW1", TIMES);
-    replies["/api/student/code-login/challenge"] = { status: 200, body: { nonce: "NONCE-12345678", expires_in: 120 } };
-    replies["/api/student/code-login"] = { status: 400, body: { detail: "That code is not valid." } };
-    const user = userEvent.setup();
-    renderApp();
-    await screen.findByText("Enter your exam code");
-    await user.keyboard("ABC123");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(getHomeworkToken()).toBeNull();
-    expect(posted.map((m) => m.action).filter((a) => a !== "attest")).toEqual([]);
   });
 });

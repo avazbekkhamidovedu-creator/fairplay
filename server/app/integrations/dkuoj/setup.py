@@ -46,8 +46,7 @@ from ...models import User
 from ...security import hash_executor, hash_password, make_token
 from ...store import get_store
 from ...timeutil import utcnow
-from .access_codes import code_hmac
-from .models import ClassLogin, ClassLoginEvent, ExamAccessCode
+from .models import ClassLogin, ClassLoginEvent
 
 log = logging.getLogger("proctora.dkuoj")
 
@@ -60,8 +59,6 @@ TRIES_PER_MINUTE = 5
 FAILS_PER_NETID_HOUR = 5        # per class login + typed NetID: then that NetID waits the hour
 DISTINCT_NETIDS_HOUR = 40       # per class login: failing NetIDs that disable it (an attack)
 FAIL_WINDOW_S = 3600
-CODE_NEEDED = "Enter the access code from your own exam sheet to set up your account."
-CODE_WRONG = "That access code does not match this NetID."
 ACCOUNT_TRIES_PER_MINUTE = 10
 
 EXPIRED = "This class login has expired. Ask your professor for a new one."
@@ -286,7 +283,6 @@ class IdentifyIn(BaseModel):
     first_name: str = Field(max_length=150)
     last_name: str = Field(max_length=150)
     netid: str = Field(max_length=64)
-    access_code: str = Field(default="", max_length=40)
 
 
 class AccountIn(BaseModel):
@@ -357,29 +353,6 @@ async def _failed(session: AsyncSession, cl: ClassLogin, netid: str, attack: boo
     await session.commit()
 
 
-def code_mode() -> str:
-    """DKUOJ_SETUP_ACCESS_CODE: "issued" (default: a NetID that already has an exam access
-    code must give one), "always" (every set-up must give one; needs codes printed first) or
-    "off". The class login and the name are shared knowledge in a class; the code is not."""
-    v = os.environ.get("DKUOJ_SETUP_ACCESS_CODE", "issued").strip().lower()
-    return v if v in ("off", "issued", "always") else "issued"
-
-
-async def _code_state(session: AsyncSession, secret: str, netid: str, given: str) -> str:
-    """"ok", "needed" (none given though required) or "wrong"."""
-    mode = code_mode()
-    if mode == "off":
-        return "ok"
-    rows = (await session.execute(select(ExamAccessCode.code_hmac).where(
-        func.lower(ExamAccessCode.netid) == netid.strip().lower(), ExamAccessCode.revoked_at.is_(None)))).scalars().all()
-    if not rows and mode == "issued":
-        return "ok"
-    if not (given or "").strip():
-        return "needed"
-    want = code_hmac(secret, given)
-    return "ok" if any(hmac.compare_digest(want, h) for h in rows) else "wrong"
-
-
 @router.post("/identify")
 async def identify(body: IdentifyIn, request: Request, session: AsyncSession = Depends(get_session)):
     from .client import DkuojClient, OjError
@@ -426,10 +399,6 @@ async def identify(body: IdentifyIn, request: Request, session: AsyncSession = D
     if not ok:
         await _failed(session, cl, body.netid)
         raise HTTPException(400, GENERIC)
-    state = await _code_state(session, s.secret, netid, body.access_code)
-    if state != "ok":
-        await _failed(session, cl, netid, detail="access code " + state)
-        raise HTTPException(400, CODE_NEEDED if state == "needed" else CODE_WRONG)
     await session.commit()      # find_by_netid may have linked an older account
     name = " ".join(x for x in (str(match.get("first_name") or "").strip(),
                                 str(match.get("last_name") or "").strip()) if x) or netid

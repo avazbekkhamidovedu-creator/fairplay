@@ -1,72 +1,25 @@
-"""2026-11 stress findings: an honest student must not be interrupted by a class rush, an
-attacker on the same network, extra time, a fast clock, a stepped-back clock or a rotated session."""
+"""2026-11 stress findings: an honest student must not be interrupted by extra time, a fast clock, a stepped-back clock or a rotated session."""
 import time
 from datetime import timedelta
 
 from sqlalchemy import select, update
 
+from app import security
 from app.integrations.dkuoj.models import OjRosterEntry
 from app.models import Attempt, Exam
 from app.timeutil import utcnow
 
 from .conftest import login
 from .s_helpers import db_update
-from .test_access_code_login import (DEV_A, DEV_B, bearer, enter, patch_exam, ready, sign_in,  # noqa: F401
-                                     start as code_start)
-from .test_access_code_scope import at
-from .test_access_codes import KEY, db
+from .oj_helpers import DEV_A, KEY, bearer, db, patch_exam, ready, sign_in, start as code_start  # noqa: F401
 from .test_app_session import app_client, beat, events, exam, start  # noqa: F401  (fixtures)
 from .test_dkuoj_bridge import oj_exam
 from .test_dkuoj_bridge_v2 import fake, oj  # noqa: F401  (fixtures)
 from .test_s5_sealed_submit import mcq_answer, post, seal, setup
 
 
-# ---------------------------------------------------------------- 1. class rush
-def test_a_class_behind_one_address_is_not_rate_limited(oj, ready):
-    for _ in range(70):
-        assert enter(oj, ready["alice"], DEV_A).status_code == 200      # old cap: 60 challenges a minute
-    for _ in range(35):
-        sign_in(oj, ready["alice"], DEV_A)                              # old cap: 30 confirms a minute
-
-
-def test_request_caps_answer_429_with_retry_after_and_follow_the_settings(oj, ready):
-    s = oj.app.state.settings
-    s.codelogin_challenges_per_min = s.codelogin_confirms_per_min = 2
-    assert [oj.get("/api/student/code-login/challenge").status_code for _ in range(2)] == [200, 200]
-    r = oj.get("/api/student/code-login/challenge")
-    assert r.status_code == 429 and 1 <= int(r.headers["Retry-After"]) <= 60
-    assert r.json()["detail"]["code"] == "too_many_requests"
-    for _ in range(2):
-        oj.post("/api/student/code-login/confirm", json={"confirm_token": "x"})
-    r = oj.post("/api/student/code-login/confirm", json={"confirm_token": "x"})
-    assert r.status_code == 429 and 1 <= int(r.headers["Retry-After"]) <= 60
-
-
-def test_school_networks_multiply_the_code_login_caps(oj, monkeypatch):
-    from app.integrations.dkuoj import code_login
-    s = oj.app.state.settings
-    s.codelogin_challenges_per_min, s.codelogin_school_factor = 2, 3
-    s.login_school_nets = ["10.1.0.0/16"]
-    monkeypatch.setattr(code_login, "client_ip", lambda request: "10.1.2.3")
-    assert all(oj.get("/api/student/code-login/challenge").status_code == 200 for _ in range(6))
-    assert oj.get("/api/student/code-login/challenge").status_code == 429
-    monkeypatch.setattr(code_login, "client_ip", lambda request: "10.9.2.3")
-    assert [oj.get("/api/student/code-login/challenge").status_code for _ in range(3)] == [200, 200, 429]
-
-
-# ---------------------------------------------------------------- 2. attacker on the same address
-def test_wrong_codes_from_one_address_do_not_block_an_honest_device_below_the_class_cap(oj, ready):
-    for i in range(60):
-        assert enter(oj, "AAAAAA", f"ATTACKER-DEV-{i:04d}").status_code == 400
-    assert enter(oj, ready["alice"], DEV_A).status_code == 200
-
-
-def test_the_network_cap_still_blocks_right_codes_once_it_is_reached(oj, ready):
-    oj.app.state.settings.codelogin_ip_fails = 20
-    for i in range(20):
-        assert enter(oj, "AAAAAA", f"ATTACKER-DEV-{i:04d}").status_code == 400
-    r = enter(oj, ready["alice"], DEV_B)
-    assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1
+def at(monkeypatch, delta):
+    monkeypatch.setattr(security, "_now", lambda: utcnow() + delta)
 
 
 # ---------------------------------------------------------------- 3 + 5. exam-scoped token window

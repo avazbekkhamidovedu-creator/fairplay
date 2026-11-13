@@ -40,21 +40,10 @@ export function useStudentExams(pollMs = STUDENT_LIST_POLL_MS) {
   return { exams, error, reload };
 }
 
-/** An exam the student signed in for with their code that the teacher has not opened yet. */
-export function isWaiting(e: StudentExamSummary): boolean {
-  return e.access_code === true && e.status === "draft" && !e.attempt;
-}
-
-/** Live exams the student can still take (or continue), in-progress first; then exams that wait to open. */
+/** Live exams the student can still take (or continue), in-progress first. */
 export function upcomingExams(exams: StudentExamSummary[]): StudentExamSummary[] {
-  const list = exams.filter(
-    (e) => e.attempt?.status === "in_progress" || (e.status === "live" && e.attempt?.status !== "submitted") || isWaiting(e),
-  );
-  return list.sort(
-    (a, b) =>
-      Number(b.attempt?.status === "in_progress") - Number(a.attempt?.status === "in_progress") ||
-      Number(isWaiting(a)) - Number(isWaiting(b)),
-  );
+  const list = exams.filter((e) => e.attempt?.status === "in_progress" || (e.status === "live" && e.attempt?.status !== "submitted"));
+  return list.sort((a, b) => Number(b.attempt?.status === "in_progress") - Number(a.attempt?.status === "in_progress"));
 }
 
 /** Exams this student submitted, newest first. */

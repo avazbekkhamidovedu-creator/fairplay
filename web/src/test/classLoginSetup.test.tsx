@@ -172,25 +172,18 @@ describe("class login set-up", () => {
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 
-  it("sends the access code normalised and shows the server's code messages", async () => {
+  it("asks for first name, last name and NetID only (no access code)", async () => {
     const user = userEvent.setup();
     renderLogin();
     await signInWithClassLogin(user);
-    const msg = "That access code does not match this NetID.";
-    reply("/api/setup/identify", { status: 400, body: { detail: msg } });
+    expect(screen.queryByLabelText(/access code/i)).toBeNull();
+    reply("/api/setup/identify", { status: 400, body: { detail: "That did not match." } });
     await user.type(screen.getByLabelText("First name"), "Bob");
     await user.type(screen.getByLabelText("Last name"), "Li");
-    await user.type(screen.getByLabelText("NetID"), "bl642");
-    await user.type(screen.getByLabelText("Access code from your exam sheet (if you have one)"), "ab c-d2 3{Enter}");
-    expect(await screen.findByRole("alert")).toHaveTextContent(msg);
+    await user.type(screen.getByLabelText("NetID"), "bl642{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("That did not match.");
     const call = calls.find((c) => c.url === "/api/setup/identify")!;
-    expect(call.body).toEqual({ first_name: "Bob", last_name: "Li", netid: "bl642", access_code: "ABCD23" });
-    const need = "Enter the access code from your own exam sheet to set up your account.";
-    reply("/api/setup/identify", { status: 400, body: { detail: need } });
-    await user.clear(screen.getByLabelText("Access code from your exam sheet (if you have one)"));
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(need);
-    expect(calls.filter((c) => c.url === "/api/setup/identify").pop()!.body).toEqual({ first_name: "Bob", last_name: "Li", netid: "bl642" });
+    expect(call.body).toEqual({ first_name: "Bob", last_name: "Li", netid: "bl642" });
   });
 
   it("503: the class list can't be checked right now", async () => {

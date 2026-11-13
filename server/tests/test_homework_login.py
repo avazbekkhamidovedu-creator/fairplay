@@ -365,8 +365,7 @@ def _needs_student(route):
 
 def test_homework_token_refused_on_every_student_and_exam_route(hw, fake):
     tok = bearer(homework_token(hw, fake))
-    open_routes = {"/api/student/code-login", "/api/student/code-login/challenge",
-                   "/api/student/code-login/confirm"}
+    open_routes = {"/api/student/admin-test"}
     checked = 0
     for route in all_api_routes(hw.app.routes):
         guarded = _needs_student(route)

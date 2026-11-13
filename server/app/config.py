@@ -201,14 +201,6 @@ class Settings:
     # instead; the per-account limits stay the same for everyone.
     login_school_nets: list[str] = field(default_factory=lambda: _list("FAIRPLAY_LOGIN_SCHOOL_NETS"))
     login_school_ip_limit: int = field(default_factory=lambda: _int("FAIRPLAY_LOGIN_SCHOOL_IP_LIMIT", 6000))
-    # Access-code sign-in (integrations/dkuoj/code_login.py), per source network and minute. A
-    # classroom behind one NAT signs in together, so the request counters are class-sized;
-    # wrong codes are counted apart (ip_fails). Networks in FAIRPLAY_LOGIN_SCHOOL_NETS get
-    # all three multiplied by school_factor.
-    codelogin_challenges_per_min: int = field(default_factory=lambda: _int("FAIRPLAY_CODELOGIN_CHALLENGES_PER_MIN", 1500))
-    codelogin_confirms_per_min: int = field(default_factory=lambda: _int("FAIRPLAY_CODELOGIN_CONFIRMS_PER_MIN", 1000))
-    codelogin_ip_fails: int = field(default_factory=lambda: _int("FAIRPLAY_CODELOGIN_IP_FAILS", 300))
-    codelogin_school_factor: int = field(default_factory=lambda: _int("FAIRPLAY_CODELOGIN_SCHOOL_FACTOR", 4))
     # PBKDF2 checks running at once per worker process (they are CPU-bound threads; more
     # than about one per core only slows the other requests down during a sign-in rush).
     login_hash_slots: int = field(default_factory=lambda: _int("FAIRPLAY_LOGIN_HASH_SLOTS", 4))
@@ -312,9 +304,6 @@ class Settings:
         if self.in_school_net(ip):
             return max(self.login_ip_limit, self.login_school_ip_limit)
         return self.login_ip_limit
-
-    def codelogin_limit(self, base: int, ip: str) -> int:
-        return base * max(1, self.codelogin_school_factor) if self.in_school_net(ip) else base
 
     @property
     def demo_logins(self) -> bool:

@@ -24,7 +24,7 @@ from app.store import get_store
 from app.timeutil import utcnow
 from tools import native_exit_vector as vec
 
-from .test_access_codes import KEY
+from .oj_helpers import KEY
 from .test_dkuoj_bridge import db, fake, run  # noqa: F401  (fixture)
 from .test_dkuoj_bridge_v2 import V1, call, oj  # noqa: F401  (fixtures)
 

@@ -85,7 +85,13 @@ enum Config {
         #endif
     }()
 
-    static var startURL: URL { serverURL.appendingPathComponent("student/login") }
+    /// The legacy 6-digit code screen (/student/login) is gone: no route may load it, the native home is shown instead.
+    static func isLegacyCodeRoute(_ url: URL?, server: URL? = nil) -> Bool {
+        guard let url else { return false }
+        let s = server ?? serverURL
+        guard url.host?.lowercased() == s.host?.lowercased(), url.scheme?.lowercased() == s.scheme?.lowercased() else { return false }
+        return SiteData.isLoginPath(url.path)
+    }
 
     /// Release builds only talk to an https server with at least one pin (audit #11): without pins
     /// the app would fall back to the system trust store, which a user-installed root defeats.

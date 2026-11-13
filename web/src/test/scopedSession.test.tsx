@@ -28,7 +28,6 @@ const exam = (over: Partial<StudentExamSummary> = {}): StudentExamSummary => ({
   course: "Demo course",
   room: "",
   scheduled_at: null,
-  access_code: true,
   attempt: null,
   ...over,
 });
@@ -63,7 +62,7 @@ const home = (el = <StudentHome />) =>
       <Routes>
         <Route path="/student" element={el} />
         <Route path="/student/exams/:id/start" element={<p>Before you start</p>} />
-        <Route path="/student/login" element={<p>Code screen</p>} />
+        <Route path="/student/login" element={<p>App home</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -75,28 +74,13 @@ describe("dashboard", () => {
     expect(tokenScope(null)).toBeNull();
   });
 
-  it("waiting: countdown ticks, button is disabled, then the exam opens", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  it("an exam that is not open yet is not shown as the student's exam", async () => {
     setToken("student", scopedToken());
     exams = [exam({ scheduled_at: new Date(Date.now() + 5 * 60_000).toISOString() })];
     home();
-    expect(await screen.findByText("Your exam opens in a few minutes.")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Hi Olivia" })).toBeInTheDocument();
-    expect(await screen.findByText("Olivia Brown · ob996")).toBeInTheDocument();
-    expect(screen.getByText("Opens in 05:00")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Waiting for the exam to open" })).toBeDisabled();
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    expect(screen.getByText("Opens in 04:59")).toBeInTheDocument();
-    exams = [exam({ status: "live", question_count: 6, scheduled_at: new Date(Date.now()).toISOString() })];
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(await screen.findByText("Open now")).toBeInTheDocument();
-    expect(screen.getByText("Your exam is open now.")).toBeInTheDocument();
-    expect(screen.getByText("6 questions")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Start exam" })).toHaveAttribute("href", "/student/exams/e_1/start");
+    expect(await screen.findByRole("heading", { name: "Hi Olivia" })).toBeInTheDocument();
+    expect(await screen.findByText("You have no exam to start.")).toBeInTheDocument();
+    expect(screen.queryByTestId("newest-exam")).toBeNull();
   });
 
   it("shows the sign-out line, and no courses, join box or grades", async () => {
@@ -105,13 +89,13 @@ describe("dashboard", () => {
     home();
     await screen.findByText("Open now");
     expect(
-      screen.getByText(/After you hand in, you are signed out after 5 minutes and asked for the next exam's code\./),
+      screen.getByText(/After you hand in, you are signed out after 5 minutes\./),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Your courses/)).toBeNull();
     expect(screen.queryByText(/Join another class/i)).toBeNull();
     expect(screen.queryByText(/Grades/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Sign out now" }));
-    expect(await screen.findByText("Code screen")).toBeInTheDocument();
+    expect(await screen.findByText("App home")).toBeInTheDocument();
     expect(getToken("student")).toBeNull();
   });
 
@@ -158,7 +142,7 @@ describe("sign-out after the hand-in", () => {
       <MemoryRouter initialEntries={["/student/done/a_1"]}>
         <Routes>
           <Route path="/student/done/:aid" element={<HandInSignOut />} />
-          <Route path="/student/login" element={<p>Code screen</p>} />
+          <Route path="/student/login" element={<p>App home</p>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -184,7 +168,7 @@ describe("sign-out after the hand-in", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(240_000);
     });
-    expect(screen.getByText("Code screen")).toBeInTheDocument();
+    expect(screen.getByText("App home")).toBeInTheDocument();
     expect(getToken("student")).toBeNull();
     expect(localStorage.getItem("fairplay:me:student:7")).toBeNull();
     expect(localStorage.getItem("fairplay:pkg:e_1")).toBeNull();
@@ -198,7 +182,7 @@ describe("sign-out after the hand-in", () => {
     seedLocal();
     counting();
     await userEvent.click(screen.getByRole("button", { name: "Sign out now" }));
-    expect(await screen.findByText("Code screen")).toBeInTheDocument();
+    expect(await screen.findByText("App home")).toBeInTheDocument();
     expect(getToken("student")).toBeNull();
     expect(localStorage.getItem("fairplay:pkg:e_1")).toBeNull();
     expect(hasPendingDeviceCheck()).toBe(false);
