@@ -202,9 +202,11 @@ enum Readiness {
             : "Cannot reach the exam server. Check the Wi-Fi (and the campus VPN if you need one)."))
         if let off = clockOffset {
             let ok = ServerClock.skewOK(off)
-            rows.append(CheckRow(id: "clock", ok: ok, message: ok
+            // Pilot 0.8.8: the Mac's clock never blocks an exam (FairPlay uses the server's time),
+            // so this row is only information.
+            rows.append(CheckRow(id: "clock", ok: true, message: ok
                 ? "Date and time are correct"
-                : "This Mac's clock is \(Int(abs(off) / 60)) min off. Set the date and time to automatic (System Settings > General > Date & Time)."))
+                : "This Mac's clock is \(Int(abs(off) / 60)) min off. That is fine: FairPlay uses the server's time.", info: true))
         } else {
             rows.append(CheckRow(id: "clock", ok: true, message: "Clock not checked (no server reply)", info: true))
         }

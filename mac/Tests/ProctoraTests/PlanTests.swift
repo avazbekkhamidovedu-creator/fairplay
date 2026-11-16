@@ -122,8 +122,7 @@ import Foundation
 
     @Test func rowsMergeProblemsByIdAndKeepInfoRowsNonBlocking() {
         let rows = Readiness.rows(problems: [("blocked_apps", "Turn off Screen Sharing."),
-                                             ("blocked_apps", "Turn off Remote Login (SSH)."),
-                                             ("clock", "Set the clock.")],
+                                             ("blocked_apps", "Turn off Remote Login (SSH).")],
                                   serverReached: true, minVersion: "0.1", clockOffset: 500,
                                   freeBytes: 10, battery: .init(percent: 10, charging: false),
                                   vpn: ["utun4"], accessibility: true)
@@ -131,7 +130,9 @@ import Foundation
         #expect(byId.values.allSatisfy { $0.count == 1 })
         #expect(byId["blocked_apps"]?.first?.ok == false)
         #expect(byId["blocked_apps"]?.first?.message.contains("Remote Login") == true)
-        #expect(byId["clock"]?.first?.ok == false)
+        // Pilot 0.8.8: a Mac clock 500 s off is information only, never a blocking row.
+        #expect(byId["clock"]?.first?.ok == true)
+        #expect(byId["clock"]?.first?.info == true)
         #expect(byId["disk"]?.first?.ok == false)
         #expect(byId["battery"]?.first?.info == true)
         #expect(byId["vpn"]?.first?.info == true)

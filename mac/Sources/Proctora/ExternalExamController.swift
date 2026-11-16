@@ -455,7 +455,7 @@ final class ExternalExamController {
         // session's token: after teardown the exam page takes over event forwarding.
         var batch = pendingEvents
         batch.append(["type": "external_finished", "detail": reason,
-                      "client_time": ExternalExamController.isoFrac.string(from: Date())])
+                      "client_time": ExternalExamController.isoFrac.string(from: ServerClock.shared.now())])
         post(path: "api/student/attempts/\(session.attemptId)/events", session: session,
              body: ["events": batch]) { _, _ in }
         let aid = session.attemptId

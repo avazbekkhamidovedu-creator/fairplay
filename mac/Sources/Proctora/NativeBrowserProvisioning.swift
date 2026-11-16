@@ -44,7 +44,7 @@ enum NativeBrowserProvisioning {
     /// `renewBefore`: a stored certificate with less validity than this is replaced (same key). If the
     /// replacement fails and the stored one is still valid, that one is used.
     static func prepare(profile: NativeBrowserProfile, renewBefore: TimeInterval = CertificateRenewal.beforeStart,
-                        now: Date = Date()) async throws -> SecIdentity {
+                        now: Date = ServerClock.shared.now()) async throws -> SecIdentity {
         let name = Config.deviceKeyNamespace + ".native-browser-key-tag"
         let key: NativeEnrollmentKey
         if let tag = UserDefaults.standard.data(forKey: name),

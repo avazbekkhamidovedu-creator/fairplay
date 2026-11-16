@@ -702,10 +702,7 @@ final class LockdownController {
         if let id = SystemChecks.currentInputSourceID(), !SystemChecks.currentInputSourceIsApple() {
             out.append(("input_source", "Switch to an Apple keyboard (e.g. ABC or Pinyin - Simplified); \(id) is not allowed."))
         }
-        // Plan M5: a clock far from the server's breaks deadlines and sealed answers.
-        if let off = ServerClock.shared.offset, !ServerClock.skewOK(off) {
-            out.append(("clock", "Set your Mac's date and time to automatic (System Settings > General > Date & Time)."))
-        }
+        // Pilot 0.8.8: the Mac's clock no longer blocks; deadlines and seals use ServerClock.
         DebugLog.log("check", out.isEmpty ? "preflight OK" : "preflight problems: " + out.map { $0.message }.joined(separator: " || "))
         return out
     }

@@ -36,7 +36,7 @@ struct NativeDeviceContext: Decodable, Equatable {
 
     /// True when the envelope is genuine for this request and only the clock keeps it from being accepted.
     static func clockIsOff(_ envelope: [String: Any], publicKey: Data, nonce: String,
-                           device: String, now: Date = Date()) -> Bool {
+                           device: String, now: Date = ServerClock.shared.now()) -> Bool {
         verify(envelope, publicKey: publicKey, nonce: nonce, device: device, now: now) == nil
             && verify(envelope, publicKey: publicKey, nonce: nonce, device: device, now: now, skew: 86_400 * 365) != nil
     }
@@ -44,7 +44,7 @@ struct NativeDeviceContext: Decodable, Equatable {
     static let clockOffMessage = "Your Mac clock is off by more than 2 minutes. Ask your instructor for help."
 
     static func verify(_ envelope: [String: Any], publicKey: Data, nonce: String,
-                       device: String, now: Date = Date(), skew: Int = allowedClockSkew) -> Self? {
+                       device: String, now: Date = ServerClock.shared.now(), skew: Int = allowedClockSkew) -> Self? {
         let time = Int(now.timeIntervalSince1970)
         guard let encoded = envelope["payload"] as? String, encoded.utf8.count <= 16_384,
               let bytes = Data(base64Encoded: encoded), let signatureText = envelope["signature"] as? String,

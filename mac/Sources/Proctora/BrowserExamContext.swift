@@ -12,7 +12,7 @@ struct BrowserExamContext: Decodable, Equatable {
     let sites: [String]
     var resources: [String]? = nil
     var binding: String { user + ":" + contest + ":" + participation }
-    static func verify(_ envelope: [String: Any], publicKey: Data, nonce: String, now: Date = Date()) -> Self? {
+    static func verify(_ envelope: [String: Any], publicKey: Data, nonce: String, now: Date = ServerClock.shared.now()) -> Self? {
         guard let encoded = envelope["payload"] as? String, encoded.utf8.count <= 100_000,
               let bytes = Data(base64Encoded: encoded), let signatureText = envelope["signature"] as? String,
               let signature = Data(base64Encoded: signatureText),

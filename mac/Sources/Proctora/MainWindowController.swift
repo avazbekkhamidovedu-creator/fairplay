@@ -1354,10 +1354,6 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             if let minimum, !AppVersion.meets(Config.version, minimum: minimum) {
                 blocking.append(("app_version", "Update FairPlay: this is version \(Config.version), the exam needs \(minimum) or newer."))
             }
-            if let off = ServerClock.shared.offset, !ServerClock.skewOK(off),
-               !blocking.contains(where: { $0.id == "clock" }) {
-                blocking.append(("clock", "Set your Mac's date and time to automatic (System Settings > General > Date & Time)."))
-            }
             let rows = Readiness.rows(problems: blocking, serverReached: reached, minVersion: minimum,
                                       clockOffset: reached ? ServerClock.shared.offset : nil,
                                       freeBytes: Readiness.freeBytes(), battery: Readiness.battery(),

@@ -229,7 +229,7 @@ final class AppSession {
     /// Also called right after lock/unlock so the teacher sees the change at once.
     func beat() {
         guard let exam else { return }
-        var ts = Int64(Date().timeIntervalSince1970 * 1000)
+        var ts = Int64(ServerClock.shared.now().timeIntervalSince1970 * 1000)
         if ts <= lastTs { ts = lastTs + 1 }
         lastTs = ts
         let locked = LockdownController.shared.isLocked
@@ -283,7 +283,7 @@ final class AppSession {
     private func fetchOfflineKey() {
         guard let exam, offlineKey == nil else { return }
         offlineKeyTries += 1
-        var ts = Int64(Date().timeIntervalSince1970 * 1000)
+        var ts = Int64(ServerClock.shared.now().timeIntervalSince1970 * 1000)
         if ts <= lastTs { ts = lastTs + 1 }
         lastTs = ts
         let msg = AppSession.offkeyMessage(aid: exam.attemptId, session: exam.session, deviceId: deviceId, ts: ts)

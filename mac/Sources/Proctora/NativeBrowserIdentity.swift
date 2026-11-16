@@ -64,7 +64,7 @@ final class NativeBrowserIdentity: NSObject, URLSessionDelegate, URLSessionTaskD
 
     /// Issues the certificate again with the same key when less than `threshold` of it is left; the
     /// fingerprint must not change (it identifies the device to the OJ).
-    func renewIfNeeded(threshold: TimeInterval, now: Date = Date()) async throws {
+    func renewIfNeeded(threshold: TimeInterval, now: Date = ServerClock.shared.now()) async throws {
         guard let profile = NativeBrowserProfile.bundled, origin == profile.gatewayURL, let before = fingerprint else { return }
         let selected = try await NativeBrowserProvisioning.prepare(profile: profile, renewBefore: threshold, now: now)
         var cert: SecCertificate?

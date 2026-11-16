@@ -287,7 +287,7 @@ enum Watchdog {
         // Audit M-17: a crash and a kill look the same from here: say what is known.
         let body: [String: Any] = ["events": [["type": "watchdog_app_killed",
                                                "detail": "FairPlay ended while locked (force-quit or crash)",
-                                               "client_time": iso.string(from: Date())]]]
+                                               "client_time": iso.string(from: ServerClock.shared.now())]]]
         var req = URLRequest(url: Config.serverURL.appendingPathComponent("api/student/attempts/\(parts[0])/events"),
                              timeoutInterval: 8)
         req.httpMethod = "POST"
