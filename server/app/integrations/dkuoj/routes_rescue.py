@@ -4,7 +4,7 @@ student, give a locked Mac its offline exit code. Prefix /api/integrations/dkuoj
 
 Every call needs an editor of the exam as acting user, answers `Cache-Control: no-store`
 and leaves a class event plus, when the student has an attempt, an integrity event naming
-the acting user and the reason the professor typed. Only exams of source "dkuoj" can be
+the acting user and, when one was sent, the reason. Only exams of source "dkuoj" can be
 reached (routes_v2._exam_by_key), and only this exam's attempt of the student.
 """
 from __future__ import annotations
@@ -50,9 +50,12 @@ def _out(body: dict) -> JSONResponse:
     return JSONResponse(body, headers=NO_STORE)
 
 
-def _reason(data: dict, required: bool = True) -> str:
+def _reason(data: dict, required: bool = False) -> str:
+    """The reason is optional since 2026-11: a missing or empty one is "" (the audit line already names the
+    acting user, the student and the minutes); a given one is kept for old clients. `required` is kept only for
+    callers that still want to insist."""
     v = data.get("reason")
-    if v is None and not required:
+    if v is None or (isinstance(v, str) and not v.strip() and not required):
         return ""
     if not isinstance(v, str) or not v.strip():
         raise HTTPException(400, "reason is required (1 to 200 characters)")

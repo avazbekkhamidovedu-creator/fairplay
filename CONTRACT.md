@@ -940,7 +940,7 @@ ids of external exams are opaque (`q_` + 16 hex).
   false, source, name}` when not connected).
 
 ### Professor rescue actions (2026-10-30)
-Five endpoints let a professor help a student in an emergency without restarting them. Each is called with the student's exam key and NetID, requires an editor of the exam, answers `Cache-Control: no-store`, and audits the acting user and reason.
+Five endpoints let a professor help a student in an emergency without restarting them. Each is called with the student's exam key and NetID, requires an editor of the exam, answers `Cache-Control: no-store`, and audits the acting user (and the reason, when one is sent: `reason` is optional since 2026-11 and may be missing, null or empty; a sent one is at most 200 characters).
 - **Release device** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/release-device`) body `{"reason": "..."}` → frees the device, unbinds the access code, and keeps answers and timer. Rate limit: 3 per student per exam, counted over 30 days.
 - **Reissue code** (POST `/api/integrations/dkuoj/v1/exams/<key>/access-codes/reissue`) body `{"netid": "...", "reason": "..."}` → issues a new code, returned once in the response. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
 - **Reopen** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/reopen`) body `{"minutes": 5..60, "reason": "..."}` → restores submitted answers, frees device, sets a new deadline. Allowed once per attempt, while live and not graded.

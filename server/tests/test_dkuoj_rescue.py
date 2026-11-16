@@ -216,8 +216,15 @@ def test_release_refuses_handed_in_and_limits_to_three(oj, room):
     assert r.status_code == 409
 
 
-@pytest.mark.parametrize("data", [{}, {"reason": ""}, {"reason": "   "}, {"reason": 5}, {"reason": "x" * 201}])
-def test_reason_is_required_and_bounded(oj, room, data):
+@pytest.mark.parametrize("data", [{}, {"reason": None}, {"reason": ""}, {"reason": "   "}])
+def test_reason_is_optional(oj, room, data):
+    sign_in(oj, room[1]["carol"], DEV_A)
+    assert call(oj, "POST", f"{STU}/carol/release-device", data).status_code == 200
+    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 5, **data}).status_code == 200
+
+
+@pytest.mark.parametrize("data", [{"reason": 5}, {"reason": "x" * 201}])
+def test_a_reason_that_is_sent_is_still_bounded(oj, room, data):
     sign_in(oj, room[1]["carol"], DEV_A)
     assert call(oj, "POST", f"{STU}/carol/release-device", data).status_code == 400
     assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 5, **data}).status_code == 400

@@ -307,7 +307,7 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
 
 ### Professor rescue actions (2026-10-30)
 
-Five endpoints let a professor fix student emergencies without restarting them. All answers and timer stay when appropriate. Every call requires a reason (a string, 1–200 characters), an audit event with the acting user and reason, and replies `Cache-Control: no-store`.
+Five endpoints let a professor fix student emergencies without restarting them. All answers and timer stay when appropriate. Every call writes an audit event with the acting user (and the reason when one is sent: since 2026-11 `reason` is optional, may be missing, null or empty, and a given one is a string of at most 200 characters), and replies `Cache-Control: no-store`.
 
 - **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"none"}` (200 if not handed in; 409 if submitted; `"none"` = the student had no attempt, older servers said `"code"`). Frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device after signing in again. Rate limit: 3 per student per exam, counted over 30 days.
 
