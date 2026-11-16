@@ -143,7 +143,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         var nativeTransport: ((URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void)?
         var policyKey: Data?
         var deviceFingerprint: String?
-        var now: () -> Date = { ServerClock.shared.now() }
+        var now: () -> Date = Date.init
         var monotonic: () -> NativeExit.Monotonic = NativeExit.systemMonotonic
         var random: () -> Double = { Double.random(in: 0..<1) }
         var schedule: (TimeInterval, @escaping () -> Void) -> () -> Void = { delay, fire in
@@ -162,6 +162,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     release: { LockdownController.shared.releaseNativeLock() },
                     load: { $0.load(URLRequest(url: $1)) })
             effects.setup = .live
+            effects.now = { ServerClock.shared.now() }   // the real app uses the server-corrected clock; tests keep the injectable default
             effects.presentLeave = { NativeLeaveSheet.present($0, in: $1) }
             return effects
         }
