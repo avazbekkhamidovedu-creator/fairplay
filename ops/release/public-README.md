@@ -2,6 +2,10 @@
 
 Secure exam app for universities. This repository hosts the app downloads.
 
+## What's new in 0.8.9
+
+- Duke Box now opens during open-book exams: FairPlay allows Box's last sign-in step (the page Box sends you back to after Duke sign-in), which was being blocked, so the sign-in could never finish. Only that one step is added; the rest of Box and your personal Box pages stay blocked.
+
 ## What's new in 0.8.8
 
 - A wrong date or time on your computer no longer stops FairPlay or an exam: FairPlay uses the exam server's time.
