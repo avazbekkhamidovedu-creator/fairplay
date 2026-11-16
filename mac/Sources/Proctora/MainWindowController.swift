@@ -805,6 +805,9 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             SettingsPane.open((body["pane"] as? String) ?? "")
         case "unlock":
             requestUnlock()
+        case "checkUpdate":
+            // Pilot 0.8.8: the page got a 426: look for the update now (not at the 6 h timer).
+            if !LockdownController.shared.isLocked { Updater.shared.check(now: true) }
         case "installUpdate":
             // 2026-10-22: in-app update (Updater.swift); refused while locked or in an exam.
             Updater.shared.install { [weak self] message in self?.send(message) }
@@ -972,6 +975,14 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
             decisionHandler(.cancel)
             noteRoute(url)        // a sign-out still clears the other sites' sign-ins
             DispatchQueue.main.async { [weak self] in self?.showNativeHome("navigation to the code route") }
+            return
+        }
+        // Pilot 0.8.8: the buttons of our own "Update FairPlay" screen (never from another page).
+        if url.scheme?.lowercased() == "fairplay-update" {
+            decisionHandler(.cancel)
+            if updateScreenShown, webView === self.webView, navigationAction.targetFrame?.isMainFrame ?? true {
+                updateScreenAction(url.host ?? "")
+            }
             return
         }
         // 2026-10-23: the bundled files are never a page or a frame (only subresources).
@@ -1381,6 +1392,8 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
     func showUpdateRequired(minimum: String) {
         DebugLog.log("app", "server requires FairPlay \(minimum) or newer (this is \(Config.version))")
         guard !LockdownController.shared.isLocked else { return }
+        // Pilot 0.8.8: look for the update right now so the button below can work.
+        Updater.shared.check(now: true)
         let safe = minimum.filter { $0.isNumber || $0 == "." }
         let html = """
         <!doctype html><html><head><meta charset="utf-8"><style>
@@ -1389,17 +1402,75 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         .card{background:#fff;border-radius:14px;padding:32px 36px;max-width:460px;
         box-shadow:0 2px 12px rgba(0,0,0,.08)}h1{font-size:22px;margin:0 0 10px}
         p{color:#4b5563;line-height:1.5}
+        a.btn{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 18px;border-radius:9px;font-weight:600}
+        a.btn[hidden]{display:none}
         </style></head><body><div class="card">
         \(BrandMark.svg(size: 44))
         <h1>Update FairPlay</h1>
         <p>This is FairPlay \(Config.version). Your exams need version \(safe.isEmpty ? "a newer one" : safe) or newer.</p>
-        <p>Download the new version from your course page or ask your teacher, then open FairPlay again.</p>
+        <p><a id="fp-btn" class="btn" href="fairplay-update://install" hidden>Update now</a></p>
+        <p id="fp-note">Looking for the new version...</p>
+        <p>Or download it yourself and open FairPlay again:<br>
+        <a href="fairplay-update://download">\(Updater.releasePage.absoluteString)</a></p>
+        <script>
+        window.fpUpdate=function(kind,text){
+          var b=document.getElementById('fp-btn'),n=document.getElementById('fp-note');
+          n.textContent=text;
+          b.hidden=(kind!=='ready'&&kind!=='failed');
+          if(kind==='failed'){b.textContent='Try again';}
+        };
+        </script>
         </div></body></html>
         """
         loadOwnHTML(html)
+        updateScreenShown = true
+    }
+
+    /// True while our own "Update FairPlay" page is the one on screen.
+    private var updateScreenShown = false
+
+    /// Tell the "Update FairPlay" page what the updater knows now (no-op on other pages).
+    func refreshUpdateScreen() {
+        guard updateScreenShown, !LockdownController.shared.isLocked else { return }
+        let js: String
+        if let u = Updater.shared.available {
+            js = "window.fpUpdate&&window.fpUpdate('ready','FairPlay \(u.version) is ready. FairPlay installs it and opens again by itself.')"
+        } else {
+            js = "window.fpUpdate&&window.fpUpdate('none','Could not find the update here. Use the download link below.')"
+        }
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    private func updateScreenAction(_ action: String) {
+        guard !LockdownController.shared.isLocked else { return }
+        switch action {
+        case "install":
+            Updater.shared.install { [weak self] message in
+                guard let self, self.updateScreenShown else { return }
+                var js = ""
+                switch message["type"] as? String {
+                case "updateProgress":
+                    js = "window.fpUpdate&&window.fpUpdate('busy','Updating... FairPlay opens again by itself.')"
+                case "updateFailed":
+                    let reason = (message["reason"] as? String) ?? ""
+                    let text = reason == "locked" ? "Cannot update during an exam."
+                        : reason == "busy" ? "Updating... FairPlay opens again by itself."
+                        : "The update did not work. Try again, or use the download link below."
+                    js = "window.fpUpdate&&window.fpUpdate('\(reason == "busy" ? "busy" : "failed")','\(text)')"
+                default: break
+                }
+                if !js.isEmpty { self.webView.evaluateJavaScript(js, completionHandler: nil) }
+            }
+        case "download":
+            DebugLog.log("update", "open the download page")
+            NSWorkspace.shared.open(Updater.releasePage)
+        default:
+            break
+        }
     }
 
     private func loadOwnHTML(_ html: String) {
+        updateScreenShown = false
         ownPageLoadPending = true
         webView.loadHTMLString(html, baseURL: nil)
     }

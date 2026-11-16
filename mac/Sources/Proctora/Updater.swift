@@ -4,8 +4,11 @@ import Security
 
 /// 2026-10-22: in-app updates (release builds only).
 ///
-/// Check: a few seconds after launch and then every 6 hours, GET the latest release of the
-/// public download repo (GitHub API). An update is offered only when
+/// Check: a few seconds after launch and then every 6 hours, ask the exam server first
+/// (GET api/app/latest?platform=mac, ETag kept on disk), and GitHub's API only when the server
+/// gives no answer (older server: 404; offline; error), after a random delay. Pilot 0.8.8:
+/// this keeps a campus full of Macs off GitHub's 60-requests-per-hour limit. A 426 from the
+/// server checks again at once. An update is offered only when
 ///  - the tag is vX.Y.Z or vX.Y.Z.W and newer than Config.version,
 ///  - it has exactly one asset "FairPlay-Mac.zip" whose download URL is
 ///    https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/<tag>/FairPlay-Mac.zip,
@@ -44,6 +47,28 @@ final class Updater {
     static let appName = "FairPlay.app"
     static let checkEvery: TimeInterval = 6 * 3600
     static let retryAfterFailure: TimeInterval = 3600
+    /// Largest random wait before the GitHub fallback (many Macs behind one address).
+    static let githubJitter: TimeInterval = 20 * 60
+
+    /// "+-25 %" around `seconds`, so Macs that started together do not stay in step.
+    static func jittered(_ seconds: TimeInterval, random: Double = Double.random(in: -0.25...0.25)) -> TimeInterval {
+        seconds * (1 + random)
+    }
+
+    /// The last answer of each source and its ETag, kept across launches so a 304 costs nothing.
+    struct Cache {
+        var defaults: UserDefaults = .standard
+        func load(_ source: String) -> (etag: String?, body: Data)? {
+            guard let body = defaults.data(forKey: "FairPlayUpdateBody." + source) else { return nil }
+            return (defaults.string(forKey: "FairPlayUpdateETag." + source), body)
+        }
+        func save(_ source: String, etag: String?, body: Data) {
+            defaults.set(body, forKey: "FairPlayUpdateBody." + source)
+            if let etag { defaults.set(etag, forKey: "FairPlayUpdateETag." + source) }
+            else { defaults.removeObject(forKey: "FairPlayUpdateETag." + source) }
+        }
+    }
+    static var cache = Cache()
 
     /// The newer release, once a check found one (main thread).
     private(set) var available: Release?
@@ -51,11 +76,11 @@ final class Updater {
     private(set) var installing = false
     /// Called on the main thread when `available` changes (the window re-sends "state").
     var onAvailable: (() -> Void)?
+    /// Called on the main thread after every finished check, found or not (the 426 screen uses it).
+    var onChecked: (() -> Void)?
 
     private var timer: Timer?
     private var checking = false
-    private var etag: String?
-    private var lastBody: Data?
 
     private static var userAgent: String { "FairPlay/\(Config.version) (Mac)" }
 
@@ -83,7 +108,9 @@ final class Updater {
             DebugLog.log("update", "dev build: no update checks")
             return
         }
-        schedule(after: 5 + Double.random(in: 0...10))
+        // The server answers in a few ms (and with a 304 most times): ask early so a Mac
+        // below the minimum is offered the update right at launch.
+        schedule(after: 2 + Double.random(in: 0...6))
     }
 
     private func schedule(after seconds: TimeInterval) {
@@ -101,49 +128,98 @@ final class Updater {
         !locked && !examBound && !devicePreview
     }
 
-    func check() {
+    /// `now`: after a 426 -- no waiting, including before the GitHub fallback.
+    func check(now: Bool = false) {
         guard !Config.isDevBuild, !checking, !installing else { return }
         guard Updater.mayUpdateNow(locked: LockdownController.shared.isLocked || LockdownController.shared.nativeLockActive, examBound: false,
                                    devicePreview: Updater.devicePreview) else {
             DebugLog.log("update", "check skipped while locked or in a device test")
-            schedule(after: Updater.retryAfterFailure)
+            schedule(after: Updater.jittered(Updater.retryAfterFailure))
             return
         }
         checking = true
+        askServer(immediately: now)
+    }
+
+    private func askServer(immediately: Bool) {
+        var comps = URLComponents(url: Config.serverURL.appendingPathComponent("api/app/latest"), resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "platform", value: "mac")]
+        guard let url = comps?.url else { fallBackToGitHub(immediately: immediately); return }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue(Config.version, forHTTPHeaderField: "X-FairPlay-Version")
+        req.setValue("mac", forHTTPHeaderField: "X-FairPlay-Platform")
+        req.setValue(Updater.userAgent, forHTTPHeaderField: "User-Agent")
+        let stored = Updater.cache.load("server")
+        if let etag = stored?.etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        DebugLog.log("update", "asking the exam server \(url.absoluteString)")
+        Net.session.dataTask(with: req) { [weak self] data, response, error in
+            let http = response as? HTTPURLResponse
+            if let t = http?.value(forHTTPHeaderField: "X-Server-Time") { ServerClock.shared.update(serverTime: t) }
+            let tag = http?.value(forHTTPHeaderField: "ETag")
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch http?.statusCode {
+                case 200?:
+                    guard let data else { self.fallBackToGitHub(immediately: immediately); return }
+                    Updater.cache.save("server", etag: tag, body: data)
+                    self.finish(release: Updater.parseManifest(json: data, serverHost: Config.serverURL.host))
+                case 304?:
+                    guard let body = stored?.body else { self.fallBackToGitHub(immediately: immediately); return }
+                    self.finish(release: Updater.parseManifest(json: body, serverHost: Config.serverURL.host))
+                default:
+                    let what = http.map { "HTTP \($0.statusCode)" } ?? "no response (\(error?.localizedDescription ?? "?"))"
+                    DebugLog.log("update", "the exam server gave no update answer (\(what)): GitHub next")
+                    self.fallBackToGitHub(immediately: immediately)
+                }
+            }
+        }.resume()
+    }
+
+    private func fallBackToGitHub(immediately: Bool) {
+        let wait = immediately ? 0 : Double.random(in: 0...Updater.githubJitter)
+        DebugLog.log("update", "GitHub check in \(Int(wait)) s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in self?.askGitHub() }
+    }
+
+    private func askGitHub() {
         var req = URLRequest(url: Updater.latestAPI)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         req.setValue(Updater.userAgent, forHTTPHeaderField: "User-Agent")
         // A 304 answer doesn't count against GitHub's hourly limit for this address.
-        if let etag, lastBody != nil { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        let stored = Updater.cache.load("github")
+        if let etag = stored?.etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         DebugLog.log("update", "checking \(Updater.latestAPI.absoluteString)")
         checkSession.dataTask(with: req) { [weak self] data, response, error in
             let http = response as? HTTPURLResponse
             let tag = http?.value(forHTTPHeaderField: "ETag")
             DispatchQueue.main.async {
-                self?.finishCheck(status: http?.statusCode, etag: tag, data: data, error: error)
+                guard let self else { return }
+                var body: Data?
+                if http?.statusCode == 200, let data {
+                    body = data
+                    Updater.cache.save("github", etag: tag, body: data)
+                } else if http?.statusCode == 304 {
+                    body = stored?.body
+                }
+                guard let body else {
+                    let what = http.map { "HTTP \($0.statusCode)" } ?? "no response (\(error?.localizedDescription ?? "?"))"
+                    DebugLog.log("update", "check failed: \(what); next try in about 1 h")
+                    self.checking = false
+                    self.schedule(after: Updater.jittered(Updater.retryAfterFailure))
+                    self.onChecked?()
+                    return
+                }
+                self.finish(release: Updater.parseRelease(json: body))
             }
         }.resume()
     }
 
-    private func finishCheck(status: Int?, etag newTag: String?, data: Data?, error: Error?) {
+    private func finish(release: Release?) {
         checking = false
-        var body: Data?
-        if status == 200, let data {
-            body = data
-            lastBody = data
-            etag = newTag
-        } else if status == 304 {
-            body = lastBody
-        }
-        guard let body else {
-            let what = status.map { "HTTP \($0)" } ?? "no response (\(error?.localizedDescription ?? "?"))"
-            DebugLog.log("update", "check failed: \(what); next try in 1 h")
-            schedule(after: Updater.retryAfterFailure)
-            return
-        }
-        schedule(after: Updater.checkEvery)
-        let found = Updater.parseRelease(json: body).flatMap { Updater.isNewer($0.version, than: Config.version) ? $0 : nil }
+        schedule(after: Updater.jittered(Updater.checkEvery))
+        let found = release.flatMap { Updater.isNewer($0.version, than: Config.version) ? $0 : nil }
         if let found {
             DebugLog.log("update", "FairPlay \(found.version) is available (this is \(Config.version))")
         } else {
@@ -153,6 +229,7 @@ final class Updater {
             available = found
             onAvailable?()
         }
+        onChecked?()
     }
 
     // MARK: - Parsing and decisions (pure, tested)
@@ -207,6 +284,25 @@ final class Updater {
         guard let raw = asset["browser_download_url"] as? String, let url = URL(string: raw),
               isAllowedAssetURL(url, tag: tag),
               let digest = asset["digest"] as? String, let sha = sha256(fromDigest: digest) else { return nil }
+        return Release(version: ver, zipURL: url, sha256: sha)
+    }
+
+    /// The exam server's GET /api/app/latest answer -> the Mac update in it, or nil when anything
+    /// is off. The file must be on this repo's GitHub release path or on the exam server's own
+    /// host, over https, and come with a 64-hex SHA-256 (checked again after the download).
+    static func parseManifest(json: Data, serverHost: String?) -> Release? {
+        guard let obj = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any] else { return nil }
+        if let platform = obj["platform"] as? String, platform != "mac" { return nil }
+        guard let ver = obj["version"] as? String, isPlainVersion(ver),
+              let raw = obj["url"] as? String, let url = URL(string: raw),
+              let shaRaw = obj["sha256"] as? String else { return nil }
+        let sha = shaRaw.lowercased()
+        guard sha.count == 64, sha.unicodeScalars.allSatisfy({ ($0.value >= 48 && $0.value <= 57) || ($0.value >= 97 && $0.value <= 102) })
+        else { return nil }
+        let onGitHub = isAllowedAssetURL(url, tag: "v" + ver) || isAllowedAssetURL(url, tag: ver)
+        let onServer = url.scheme?.lowercased() == "https" && serverHost != nil
+            && url.host?.lowercased() == serverHost?.lowercased() && url.user == nil && url.password == nil
+        guard onGitHub || onServer else { return nil }
         return Release(version: ver, zipURL: url, sha256: sha)
     }
 

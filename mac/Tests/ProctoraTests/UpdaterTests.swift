@@ -233,3 +233,55 @@ private func releaseJSON(tag: String = "v0.5.4",
         #expect(!Updater.isReplaceable(URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/ABC/d/FairPlay.app")))
     }
 }
+
+// Pilot 0.8.8: the exam server's /api/app/latest answer, the on-disk ETag cache and the jitter.
+@Suite struct UpdaterServerManifestTests {
+    private let sha = String(repeating: "ab12", count: 16)
+    private func manifest(version: String = "0.8.8", url: String? = nil, sha: String? = nil, platform: String = "mac") -> Data {
+        let u = url ?? "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v\(version)/FairPlay-Mac.zip"
+        let obj: [String: Any] = ["platform": platform, "version": version, "url": u,
+                                  "sha256": sha ?? self.sha, "min_version": "0.8.7"]
+        return try! JSONSerialization.data(withJSONObject: obj)
+    }
+
+    @Test func goodManifestParses() {
+        let r = Updater.parseManifest(json: manifest(), serverHost: "exam.example.edu")
+        #expect(r?.version == "0.8.8")
+        #expect(r?.sha256 == sha)
+    }
+
+    @Test func fileOnTheExamServerIsAllowedOtherHostsAreNot() {
+        #expect(Updater.parseManifest(json: manifest(url: "https://exam.example.edu/dl/FairPlay-Mac.zip"), serverHost: "exam.example.edu") != nil)
+        #expect(Updater.parseManifest(json: manifest(url: "http://exam.example.edu/dl/FairPlay-Mac.zip"), serverHost: "exam.example.edu") == nil)
+        #expect(Updater.parseManifest(json: manifest(url: "https://evil.example.com/FairPlay-Mac.zip"), serverHost: "exam.example.edu") == nil)
+    }
+
+    @Test func missingOrBadFieldsMeanNoUpdate() {
+        #expect(Updater.parseManifest(json: manifest(sha: ""), serverHost: nil) == nil)
+        #expect(Updater.parseManifest(json: manifest(sha: "xyz"), serverHost: nil) == nil)
+        #expect(Updater.parseManifest(json: manifest(version: "nightly"), serverHost: nil) == nil)
+        #expect(Updater.parseManifest(json: manifest(platform: "windows"), serverHost: nil) == nil)
+        #expect(Updater.parseManifest(json: Data("[]".utf8), serverHost: nil) == nil)
+    }
+
+    @Test func etagAndBodySurviveInTheCache() {
+        let suite = "fp-update-test-\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: suite)!
+        defer { d.removePersistentDomain(forName: suite) }
+        let c = Updater.Cache(defaults: d)
+        #expect(c.load("server") == nil)
+        c.save("server", etag: "\"abc\"", body: Data("x".utf8))
+        #expect(c.load("server")?.etag == "\"abc\"")
+        #expect(c.load("server")?.body == Data("x".utf8))
+        #expect(c.load("github") == nil)
+        c.save("server", etag: nil, body: Data("y".utf8))
+        #expect(c.load("server")?.etag == nil)
+    }
+
+    @Test func jitterStaysWithinAQuarter() {
+        #expect(Updater.jittered(3600, random: -0.25) == 2700)
+        #expect(Updater.jittered(3600, random: 0.25) == 4500)
+        let any = Updater.jittered(3600)
+        #expect(any >= 2700 && any <= 4500)
+    }
+}

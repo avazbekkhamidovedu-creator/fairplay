@@ -105,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         // 2026-10-22: release builds look for a newer FairPlay now and every 6 hours.
         Updater.shared.onAvailable = { [weak wc] in wc?.sendState() }
+        Updater.shared.onChecked = { [weak wc] in wc?.refreshUpdateScreen() }
         Updater.shared.start()
         // Plan M4: answers sealed offline last time go to the server before anything else.
         if Sealed.hasPending {
