@@ -45,6 +45,9 @@ SWAP_FINAL_SAVE_S = 120
 APP_GAP_S = 20
 NO_APP_SIGNAL_S = 45
 FLAG_REPEAT_S = 300
+# Pilot 0.8.8: a client time this far from the server's is a note for the teacher, not a refusal.
+CLOCK_OFF_S = 300
+CLOCK_OFF_REPEAT_S = 1800
 LIVE_TTL = 26 * 3600
 
 
@@ -82,7 +85,7 @@ SERVER_EVENT_TYPES = frozenset({
     "unlocked_in_exam", "emergency_exit", "emergency_exit_rejected", "device_released",
     "device_bound", "device_key_upgraded", "late_submission", "offline_key_requested_twice",
     "offline_exit_code_issued", "event_limit_reached", "off_console", "secure_input_other_app",
-    "network_changed",
+    "network_changed", "clock_off", "sealed_clock_off",
     # S1-S6 (2026-10-20)
     "sealed_submit", "resume_requested", "resume_approved", "swap_requested", "swap_approved",
     "weak_lock",

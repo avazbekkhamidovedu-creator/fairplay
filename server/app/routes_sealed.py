@@ -70,9 +70,12 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
     a = await _own_attempt(session, aid, p)
     seal, answers = open_seal(ac.settings_of(request).secret, aid, body)
     now = utcnow()
-    if seal.sealed_at < a.started_at:
-        raise HTTPException(422, "The sealed time is outside this exam")
     await _note_late(session, store, a, seal, body.proof, now)
+    if seal.sealed_at < a.started_at:
+        # Pilot 0.8.8: a Mac clock that is wrong is not a reason to lose the answers. The
+        # seal is judged as of its arrival (the server's clock) and the teacher is told.
+        await _note_before_start(session, store, a, seal, body.proof, now)
+        seal.sealed_at = now
     ahead = seal.sealed_at - now
     if ahead > timedelta(0):      # the student's clock runs fast: judge the seal as of arrival, tell the teacher
         seal.sealed_at = now
@@ -151,6 +154,13 @@ async def _note_ahead(session: AsyncSession, store, a: Attempt, proof: str, ahea
         await ac.add_event(session, store, a.id, a.exam_id, "sealed_clock_ahead",
                            f"the app's clock was {int(ahead.total_seconds())} s ahead of the server when it sealed; "
                            "the seal time was set to the arrival time")
+
+
+async def _note_before_start(session: AsyncSession, store, a: Attempt, seal: ac.Seal, proof: str, now) -> None:
+    if await ac.once_per(store, f"sealbefore:{a.id}:{proof[:32]}", SEAL_EVENT_TTL):
+        await ac.add_event(session, store, a.id, a.exam_id, "sealed_clock_off",
+                           f"the app sealed at {iso(seal.sealed_at)}, before this attempt started ({iso(a.started_at)}): "
+                           "its clock is far behind the server's; the seal time was set to the arrival time")
 
 
 async def _note_late(session: AsyncSession, store, a: Attempt, seal: ac.Seal, proof: str, now) -> None:

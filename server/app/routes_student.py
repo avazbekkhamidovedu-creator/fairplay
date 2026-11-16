@@ -821,6 +821,14 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
             and now - last["t"] <= ac.APP_GAP_S:
         raise HTTPException(409, "Old app signal")
     exam_id = meta["exam_id"]
+    # Pilot 0.8.8: the Mac's clock is not a requirement (the app signs with server-corrected
+    # time). One that still sends a wildly different time is noted for the teacher, never refused.
+    off = abs(body.ts / 1000 - now)
+    if off > ac.CLOCK_OFF_S and meta["status"] == "in_progress" \
+            and await ac.once_per(store, f"clockoff:{aid}", ac.CLOCK_OFF_REPEAT_S):
+        await ac.add_event(session, store, aid, exam_id, "clock_off",
+                           f"the app's clock differs from the server's by {int(off // 60)} min "
+                           "(the app keeps working; deadlines use the server's clock)")
     # Audit M-02: a Mac whose login session is in the background (fast user switching,
     # login window) is not locked, whatever the app says.
     checks = ac.parse_checks(body.checks)

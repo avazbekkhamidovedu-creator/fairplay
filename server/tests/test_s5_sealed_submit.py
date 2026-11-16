@@ -97,7 +97,10 @@ def test_sealed_at_must_lie_in_the_attempt(app_client, exam):
     aid = a["attempt_id"]
     _, answers = mcq_answer(qs)
     before = utcnow() - timedelta(hours=1)
-    assert post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=before)).status_code == 422
+    # Pilot 0.8.8: a clock far behind is not refused: judged as of arrival, teacher told
+    assert post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=before)).status_code == 200
+    ev = [e["type"] for e in results_row(app_client, exam)["events"]]
+    assert "sealed_clock_off" in ev
     soon = utcnow() + timedelta(seconds=60)                     # a little ahead: clamped to now
     assert post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=soon)).status_code == 200
 
