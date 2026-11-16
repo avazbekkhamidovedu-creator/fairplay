@@ -1,3 +1,13 @@
+## What's new in 0.8.8
+
+- A wrong date or time on your computer no longer stops FairPlay or an exam: FairPlay uses the exam server's time.
+- Updates come from the exam server first, so they work even when GitHub is slow or blocked. If a newer version is required, FairPlay shows a download link and an Update button.
+- When an instructor unlocks a computer, FairPlay now recovers in more cases: after the attempt was deleted, and when the computer's clock is wrong. Blocked screens say clearly what they can and cannot do.
+- Instructors: giving extra time, unlocking a device and getting an offline exit code no longer ask for a reason. The extra-time box shows the student's current total time and can be edited.
+- Open-book exams start with DKU OJ, Duke sign-in and Duke Box allowed, and the Box sign-in works.
+- Instructors see why a student is blocked (virtual machine, remote session, weaker lock, blocked screen, restart).
+- Windows: connection, lock and update problems are saved in fairplay-diag.log for support; the installer includes WebView2.
+
 ## What's new in 0.8.7
 
 - "Test my device" covers the whole screen on every monitor, never asks you to close other apps, and tells you clearly (and returns to the home screen) if it cannot cover the screen.
