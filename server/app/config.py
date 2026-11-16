@@ -231,6 +231,23 @@ class Settings:
         default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
     min_app_version_ipad: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_IPAD", "").strip())
 
+    # Pilot 0.8.8: what GET /api/app/latest answers (app/app_update.py). Each value, when set,
+    # wins over what the server learned from GitHub, so an operator can pin a release by hand.
+    # All empty = the server asks GitHub (at most every 10 min) and caches the answer.
+    latest_app_version_mac: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_LATEST_APP_VERSION_MAC", "").strip())
+    latest_app_version_windows: str = field(
+        default_factory=lambda: os.environ.get("FAIRPLAY_LATEST_APP_VERSION_WINDOWS", "").strip())
+    app_update_url_mac: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_URL_MAC", "").strip())
+    app_update_url_windows: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_URL_WINDOWS", "").strip())
+    app_update_sha256_mac: str = field(
+        default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_SHA256_MAC", "").strip().lower())
+    app_update_sha256_windows: str = field(
+        default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_SHA256_WINDOWS", "").strip().lower())
+    # "owner/repo" of the public download repo; "off" = never call GitHub from the server.
+    app_update_github: str = field(default_factory=lambda: os.environ.get(
+        "FAIRPLAY_APP_UPDATE_GITHUB", "avazbekkhamidovedu-creator/fairplay-download").strip())
+    github_token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", "").strip(), repr=False)
+
     # Oldest app version that may start a Canvas exam, per platform. "" = Canvas exams are
     # not supported on that platform yet (the start is refused). An env var set to "" turns
     # the Mac default off.

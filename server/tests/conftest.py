@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("FAIRPLAY_FEATURES", "scan,lms,practice")
 os.environ.setdefault("FAIRPLAY_BROWSER_GATE", "off")
 os.environ.setdefault("FAIRPLAY_STUDENT_GRADES", "1")
+# The suite never calls GitHub (the update endpoint, app/app_update.py).
+os.environ.setdefault("FAIRPLAY_APP_UPDATE_GITHUB", "off")
 
 from app.config import Settings  # noqa: E402
 from app.main import create_app  # noqa: E402

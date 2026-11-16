@@ -206,6 +206,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"mac": settings.min_app_version("mac"), "windows": settings.min_app_version("windows"),
                 "ipad": settings.min_app_version("ipad"), "server_time": iso(utcnow())}
 
+    @app.get("/api/app/latest")
+    async def app_latest(request: Request, platform: str = "mac"):
+        # Pilot 0.8.8: the apps' updaters ask here first, not api.github.com (app_update.py).
+        from . import app_update
+        from .store import get_store
+        return await app_update.latest_response(request, get_store(), settings, platform.strip().lower(),
+                                                fetch=getattr(app.state, "app_update_fetch", None))
+
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
                    include_in_schema=False)
     async def api_not_found(rest: str):
