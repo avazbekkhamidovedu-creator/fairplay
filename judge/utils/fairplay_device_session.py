@@ -625,15 +625,13 @@ def confirm_completed(*, session_id, user_id, fingerprint, browser_digest, keep_
 
 
 @transaction.atomic
-def instructor_unlock(*, contest, username, actor, reason, resumable=False):
+def instructor_unlock(*, contest, username, actor, reason='', resumable=False):
     """Revoke the live device session. `resumable` is "Unlock student device": the attempt is not ended and the
     student may start again by themselves, so it writes 'unlock-resumable'; every other unlock writes 'unlock-device',
     which keeps meaning that the attempt ended (a reopen is needed)."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may unlock a device.')
-    reason = reason.strip()
-    if not 1 <= len(reason) <= 300:
-        raise DeviceSessionDenied('A reason of at most 300 characters is required.')
+    reason = ((reason or '').strip() or 'Unlocked by instructor %s' % actor.username)[:300]
     profile = Profile.objects.select_for_update().filter(user__username=username).first()
     if profile is None:
         raise NoActiveDevice('No active device for this student.')
@@ -659,7 +657,7 @@ def instructor_unlock(*, contest, username, actor, reason, resumable=False):
 
 
 @transaction.atomic
-def instructor_unlock_end(*, contest, username, actor, reason):
+def instructor_unlock_end(*, contest, username, actor, reason=''):
     """Unlock the device and end the attempt: the student is also detached from the exam's participation."""
     session = instructor_unlock(contest=contest, username=username, actor=actor, reason=reason)
     release_attachment(session, force=True)
@@ -683,7 +681,7 @@ def default_reopen_minutes(contest, username):
 
 
 @transaction.atomic
-def instructor_unlock_and_reopen(*, contest, username, actor, minutes, reason):
+def instructor_unlock_and_reopen(*, contest, username, actor, minutes, reason=''):
     """Unlock the student's device for this exam, if one is active, and grant the new session in one step."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may unlock a device.')
@@ -712,12 +710,13 @@ def abort_device(*, session_id, user_id, fingerprint, browser_digest):
 
 
 @transaction.atomic
-def instructor_reopen(*, contest, username, actor, minutes, reason):
+def instructor_reopen(*, contest, username, actor, minutes, reason=''):
     """Grant one new native session without erasing the previous terminal receipt."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may reopen it.')
-    if type(minutes) is not int or not 1 <= minutes <= 1440 or not 1 <= len(reason.strip()) <= 300:
-        raise DeviceSessionDenied('Provide 1–1440 minutes and a reason of at most 300 characters.')
+    if type(minutes) is not int or not 1 <= minutes <= 1440:
+        raise DeviceSessionDenied('Provide a whole number of minutes from 1 to 1440.')
+    reason = ((reason or '').strip() or 'Reopened by instructor %s' % actor.username)[:300]
     profile = Profile.objects.select_for_update().filter(user__username=username).first()
     if profile is None:
         raise DeviceSessionDenied('No native attempt exists for this student.')
@@ -748,12 +747,12 @@ def instructor_reopen(*, contest, username, actor, minutes, reason):
 
 
 @transaction.atomic
-def instructor_extra_time(*, contest, username, actor, minutes, reason):
+def instructor_extra_time(*, contest, username, actor, minutes, reason=''):
     """Add minutes to the end of a student who is writing now, by moving real_start (timed exams only)."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may give extra time.')
-    if type(minutes) is not int or not 1 <= minutes <= 1440 or not 1 <= len(reason.strip()) <= 300:
-        raise DeviceSessionDenied('Provide 1–1440 minutes and a reason of at most 300 characters.')
+    if type(minutes) is not int or not 1 <= minutes <= 1440:
+        raise DeviceSessionDenied('Provide a whole number of minutes from 1 to 1440.')
     if contest.time_limit is None:
         raise DeviceSessionDenied('This exam has no per-student time limit. Extend the exam end instead.')
     profile = Profile.objects.select_for_update().filter(user__username=username).first()
@@ -769,7 +768,8 @@ def instructor_extra_time(*, contest, username, actor, minutes, reason):
     if participation.end_time >= contest.end_time:
         raise DeviceSessionDenied('This student already has time until the exam end.')
     extend_participation(participation, participation.end_time + timedelta(minutes=minutes))
-    FairPlayDeviceAudit.objects.create(session=session, actor=actor, action='extra-time', reason=reason.strip())
+    FairPlayDeviceAudit.objects.create(session=session, actor=actor, action='extra-time',
+                                      reason=('Extra time +%d min by %s' % (minutes, actor.username)))
     return session
 
 

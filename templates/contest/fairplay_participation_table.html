@@ -32,7 +32,7 @@
                 <td class="fp-status{% if s.state == 'in_progress' %} fp-status-in-progress{% endif %}">{{ s.short_status }}{% for note in s.notes %}<br><small class="fp-note">{{ note }}</small>{% endfor %}</td>
                 <td class="fp-cell">
                     <button type="button" class="fp-kebab" aria-label="{{ _('Actions') }}" aria-haspopup="menu" aria-expanded="false"
-                            data-netid="{{ s.netid }}" data-name="{{ s.name or s.netid }}" data-state="{{ s.state }}" data-reopen-minutes="{{ s.reopen_minutes or 30 }}">&#8943;</button>
+                            data-netid="{{ s.netid }}" data-name="{{ s.name or s.netid }}" data-state="{{ s.state }}" data-reopen-minutes="{{ s.reopen_minutes or 30 }}"{% if s.total_minutes %} data-total-minutes="{{ s.total_minutes }}"{% endif %}>&#8943;</button>
                 </td>
             </tr>
         {% else %}
@@ -45,23 +45,23 @@
 <div class="fp-part-menu" id="fp-part-menu" role="menu" hidden>
 {% if fairplay_native_mode %}
     <button type="button" role="menuitem" data-action="quick-unlock" data-mode="continue" data-states="completed unlocked not_locked"
-            data-direct="1" data-reason-default="{{ _('Reopened from Participation') }}">{{ _('Reopen exam') }}</button>
-    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="in_progress" data-minutes="1" data-reason="1" data-reasons="extra-time"
+            data-direct="1">{{ _('Reopen exam') }}</button>
+    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="in_progress" data-minutes="1"
             data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
-    <button type="button" role="menuitem" data-action="offline-exit-on-record" data-mode="" data-states="not_started in_progress submitting completed unlocked reopened not_locked" data-reasons="offline-exit" data-reason-optional="1"
+    <button type="button" role="menuitem" data-action="offline-exit-on-record" data-mode="" data-states="not_started in_progress submitting completed unlocked reopened not_locked"
             data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ. You can choose the lock code shown on their screen or type it.') }}">{{ _('Offline exit code') }}</button>
     <button type="button" role="menuitem" class="fp-danger" data-action="quick-unlock" data-mode="only" data-states="in_progress completed unlocked reopened not_locked"
             data-question="{{ _('Unlock the computer of {who}? It is unlocked and returns to the start page. The attempt is not ended: the student can start the exam again. Saved answers are kept.') }}">{{ _('Unlock student device') }}</button>
 {% else %}
-    <button type="button" role="menuitem" data-action="approve" data-mode="" data-states="waiting" data-reason="1" data-reasons="approve"
+    <button type="button" role="menuitem" data-action="approve" data-mode="" data-states="waiting"
             data-question="{{ _('Approve {who} to resume the exam?') }}">{{ _('Approve resume') }}</button>
     <button type="button" role="menuitem" data-action="reopen" data-mode="" data-states="completed"
-            data-direct="1" data-minutes-default="row" data-reason-default="{{ _('Reopened from Participation') }}">{{ _('Reopen exam') }}</button>
-    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="not_started in_progress waiting" data-minutes="1" data-reason="1" data-reasons="extra-time"
+            data-direct="1" data-minutes-default="row">{{ _('Reopen exam') }}</button>
+    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="not_started in_progress waiting" data-minutes="1"
             data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
-    <button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed" data-reason="1" data-reasons="release-device"
+    <button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed"
             data-question="{{ _('Let {who} sign in again from another computer?') }}">{{ _('Move to another computer') }}</button>
-    <button type="button" role="menuitem" data-action="offline-exit" data-mode="" data-states="not_started in_progress waiting completed" data-reasons="offline-exit" data-reason-optional="1"
+    <button type="button" role="menuitem" data-action="offline-exit" data-mode="" data-states="not_started in_progress waiting completed"
             data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ.') }}">{{ _('Offline exit code') }}</button>
 {% endif %}
     <p class="fp-none" style="margin:.45em .9em;color:#777" hidden>{{ _('Nothing to do for this student.') }}</p>
@@ -73,17 +73,11 @@
     <input type="hidden" name="mode" value="">
     <input type="hidden" name="netid" value="">
     <input type="hidden" name="name" value="">
-    <input type="hidden" name="reason" value="">
     <input type="hidden" name="minutes" value="">
+    <input type="hidden" name="total_minutes" value="">
     <input type="hidden" name="confirm" value="1">
 </form>
 
-
-{% macro reason_list(key, reasons) %}<template id="fp-part-reasons-{{ key }}">{% for r in reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</template>{% endmacro %}
-{{ reason_list('approve', [_('Student was stopped by mistake'), _('Technical problem during the exam')]) }}
-{{ reason_list('release-device', [_("Student's computer failed"), _("Student's computer ran out of battery"), _('Student switched to a lab computer')]) }}
-{{ reason_list('extra-time', [_('Approved accommodation'), _('Technical problem during the exam'), _('Disruption in the room')]) }}
-{{ reason_list('offline-exit', [_('Student could not reach the server'), _('Lock stuck during the exam')]) }}
 
 <dialog id="fp-part-dialog" class="fp-dialog" aria-labelledby="fp-part-title" aria-describedby="fp-part-question">
     <form id="fp-part-dialog-form" novalidate>
@@ -93,12 +87,6 @@
             <span id="fp-part-minutes-label"></span>
             <input type="number" id="fp-part-minutes" inputmode="numeric" min="1" step="1">
         </label>
-        <label class="fp-field" id="fp-part-reason-wrap" hidden>
-            <span>{{ _('Reason') }}</span>
-            <select id="fp-part-reason"></select>
-        </label>
-        <input type="text" id="fp-part-other" maxlength="200" hidden autocomplete="off"
-               aria-label="{{ _('Reason') }}" placeholder="{{ _('Write the reason (required)') }}">
         <div class="fp-buttons">
             <button type="button" class="fp-btn fp-cancel" id="fp-part-cancel">{{ _('Cancel') }}</button>
             <button type="submit" class="fp-btn fp-confirm" id="fp-part-confirm" disabled>{{ _('Confirm') }}</button>
@@ -126,24 +114,12 @@
     var dform = document.getElementById('fp-part-dialog-form'), title = document.getElementById('fp-part-title'),
         questionEl = document.getElementById('fp-part-question'),
         minutesWrap = document.getElementById('fp-part-minutes-wrap'), minutesLabel = document.getElementById('fp-part-minutes-label'),
-        minutesIn = document.getElementById('fp-part-minutes'),
-        reasonWrap = document.getElementById('fp-part-reason-wrap'), reasonSel = document.getElementById('fp-part-reason'),
-        other = document.getElementById('fp-part-other'), confirmBtn = document.getElementById('fp-part-confirm');
-    // The preset reasons are <template> option lists, so they are escaped and translated by the template.
-    function presets(key) {
-        var tpl = document.getElementById('fp-part-reasons-' + key), out = [];
-        if (tpl && tpl.content) {
-            tpl.content.querySelectorAll('option').forEach(function (o) { out.push(o.value); });
-        }
-        return out;
-    }
+        minutesIn = document.getElementById('fp-part-minutes'), confirmBtn = document.getElementById('fp-part-confirm');
     var T = {
         minutes: {{ _('Minutes (1 to {max})')|tojson }},
-        choose: {{ _('Choose a reason...')|tojson }},
-        none: {{ _('No reason')|tojson }},
-        otherOpt: {{ _('Other...')|tojson }}
+        total: {{ _('Student time in minutes (1 to {max})')|tojson }}
     };
-    var OTHER = '__other__', maxMinutes = 0, reasonRequired = false;
+    var maxMinutes = 0, totalMode = false, currentTotal = 0;
 
     function closeDialog(value) {
         if (typeof dlg.close === 'function') { dlg.close(value); return; }
@@ -153,27 +129,11 @@
         menu.hidden = true;
         if (current) { current.setAttribute('aria-expanded', 'false'); }
     }
-    function option(value, text, selected) {
-        var o = document.createElement('option');
-        o.value = value; o.textContent = text;
-        if (selected) { o.selected = true; }
-        return o;
-    }
-    function currentReason() {
-        if (reasonWrap.hidden) { return ''; }
-        return reasonSel.value === OTHER ? other.value.trim() : reasonSel.value;
-    }
     function validate() {
         var ok = true;
         if (!minutesWrap.hidden) {
-            var n = Number(minutesIn.value);
-            ok = minutesIn.value.trim() !== '' && /^\d+$/.test(minutesIn.value.trim()) && n >= 1 && n <= maxMinutes;
-        }
-        if (!reasonWrap.hidden) {
-            var isOther = reasonSel.value === OTHER;
-            other.hidden = !isOther;
-            if (reasonRequired && !currentReason()) { ok = false; }
-            if (isOther && !other.value.trim()) { ok = false; }
+            var n = Number(minutesIn.value), v = minutesIn.value.trim();
+            ok = v !== '' && /^\d+$/.test(v) && n >= 1 && n <= (totalMode ? currentTotal + maxMinutes : maxMinutes);
         }
         confirmBtn.disabled = !ok;
     }
@@ -184,33 +144,31 @@
         title.textContent = item.textContent.trim();
         questionEl.textContent = (item.dataset.question || '').replace('{who}', who);
         minutesWrap.hidden = !item.dataset.minutes;
+        totalMode = !!(item.dataset.minutes && item.dataset.action === 'extra-time' && kebab.dataset.totalMinutes);
         if (item.dataset.minutes) {
             maxMinutes = rowDefault ? {{ fairplay_max_reopen_minutes }} : {{ fairplay_max_minutes }};
-            minutesLabel.textContent = T.minutes.replace('{max}', maxMinutes);
-            minutesIn.min = 1; minutesIn.max = maxMinutes;
-            minutesIn.value = rowDefault ? kebab.dataset.reopenMinutes : '15';
-        }
-        var key = item.dataset.reasons;
-        reasonWrap.hidden = !key;
-        other.hidden = true; other.value = '';
-        reasonRequired = !!key && !item.dataset.reasonOptional;
-        reasonSel.textContent = '';
-        if (key) {
-            var list = presets(key), def = item.dataset.reasonDefault || '';
-            if (def && list.indexOf(def) < 0) { list.unshift(def); }
-            if (!def) { reasonSel.appendChild(option('', reasonRequired ? T.choose : T.none, true)); }
-            list.forEach(function (r) { reasonSel.appendChild(option(r, r, r === def)); });
-            reasonSel.appendChild(option(OTHER, T.otherOpt, false));
+            if (totalMode) {
+                // The student's time is shown (the exam's time plus any extra already given) and is editable: the
+                // new total is what the instructor types; the server works out the extra minutes.
+                currentTotal = Number(kebab.dataset.totalMinutes);
+                minutesLabel.textContent = T.total.replace('{max}', currentTotal + maxMinutes);
+                minutesIn.min = 1; minutesIn.max = currentTotal + maxMinutes;
+                minutesIn.value = String(currentTotal);
+            } else {
+                minutesLabel.textContent = T.minutes.replace('{max}', maxMinutes);
+                minutesIn.min = 1; minutesIn.max = maxMinutes;
+                minutesIn.value = rowDefault ? kebab.dataset.reopenMinutes : '15';
+            }
         }
         validate();
         close();
         dlg.returnValue = '';
         if (typeof dlg.showModal === 'function') { dlg.showModal(); } else { dlg.setAttribute('open', ''); }
-        var field = !minutesWrap.hidden ? minutesIn : (!reasonWrap.hidden ? reasonSel : null);
+        var field = !minutesWrap.hidden ? minutesIn : null;
         (field || (confirmBtn.disabled ? dlg.querySelector('.fp-cancel') : confirmBtn)).focus();
     }
     window.addEventListener('pageshow', function () { document.getElementById('fp-part-busy').hidden = true; });
-    // One click, no dialog: the neutral defaults are filled here (reason text; minutes left empty so the server uses
+    // One click, no dialog: the neutral defaults are filled here (minutes left empty so the server uses
     // the student's remaining time or 30 minutes), then the same busy overlay and POST as a confirmed dialog.
     function submitDirect(item) {
         var kebab = current, minutes = '';
@@ -218,7 +176,6 @@
             minutes = String(Math.min(Number(kebab.dataset.reopenMinutes) || 30, {{ fairplay_max_minutes }}));
         }
         form.elements.minutes.value = minutes;
-        form.elements.reason.value = item.dataset.reasonDefault || '';
         form.elements.action.value = item.dataset.action;
         form.elements.mode.value = item.dataset.mode;
         form.elements.netid.value = kebab.dataset.netid;
@@ -230,8 +187,8 @@
     }
     function finish() {
         if (!chosen || confirmBtn.disabled) { return; }
-        form.elements.minutes.value = minutesWrap.hidden ? '' : minutesIn.value.trim();
-        form.elements.reason.value = currentReason();
+        form.elements.minutes.value = minutesWrap.hidden || totalMode ? '' : minutesIn.value.trim();
+        form.elements.total_minutes.value = totalMode ? minutesIn.value.trim() : '';
         form.elements.action.value = chosen.dataset.action;
         form.elements.mode.value = chosen.dataset.mode;
         form.elements.netid.value = opener.dataset.netid;
@@ -270,13 +227,8 @@
     });
     dform.addEventListener('submit', function (e) { e.preventDefault(); finish(); });
     dform.addEventListener('input', validate);
-    dform.addEventListener('keydown', function (e) {
-        // Enter in a drop-down does not submit by itself in every browser.
-        if (e.key === 'Enter' && e.target === reasonSel) { e.preventDefault(); finish(); }
-    });
     dform.addEventListener('change', function (e) {
         validate();
-        if (e.target === reasonSel && reasonSel.value === OTHER) { other.focus(); }
     });
     document.getElementById('fp-part-cancel').addEventListener('click', function () { closeDialog('cancel'); });
     // Esc closes a modal dialog by itself; a click on the backdrop (the dialog element itself) cancels too.

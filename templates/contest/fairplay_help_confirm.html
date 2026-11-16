@@ -16,14 +16,12 @@
         <tr><td>{{ _('Student') }}</td><td>{{ name }} ({{ netid }})</td></tr>
         {% if lock_code %}<tr><td>{{ _('Lock code') }}</td><td><span id="fairplay-confirm-lock" style="font-family: monospace">{{ lock_code }}</span>{% if lock_kind %} <small>- {{ lock_kind }}</small>{% endif %}<br>{{ _("Check that the student's screen shows this code.") }}</td></tr>{% endif %}
         {% if minutes %}<tr><td>{{ _('Minutes') }}</td><td>{{ minutes }}</td></tr>{% endif %}
-        <tr><td>{{ _('Reason') }}</td><td>{{ reason }}</td></tr>
     </table>
     <form method="post" action="{{ url('contest_fairplay_help', contest.key) }}">
         {% csrf_token %}
         <input type="hidden" name="action" value="{{ action }}">
         <input type="hidden" name="netid" value="{{ netid }}">
         <input type="hidden" name="name" value="{{ name }}">
-        <input type="hidden" name="reason" value="{{ reason }}">
         {% if minutes %}<input type="hidden" name="minutes" value="{{ minutes }}">{% endif %}
         {% if mode %}<input type="hidden" name="mode" value="{{ mode }}">{% endif %}
         {% if need_code %}

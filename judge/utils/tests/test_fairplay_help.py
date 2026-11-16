@@ -84,7 +84,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
         reopen = menu.split('data-action="reopen"')[1].split('</button>')[0]
         self.assertIn('data-direct="1"', reopen)  # one click: no question, reason or minutes dialog for Reopen exam
-        for leftover in ('data-question', 'data-reasons', 'data-minutes="1"', 'data-reason="1"'):
+        for leftover in ('data-question', 'data-minutes="1"', 'data-reason'):
             self.assertNotIn(leftover, reopen)
         self.assertNotIn('Reopen the exam for {who}', unescape(menu))
         menu = menu.replace(reopen, '')
@@ -92,21 +92,16 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         for text in ('Let {who} sign in again from another computer?', 'Approve {who} to resume the exam?', 'Give {who} extra time?'):
             self.assertIn(text, unescape(menu))
 
-    def test_classic_actions_open_the_same_dialog_with_their_reason_lists(self):
+    def test_dialog_has_no_reason_field(self):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
         self.assertNotIn('window.confirm', html)
         self.assertNotIn('window.prompt', html)
         self.assertEqual(html.count('<dialog'), 1)
         menu = html.split('id="fp-part-menu"')[1].split('<form')[0]
-        for key in ('approve', 'extra-time', 'release-device'):
-            self.assertIn('data-reasons="%s"' % key, menu)
-        self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
-        self.assertNotIn('data-reasons="reopen"', menu)
+        self.assertNotIn('data-reason', menu)
+        for leftover in ('fp-part-reason', 'Choose a reason', 'Disruption in the room', 'Write the reason'):
+            self.assertNotIn(leftover, html)
         self.assertEqual(menu.count('data-minutes="1"'), 1)  # only Give extra time asks for minutes
-        self.assertNotIn('Approved retake of a part', html)
-        self.assertNotIn('id="fp-part-reasons-reopen"', html)
-        for text in ('Disruption in the room', 's computer ran out of battery'):
-            self.assertIn(text, html)
 
     def test_classic_rows_keep_the_swap_request_reopen_code_and_hand_in_count(self):
         html = self.login(self.teacher).get(reverse('contest_participation_own', args=['fpexam'])).content.decode()
@@ -180,7 +175,8 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         key = fairplay._classic_cache_keys(self.exam, self.teacher.username)[0]
         cache.set(key, {'at': time.time(), 'exam': {'students': []}}, 900)
         self.post(self.teacher, {'action': 'approve', 'netid': 'fp_student', 'reason': '', 'confirm': '1'})
-        self.assertIsNotNone(cache.get(key))  # refused (no reason): the stale fallback is kept
+        self.assertIsNone(cache.get(key))  # accepted without a reason: the roster is asked again
+        cache.set(key, {'at': time.time(), 'exam': {'students': []}}, 900)
         self.post(self.teacher, {'action': 'approve', 'netid': 'fp_student', 'reason': 'ok', 'confirm': '1'})
         self.assertIsNone(cache.get(key))
         cache.clear()
@@ -245,18 +241,35 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.login(self.teacher).get(self.URL + '?action=release-device&netid=fp_student&confirm=1&reason=x')
         self.fp.release_device.assert_not_called()
 
-    def test_reason_is_required_for_every_action(self):
-        for action in ('approve', 'release-device', 'reopen', 'extra-time'):
-            with self.subTest(action=action):
-                for reason in ('', '   '):
-                    response = self.post(self.teacher, {'action': action, 'netid': 'fp_student', 'minutes': '10',
-                                                        'mac_code': 'ABC', 'reason': reason, 'confirm': '1'})
-                    self.assertEqual(response.status_code, 302)
-                    self.assertEqual([str(m) for m in get_messages(response.wsgi_request)],
-                                     ['Write a reason first.'])
-        for call in (self.fp.approve, self.fp.release_device, self.fp.reopen,
-                     self.fp.extra_time):
-            call.assert_not_called()
+    def test_no_reason_is_asked_and_an_automatic_one_is_sent(self):
+        for reason in ('', '   '):
+            self.confirm(self.teacher, action='release-device', reason=reason)
+        self.assertEqual(self.fp.release_device.call_count, 2)
+        for call in self.fp.release_device.call_args_list:
+            self.assertEqual(call.args[:2], ('fpexam', 'fp_student'))
+            self.assertIn(self.teacher.username, call.args[2])
+        self.confirm(self.teacher, action='approve', reason='')
+        self.assertIn(self.teacher.username, self.fp.approve.call_args.args[2])
+
+    def test_extra_time_from_a_new_total_is_the_difference(self):
+        from datetime import timedelta
+        self.exam.time_limit = timedelta(minutes=60)
+        self.exam.save()
+        self.confirm(self.teacher, action='extra-time', total_minutes='75')
+        self.assertEqual(self.fp.extra_time.call_args.args[:3], ('fpexam', 'fp_student', 15))
+        self.assertIn(self.teacher.username, self.fp.extra_time.call_args.args[3])
+
+    def test_a_total_not_larger_than_the_current_one_changes_nothing(self):
+        from datetime import timedelta
+        self.exam.time_limit = timedelta(minutes=60)
+        self.exam.save()
+        self.fp.extra_time.reset_mock()
+        for total in ('60', '30'):
+            response = self.post(self.teacher, {'action': 'extra-time', 'netid': 'fp_student', 'name': 'A',
+                                                'total_minutes': total, 'confirm': '1'})
+            self.assertEqual(response.status_code, 302)
+            self.assertIn('nothing was changed', ' '.join(str(m) for m in get_messages(response.wsgi_request)))
+        self.fp.extra_time.assert_not_called()
 
     def test_confirm_step_comes_first(self):
         response = self.post(self.teacher, {'action': 'release-device', 'netid': 'fp_student',
@@ -393,12 +406,9 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.assertTrue(args[3].endswith('(released by site administrator fp_admin)'))
         self.assertLessEqual(len(args[3]), 200)
 
-    def test_reasons_are_capped_at_the_servers_two_hundred_characters(self):
-        response = self.post(self.teacher, {'action': 'release-device', 'netid': 'fp_student', 'reason': 'x' * 201, 'confirm': '1'})
-        self.assertEqual([str(m) for m in get_messages(response.wsgi_request)],
-                         ['The reason is too long (at most 200 characters).'])
-        self.assertEqual(self.post(self.teacher, {'action': 'release-device', 'netid': 'fp_student', 'reason': 'x' * 200,
-                                                  'confirm': '1'}).status_code, 302)
+    def test_long_reasons_from_old_forms_are_cut_to_the_servers_two_hundred_characters(self):
+        self.post(self.teacher, {'action': 'release-device', 'netid': 'fp_student', 'reason': 'x' * 201, 'confirm': '1'})
+        self.assertEqual(len(self.fp.release_device.call_args.args[2]), 200)
 
     def test_mac_code_cleanup_matches_the_server(self):
         from judge.utils.fairplay_device_session import normalize_mac_code

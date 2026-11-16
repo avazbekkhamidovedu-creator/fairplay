@@ -52,6 +52,13 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         with self.assertRaises(DeviceSessionDenied):  # a plain unlock-device still ends the attempt
             self.claim()
 
+    def test_unlock_needs_no_reason_and_records_who_did_it(self):
+        session = self.claim()
+        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher)
+        audit = FairPlayDeviceAudit.objects.get(session=session)
+        self.assertEqual(audit.actor, self.teacher)
+        self.assertIn(self.teacher.username, audit.reason)
+
     def test_student_cannot_unlock_or_transfer_another_session(self):
         self.claim()
         with self.assertRaises(DeviceSessionDenied):

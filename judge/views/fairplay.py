@@ -56,6 +56,60 @@ ACTIONS = {
 }
 
 
+def _default_reason(action, username):
+    """The audit text recorded when the instructor writes nothing (no reason is ever asked for)."""
+    label = {'extra-time': _('Extra time given by instructor %s'), 'offline-exit': _('Exit code requested by instructor %s'),
+             'approve': _('Approved by instructor %s'), 'reopen': _('Reopened by instructor %s')}
+    return (label.get(action) or _('Unlocked by instructor %s')) % username
+
+
+def _extra_given(contest, netid=None):
+    """{netid: extra minutes already given} from the audit rows this OJ wrote ('Extra time +N min by ...')."""
+    import re
+    if not native_browser_enabled():
+        return {}
+    from judge.models import FairPlayDeviceAudit
+    rows = FairPlayDeviceAudit.objects.filter(session__contest=contest, action='extra-time')
+    if netid is not None:
+        rows = rows.filter(session__user__username=netid)
+    given = {}
+    for username, reason in rows.values_list('session__user__username', 'reason'):
+        found = re.search(r'\+(\d+) min', reason or '')
+        if found:
+            given[username] = given.get(username, 0) + int(found.group(1))
+    return given
+
+
+def base_total_minutes(contest):
+    """The exam's per-student time in minutes, or None without a time limit."""
+    return None if contest.time_limit is None else int(contest.time_limit.total_seconds() // 60)
+
+
+def student_total_minutes(contest, netid):
+    """The student's current total time in minutes: the exam's time limit plus the extra time already given; None for
+    an exam without a per-student time limit."""
+    base = base_total_minutes(contest)
+    return None if base is None else base + _extra_given(contest, netid).get(netid, 0)
+
+
+def _extra_from_total(request, contest, netid):
+    """(extra minutes, problem, no-op message) from the posted new total: extra = new total - current total."""
+    try:
+        new_total = int(request.POST.get('total_minutes', ''))
+    except ValueError:
+        new_total = 0
+    current = student_total_minutes(contest, netid)
+    if current is None or new_total < 1:
+        return None, _('Enter the new total time in whole minutes.'), None
+    if new_total <= current:
+        return None, None, _('The time is not longer than the current %(minutes)d minutes, so nothing was changed.') % {
+            'minutes': current}
+    extra = new_total - current
+    if extra > _minutes_limit():
+        return None, _('Extra time must be at most %d minutes.') % _minutes_limit(), None
+    return extra, None, None
+
+
 def _no_store(response):
     response['Cache-Control'] = 'no-store'
     return response
@@ -429,6 +483,11 @@ def participation_context(request, contest, with_rows=True, instructor=None):
               'short_status': '\u2014', 'notes': [], 'reopen_minutes': 30}
              for name, ranked in context['fairplay_ranked'].items() if name not in known]
     context['fairplay_students'] = sorted(list(context['fairplay_students']) + extra, key=lambda row: row['netid'])
+    base = base_total_minutes(contest)
+    if base is not None:
+        given = _extra_given(contest)
+        for row in context['fairplay_students']:
+            row['total_minutes'] = base + given.get(row['netid'], 0)
     return context
 
 
@@ -482,17 +541,19 @@ class ContestStudentHelp(LoginRequiredMixin, View):
             mode = mode if 'mode' in request.POST else 'only'
             if not native_browser_enabled() or mode not in ('continue', 'only'):
                 raise Http404()
-            reason = reason or _('Unlocked by instructor %s') % request.user.username
             if mode == 'continue' and request.POST.get('minutes', '').strip():
                 # The instructor chose how long the reopened exam lasts; without a value the default applies.
                 minutes, problem = _parse_minutes(request, MAX_REOPEN_MINUTES)
-        elif action == 'offline-exit' and not reason:
-            reason = _('Exit code requested by instructor %s') % request.user.username
-        if problem is None and not reason:
-            problem = _('Write a reason first.')
-        elif problem is None and len(reason) > MAX_REASON:
-            problem = _('The reason is too long (at most %d characters).') % MAX_REASON
-        if problem is None and needs_minutes:
+        if not reason:
+            # No reason is asked for: the audit trail records who, when, student and minutes by itself.
+            reason = _default_reason(action, request.user.username)
+        reason = reason[:MAX_REASON]
+        if action == 'extra-time' and 'total_minutes' in request.POST:
+            minutes, problem, noop = _extra_from_total(request, contest, netid)
+            if noop:
+                messages.info(request, noop)
+                return back
+        if problem is None and needs_minutes and minutes is None:
             minutes, problem = _parse_minutes(request, _minutes_limit())
         mac_code, lock_field, source, choices, can_type, ask = '', '', 'typed', [], False, False
         lock_kind = ''
