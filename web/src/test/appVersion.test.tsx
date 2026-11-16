@@ -75,3 +75,33 @@ describe("app version headers (S2)", () => {
     expect(screen.getByTestId("update-required")).toHaveTextContent("0.7 or newer");
   });
 });
+
+describe("update screen (pilot 0.8.8)", () => {
+  afterEach(() => {
+    delete (window as unknown as { webkit?: unknown }).webkit;
+    bridge._resetBridgeForTests();
+  });
+
+  it("shows the download link, asks the app to check, and offers one-click update", () => {
+    const post = native();
+    bridge.hello();
+    send({ type: "state", locked: false, trusted: true, version: "0.8.7", app_version: "0.8.7", platform: "mac" });
+    render(<UpdateRequired minVersion="0.8.8" />);
+    expect(post.mock.calls.some((c) => (c[0] as { action: string }).action === "checkUpdate")).toBe(true);
+    expect(screen.getByRole("link").getAttribute("href")).toBe(bridge.DOWNLOAD_PAGE);
+    expect(screen.queryByTestId("update-now")).toBeNull();
+    act(() => send({ type: "state", locked: false, trusted: true, version: "0.8.7", app_version: "0.8.7", platform: "mac", update: { version: "0.8.8" } }));
+    const btn = screen.getByTestId("update-now");
+    act(() => btn.click());
+    expect(post.mock.calls.some((c) => (c[0] as { action: string }).action === "installUpdate")).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("Updating");
+  });
+
+  it("offers no button while locked", () => {
+    native();
+    bridge.hello();
+    send({ type: "state", locked: true, trusted: true, version: "0.8.7", app_version: "0.8.7", platform: "mac", update: { version: "0.8.8" } });
+    render(<UpdateRequired minVersion="0.8.8" />);
+    expect(screen.queryByTestId("update-now")).toBeNull();
+  });
+});

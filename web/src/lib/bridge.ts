@@ -177,6 +177,7 @@ type OutMessage =
   | { action: "sealedToken"; token: string }
   | { action: "openSettings"; pane: string }
   | { action: "installUpdate" }
+  | { action: "checkUpdate" }
   | { action: "exitPrompt" }
   | { action: "deviceTestStart"; seconds: number }
   | { action: "deviceTestLeave" }
@@ -349,6 +350,15 @@ export function installUpdate(): boolean {
   const p = nativePlatform();
   if (p !== "mac" && p !== "windows") return false;
   post({ action: "installUpdate" });
+  return true;
+}
+
+/** Pilot 0.8.8: ask the Mac or Windows app to look for an update now (after a 426), so the
+ *  next "state" carries `update`. Returns false outside the apps. */
+export function checkUpdate(): boolean {
+  const p = nativePlatform();
+  if (p !== "mac" && p !== "windows") return false;
+  post({ action: "checkUpdate" });
   return true;
 }
 

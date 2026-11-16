@@ -20,7 +20,23 @@ export function useUpgradeRequired(): string | null {
 }
 
 export function UpdateRequired({ minVersion }: { minVersion: string }) {
-  const current = bridge.getNativeState()?.app_version;
+  const [state, setState] = useState(() => bridge.getNativeState());
+  const [run, setRun] = useState<"idle" | "installing" | "failed">("idle");
+  const [reason, setReason] = useState<bridge.UpdateFailure | null>(null);
+  useEffect(() => {
+    bridge.checkUpdate();       // a 426 means we are too old: look for the update now
+    return bridge.onNative((msg) => {
+      if (msg.type === "state") setState(bridge.getNativeState());
+      else if (msg.type === "updateProgress") setRun("installing");
+      else if (msg.type === "updateFailed") {
+        const r = bridge.parseUpdateFailure(msg.reason);
+        setReason(r);
+        setRun(r === "busy" ? "installing" : "failed");
+      }
+    });
+  }, []);
+  const current = state?.app_version;
+  const update = state && !bridge.isLocked() ? state.update : undefined;
   return (
     <main className="stu stu-center" role="alert" data-testid="update-required" style={{ minHeight: "100vh" }}>
       <div className="stu-card" style={{ gap: 14, maxWidth: 560 }}>
@@ -30,9 +46,30 @@ export function UpdateRequired({ minVersion }: { minVersion: string }) {
           {minVersion ? ` You need version ${minVersion} or newer` : " You need a newer version"}
           {current ? ` (this computer has ${current}).` : "."}
         </p>
+        {update && run !== "installing" && (
+          <button type="button" className="stu-btn primary" data-testid="update-now" onClick={() => bridge.installUpdate() && setRun("installing")}>
+            {run === "failed" ? "Try again" : `Update now to ${update.version}`}
+          </button>
+        )}
+        {run === "installing" && <p style={{ margin: 0 }} role="status">Updating... FairPlay opens again by itself.</p>}
+        {run === "failed" && (
+          <p style={{ margin: 0 }} data-testid="update-failed">
+            {reason === "locked" ? "Cannot update during an exam." : "The update did not work. Download it yourself below."}
+          </p>
+        )}
         <p className="stu-muted" style={{ margin: 0 }}>
-          Quit FairPlay, install the new version from your school, then open it again. Ask the invigilator if you
-          need help.
+          Or download the new version yourself, install it, then open FairPlay again:{" "}
+          <a
+            href={bridge.DOWNLOAD_PAGE}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => {
+              if (bridge.openDownloadPage()) e.preventDefault();
+            }}
+          >
+            {bridge.DOWNLOAD_PAGE}
+          </a>
+          . Ask the invigilator if you need help.
         </p>
       </div>
     </main>
