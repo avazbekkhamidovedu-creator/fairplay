@@ -282,6 +282,16 @@ import WebKit
         }
     }
 
+    @Test func accountHostsMayAlsoListTheSsoReturnPathAndNothingElse() {
+        for host in ["duke.account.box.com", "account.box.com"] {
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/login*", "/sso/ping_federate*"]]]), allowDev: false) != nil)
+            #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/sso/ping_federate*"]]]), allowDev: false) != nil)
+            for bad in ["/sso/other*", "/sso*", "/sso/", "/folder/*", "/settings", "/*", "/ping_federate*"] {
+                #expect(BoxPolicy(body: Self.config(signIn: [["host": host, "paths": ["/login*", bad]]]), allowDev: false) == nil, Comment(rawValue: bad))
+            }
+        }
+    }
+
     @Test func methodsAreTheSevenNamesInAnyCase() {
         for m in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "post", "Patch"] {
             let p = BoxPolicy(body: Self.config(blocked: [["host": "*", "path": "/x", "methods": [m]]]), allowDev: false)

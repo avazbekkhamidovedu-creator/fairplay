@@ -61,6 +61,41 @@ import Foundation
         for step in flow { #expect(!BoxSignIn.allowsTopLevel(target: u(step), current: box, boxTab: false), Comment(rawValue: step)) }
     }
 
+    /// The chain recorded 2026-11-16 from the live Duke Box (steps 1-4 observed, step 5 is the TargetResource of step 3).
+    @Test func theRecordedDukeBoxChainIsAllowedInABoxTabAndNothingElseOfTheAccountHost() {
+        let chain = ["https://duke.account.box.com/login?redirect_url=%2Ffolder%2F0",
+                     "https://sso.services.box.net/sp/startSSO.ping?PartnerIdpId=urn:mace:incommon:duke.edu&TargetResource=https%3A%2F%2Fduke.account.box.com%2Fsso%2Fping_federate%3Ffrom%3Dbox%26redirect_url%3D%252Ffolder%252F0",
+                     "https://shib.oit.duke.edu/idp/authn/external?conversation=e1s1",
+                     "https://api-1a2b3c.duosecurity.com/frame/web/v1/auth?tx=1",
+                     "https://sso.services.box.net/sp/ACS.saml2",
+                     "https://duke.account.box.com/sso/ping_federate?from=box&redirect_url=%2Ffolder%2F0"]
+        var current = u("https://duke.app.box.com/folder/0")
+        for step in chain {
+            #expect(BoxSignIn.allowsTopLevel(target: u(step), current: current, boxTab: true), Comment(rawValue: step))
+            #expect(!BoxSignIn.allowsTopLevel(target: u(step), current: current, boxTab: false), Comment(rawValue: step))
+            current = u(step)
+        }
+        #expect(BoxSignIn.isBoxPage(u("https://duke.app.box.com/folder/0")))
+        let account = u("https://duke.account.box.com/login")
+        for bad in ["https://duke.account.box.com/folder/0", "https://duke.account.box.com/settings", "https://duke.account.box.com/sso/other",
+                    "https://duke.account.box.com/sso/ping_federate/../login%2e", "https://duke.account.box.com/sso/ping_federate/%2e%2e/settings",
+                    "https://account.box.com/sso/other", "https://duke.account.box.com.evil.com/login", "https://duke.account.box.com.evil.com/sso/ping_federate",
+                    "https://duke-account.box.com/sso/ping_federate", "http://duke.account.box.com/sso/ping_federate",
+                    "https://duke.account.box.com:8443/sso/ping_federate", "https://user@duke.account.box.com/sso/ping_federate",
+                    "https://app.box.com/sso/ping_federate", "https://duke.app.box.com.evil.com/sso/ping_federate"] {
+            #expect(!BoxSignIn.allowsSignIn(u(bad)), Comment(rawValue: bad))
+            #expect(!BoxSignIn.allowsTopLevel(target: u(bad), current: account, boxTab: true), Comment(rawValue: bad))
+        }
+        // Account hosts outside a Box tab, or from a tab that has left the chain.
+        let ret = u(chain[5])
+        #expect(!BoxSignIn.allowsTopLevel(target: ret, current: account, boxTab: false))
+        #expect(!BoxSignIn.allowsTopLevel(target: ret, current: u("https://docs.python.org/"), boxTab: true))
+        #expect(BoxSignIn.allowsSubframe(target: ret, current: account, boxTab: true))
+        #expect(!BoxSignIn.allowsSubframe(target: ret, current: account, boxTab: false))
+        // As a page of its own it is still never an approved site.
+        #expect(!(policy()?.allows(ret, mainFrame: true) ?? true))
+    }
+
     @Test func embeddedContentOfTheLoginFlowsLoadsInABoxTab() {
         let account = u("https://duke.account.box.com/login")
         for frame in ["https://api-1a2b3c.duosecurity.com/frame/web/v1/auth", "https://shib.oit.duke.edu/idp/x", "https://sso.services.box.net/sp/x",

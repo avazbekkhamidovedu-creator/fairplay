@@ -397,7 +397,8 @@ extension ReferencePages {
             #expect((trigger?["if-top-url"] as? [String])?.isEmpty == false, "\(trigger ?? [:])")
         }
         let account = chainRules.compactMap { (($0["trigger"] as? [String: Any])?["url-filter"] as? String) }.filter { $0.contains("account\\.box") }
-        #expect(!account.isEmpty && account.allSatisfy { $0.hasSuffix("/login") })
+        #expect(!account.isEmpty && account.allSatisfy { $0.hasSuffix("/login") || $0.hasSuffix("/sso/ping_federate") })
+        #expect(account.contains { $0.hasSuffix("/sso/ping_federate") } && account.contains { $0.hasSuffix("/login") })
         // No Box page in the list: no chain at all.
         let none = ProtectedBrowserPolicy(start: "https://dkuoj.example.edu/", additionalOrigins: "", forbiddenOrigin: URL(string: "https://fairplay.example.edu")!, referenceSites: ["https://docs.python.org/"])
         #expect(none?.hasBoxPage == false && !(none?.contentRules.contains("shib") ?? true))

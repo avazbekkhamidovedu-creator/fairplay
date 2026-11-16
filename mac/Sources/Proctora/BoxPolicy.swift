@@ -469,7 +469,7 @@ struct BoxPolicy {
         guard inCeiling(p, exact: signInExact, below: signInSubdomainsOf) else { return false }
         if !p.wildcard, loginPathOnly.contains(p.base) {
             guard let paths, !paths.isEmpty else { return false }
-            return paths.allSatisfy { $0.hasPrefix("/login") }
+            return paths.allSatisfy { g in BoxSignIn.accountPathPrefixes.contains { g.hasPrefix($0) } }
         }
         return true
     }

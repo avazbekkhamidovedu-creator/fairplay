@@ -10,6 +10,9 @@ enum BoxSignIn {
     static let appHosts: Set<String> = ["duke.box.com", "duke.app.box.com"]
     static let signInExact: Set<String> = ["duke.account.box.com", "account.box.com", "sso.services.box.net", "shib.oit.duke.edu"]
     static let loginPathOnly: Set<String> = ["duke.account.box.com", "account.box.com"]
+    /// The only path prefixes of the account hosts: the login page, and where Box returns the browser after Duke single
+    /// sign-on (duke.account.box.com/sso/ping_federate?from=box&redirect_url=...). Nothing else of those hosts.
+    static let accountPathPrefixes = ["/login", "/sso/ping_federate"]
     static let signInSubdomainsOf = ["duosecurity.com"]
     static let assetExact: Set<String> = ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com"]
     static let assetSubdomainsOf = ["boxcloud.com"]
@@ -23,11 +26,11 @@ enum BoxSignIn {
         return appHosts.contains(host)
     }
 
-    /// A page of the sign-in chain: the sign-in hosts (account hosts only on /login), Duo below duosecurity.com.
+    /// A page of the sign-in chain: the sign-in hosts (account hosts only on /login and /sso/ping_federate), Duo below duosecurity.com.
     /// The Box app hosts themselves are the approved site's business.
     static func allowsSignIn(_ url: URL?) -> Bool {
         guard let url, let host = BoxPolicy.basicHost(url), let path = BoxPolicy.cleanPath(url) else { return false }
-        if loginPathOnly.contains(host) { return path.hasPrefix("/login") }
+        if loginPathOnly.contains(host) { return accountPathPrefixes.contains { path.hasPrefix($0) } }
         return signInExact.contains(host) || signInSubdomainsOf.contains { host.hasSuffix("." + $0) }
     }
 
@@ -62,7 +65,7 @@ enum BoxSignIn {
         return boxExact.contains(host) || tabAssetSubdomainsOf.contains { host.hasSuffix("." + $0) }
     }
 
-    /// A subframe of a Box tab: the sign-in chain pages (account hosts on /login only) and the asset hosts.
+    /// A subframe of a Box tab: the sign-in chain pages (account hosts on /login and /sso/ping_federate only) and the asset hosts.
     static func allowsFrame(_ url: URL?) -> Bool {
         if allowsSignIn(url) { return true }
         guard let url, let host = BoxPolicy.basicHost(url) else { return false }

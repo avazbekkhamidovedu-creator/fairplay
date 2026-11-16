@@ -274,7 +274,7 @@ struct ProtectedBrowserPolicy {
             }
         }
         // Duke Box sign-in chain: its hosts load only inside a page that is itself on the chain (a Box tab), never in the exam
-        // tab or another site; account hosts only on /login. WebKit has no per-tab lists, so the top page scopes it.
+        // tab or another site; account hosts only on /login and /sso/ping_federate. WebKit has no per-tab lists, so the top page scopes it.
         if hasBoxPage {
             var tops: [String] = []
             for host in BoxSignIn.appHosts.union(BoxSignIn.signInExact).sorted() { tops.append("^https://" + Self.escapeDots(host) + "/") }
@@ -284,7 +284,11 @@ struct ProtectedBrowserPolicy {
             }
             for host in BoxSignIn.signInExact.union(BoxSignIn.assetExact).sorted() {
                 let escaped = Self.escapeDots(host)
-                chainRule("^https://" + escaped + (BoxSignIn.loginPathOnly.contains(host) ? "/login" : "/"))
+                if BoxSignIn.loginPathOnly.contains(host) {
+                    for prefix in BoxSignIn.accountPathPrefixes { chainRule("^https://" + escaped + prefix) }
+                } else {
+                    chainRule("^https://" + escaped + "/")
+                }
             }
             for base in BoxSignIn.signInSubdomainsOf + BoxSignIn.tabAssetSubdomainsOf {
                 chainRule("^https://[a-z0-9.-]+\\." + Self.escapeDots(base) + "/")
