@@ -209,7 +209,7 @@ final class MainWindowController: NSWindowController, LockSurface, DeviceTestEff
         enterLockedMode()
         let union = NSScreen.screens.reduce(NSRect.zero) { $0.union($1.frame) }
         window?.setFrame(union.isEmpty ? (NSScreen.main?.frame ?? .zero) : union, display: true)
-        showBlocking(reason: "FairPlay could not lock this Mac again.\nAllow FairPlay in System Settings > Privacy & Security > Accessibility. This Mac stays locked until then.\nYour instructor can release this Mac from DKU OJ.", quitAction: nil, calm: true)
+        showBlocking(reason: "FairPlay could not lock this Mac again.\nAllow FairPlay in System Settings > Privacy & Security > Accessibility. This Mac stays locked until then.\nOnce FairPlay is allowed it opens DKU OJ again, and your instructor can then release this Mac from DKU OJ.", quitAction: nil, calm: true)
         startRecoveryRelease(state)
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.attemptNativeRecovery() }
         RunLoop.main.add(timer, forMode: .common)

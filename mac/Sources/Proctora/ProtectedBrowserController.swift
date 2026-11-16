@@ -1546,7 +1546,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                     if path.hasPrefix("claim/") { self.claimWasConflict = status == 409 }
                     let envelope = data.flatMap { $0.count <= 24000 ? (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] : nil }
                     guard error == nil, status == 200, let envelope,
-                          let context = NativeDeviceContext.verify(envelope, publicKey: key, nonce: nonce, device: device),
+                          let context = NativeDeviceContext.verifyLive(envelope, publicKey: key, nonce: nonce, device: device, binding: self.nativeExam.binding),
                           self.nativeExam.accept(context) else {
                         if reportsUnclean, error == nil, let code = status, (400...499).contains(code) { self.uncleanRecoverRefused = true }   // a definitive refusal only, never a timeout or a 5xx
                         if sendsLock, Self.isLockConflict(status: status, data: data) {

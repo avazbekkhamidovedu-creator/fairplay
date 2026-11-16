@@ -41,6 +41,18 @@ struct NativeDeviceContext: Decodable, Equatable {
             && verify(envelope, publicKey: publicKey, nonce: nonce, device: device, now: now, skew: 86_400 * 365) != nil
     }
 
+    /// The live answer to a request. A verified, nonce-bound terminal answer that matches the saved binding (completed, released)
+    /// is also taken when only this Mac's clock is off: the fresh nonce already rules out a replay, so the clock window adds
+    /// nothing for an unlock, and a wrong clock must never keep an instructor release from reaching the student.
+    static func verifyLive(_ envelope: [String: Any], publicKey: Data, nonce: String, device: String,
+                           binding: Binding?, now: Date = Date()) -> Self? {
+        if let value = verify(envelope, publicKey: publicKey, nonce: nonce, device: device, now: now) { return value }
+        guard let binding,
+              let late = verify(envelope, publicKey: publicKey, nonce: nonce, device: device, now: now, skew: 86_400 * 365),
+              late.binding == binding, late.state == "completed" || late.state == "released" else { return nil }
+        return late
+    }
+
     static let clockOffMessage = "Your Mac clock is off by more than 2 minutes. Ask your instructor for help."
 
     static func verify(_ envelope: [String: Any], publicKey: Data, nonce: String,

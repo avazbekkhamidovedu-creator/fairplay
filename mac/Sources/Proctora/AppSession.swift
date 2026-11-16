@@ -243,7 +243,7 @@ final class AppSession {
         Net.request("POST", path: "api/student/attempts/\(exam.attemptId)/app-beat", token: exam.token,
                     appSession: exam.session, body: body) { [weak self] status, json in
             guard let self else { return }
-            if status == 409 {
+            if AppSession.beatMeansSessionGone(status) {
                 // Plan M3: the session was rotated away (teacher approved a swap or released
                 // the device). Ask the signed hand-in check; only "moved"/"submitted" unlocks.
                 self.onStatus?("session_gone")
@@ -257,6 +257,10 @@ final class AppSession {
             self.onStatus?(st)
         }
     }
+
+    /// 409: this session is no longer the attempt's (teacher moved or released it). 404: the attempt is gone (the teacher
+    /// deleted it). Both only ask the signed hand-in check, which alone decides (Windows: AppSession.StatusFor).
+    static func beatMeansSessionGone(_ status: Int?) -> Bool { status == 409 || status == 404 }
 
     // MARK: - Sealed answers (plan M4)
 
