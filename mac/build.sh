@@ -216,6 +216,15 @@ if [ -n "${FAIRPLAY_SIGN_SELF:-}" ]; then
   echo "==> Signing with '$FAIRPLAY_SIGN_SELF' (fixed certificate, hardened runtime)..."
   codesign --force --options runtime --sign "$FAIRPLAY_SIGN_SELF" "$GUARD"
   codesign --force --options runtime --sign "$FAIRPLAY_SIGN_SELF" "$BUNDLE"
+  # Pilot 0.8.8: the Accessibility grant and the in-app updater (same-signer check) both depend on
+  # the designated requirement naming the certificate ("certificate leaf = H..."), not a cdhash
+  # (which changes every build). Stop the build if it does not.
+  DR="$(codesign -d -r- "$BUNDLE" 2>&1 | grep '^designated' || true)"
+  echo "    $DR"
+  case "$DR" in
+    *"certificate leaf"*) ;;
+    *) echo "ERROR: the designated requirement does not name the signing certificate; a stable identity is needed (see docs/STUDENT-INSTALL-MAC.md, mac/make-signing-cert.sh)."; exit 1 ;;
+  esac
 elif [ -n "${FAIRPLAY_SIGN_ID:-}" ]; then
   echo "==> Signing with '$FAIRPLAY_SIGN_ID' (hardened runtime)..."
   codesign --force --options runtime --timestamp --sign "$FAIRPLAY_SIGN_ID" "$GUARD"
@@ -242,6 +251,6 @@ else
   codesign --force --options runtime --sign - "$BUNDLE"
 fi
 [ "$MODE" = release ] && [ -z "${FAIRPLAY_SIGN_ID:-}" ] && [ -z "${FAIRPLAY_SIGN_SELF:-}" ] && \
-  echo "WARNING: release build without Developer ID signing/notarization (FAIRPLAY_SIGN_ID)."
+  echo "WARNING: release build without Developer ID (FAIRPLAY_SIGN_ID) and without a fixed self-signed identity (FAIRPLAY_SIGN_SELF): students lose the Accessibility permission after every update. Create one with mac/make-signing-cert.sh."
 echo "==> Done: $BUNDLE ($MODE)"
 if [ -n "$DEBUG_LOG" ]; then echo "    Debug trace: $DEBUG_LOG"; fi

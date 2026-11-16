@@ -78,3 +78,27 @@ Good to know:
 - On DKU OJ, open the exam and use **Start exam in FairPlay** after installing this version. If the browser does not open the app, open FairPlay yourself and sign in. There is no exam access code to type.
 - Use **Check this Mac / Check this PC** any day before the exam and fix anything red.
 - Exam server: https://dku.speakupai.uz
+
+
+## Signing without an Apple Developer ID (Mac)
+
+No Developer ID means no notarization: Gatekeeper asks once at the first install ("Open Anyway", or
+`xattr -dr com.apple.quarantine /Applications/FairPlay.app`; student guide: docs/STUDENT-INSTALL-MAC.md).
+What must stay the same is the signing identity:
+
+- Make one self-signed code-signing certificate once with `mac/make-signing-cert.sh "FairPlay Code Signing"`.
+  Store the `.p12` and its password in the CI secrets `MAC_SIGN_P12` (base64) and `MAC_SIGN_PASSWORD`
+  (`.github/workflows/release-mac.yml` imports it and sets `FAIRPLAY_SIGN_SELF=FairPlay Code Signing`).
+  Locally: import the `.p12` into the login keychain and `FAIRPLAY_SIGN_SELF="FairPlay Code Signing" ./build.sh release`.
+- `mac/build.sh` then prints the designated requirement and stops if it does not name the certificate
+  (`certificate leaf = H"..."`). With that requirement macOS keeps the Accessibility permission across
+  versions and the in-app updater (`sameSigner`) accepts the next release. Ad-hoc builds have a requirement
+  that changes every build: the permission is asked again and nothing is checked on update.
+- Never replace the certificate between releases. If it is lost or changed, every student reinstalls by hand once
+  (and grants Accessibility again). Switching a fleet from ad-hoc to the fixed identity costs that one reinstall.
+- The in-app update does not trigger Gatekeeper again: it is downloaded by the app itself, which does not set the
+  `com.apple.quarantine` attribute (no `LSFileQuarantineEnabled`, no `setxattr` on update files; the only
+  quarantine call in the app is for files the exam browser downloads).
+- Update source: the apps ask the exam server (`GET /api/app/update`, docs/APP-UPDATE-CONTRACT.md) and GitHub only
+  when it does not answer. After publishing a release, the server picks it up within 10 minutes, or pin it by hand
+  with `FAIRPLAY_LATEST_APP_VERSION_MAC`, `FAIRPLAY_APP_UPDATE_URL_MAC` and `FAIRPLAY_APP_UPDATE_SHA256_MAC`.
