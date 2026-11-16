@@ -384,7 +384,7 @@ export function LiveRoom({ exam, onClosed, onExamChange }: Props) {
                         <span className="t-seat-name">{s.name}</span>
                         <span className="t-seat-sub">{seatSub(s, st)}</span>
                       </Link>
-                      <SeatBadges examId={exam.id} student={s} onChanged={load} />
+                      <SeatBadges examId={exam.id} student={s} onChanged={load} flags={flags} />
                       {s.status === "in_progress" && s.client !== "browser" && (
                         <MoveDevice examId={exam.id} student={s} onMoved={load} />
                       )}
@@ -548,8 +548,29 @@ export function lowBatteryBadge(s: Pick<LiveStudent, "battery" | "charging" | "o
   return s.charging === false ? `${pct} · not charging` : pct;
 }
 
+/** Pilot 0.8.8: why a Mac / Windows student is shown as blocked or not locked, in plain words:
+ *  from the app's own check summary (beats) and the open flags of that attempt. */
+export function seatBlockReasons(s: Pick<LiveStudent, "app_checks" | "attempt_id" | "weak_lock">, flags: LiveFlag[] = []): string[] {
+  const out: string[] = [];
+  const checks: Record<string, string> = {};
+  for (const part of (s.app_checks ?? "").split(",")) {
+    const [k, , v] = part.trim().split(/(=)/);
+    if (k) checks[k] = v ?? "";
+  }
+  const types = new Set(flags.filter((f) => f.attempt_id === s.attempt_id).map((f) => f.type.replace(/^client_/, "")));
+  if (checks.vm === "1" || types.has("vm_detected")) out.push("Virtual machine detected");
+  if (checks.remote === "1" || types.has("remote_session")) out.push("Remote session on this computer");
+  if (s.weak_lock || checks.sep === "0" || types.has("lock_fallback")) out.push("Weaker lock (exam is not on its own desktop)");
+  if (checks.mir === "1" || types.has("mirrored_display")) out.push("Screen mirrored or second display");
+  if (checks.tap === "0" || types.has("tap_lost") || types.has("tap_unavailable")) out.push("Keyboard lock not working");
+  if (types.has("win_foreign_desktop") || types.has("win_session_locked")) out.push("Blocked screen: another desktop or the Windows lock screen is in front");
+  if (types.has("watchdog_app_killed") || types.has("previous_run_killed") || types.has("win_watchdog_missing")
+    || types.has("win_policy_restored")) out.push("FairPlay was restarted by its watchdog");
+  return out;
+}
+
 /** S3-S6: what needs the invigilator at this seat, as short badges (+ the button for it). */
-export function SeatBadges({ examId, student: s, onChanged }: { examId: string; student: LiveStudent; onChanged: () => void }) {
+export function SeatBadges({ examId, student: s, onChanged, flags }: { examId: string; student: LiveStudent; onChanged: () => void; flags?: LiveFlag[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const writing = s.status === "in_progress";
@@ -558,6 +579,11 @@ export function SeatBadges({ examId, student: s, onChanged }: { examId: string; 
   if (writing && s.approval === "pending") badges.push("Waiting for approval");
   if (writing && s.swap_requested) badges.push("Wants to continue on another computer");
   if (writing && s.weak_lock) badges.push("Not using the strongest lock");
+  if (writing) {
+    for (const r of seatBlockReasons(s, flags)) {
+      if (!(s.weak_lock && r.startsWith("Weaker lock"))) badges.push(r);
+    }
+  }
   const low = lowBatteryBadge(s);
   if (writing && low) badges.push(low);
   if (badges.length === 0) return null;

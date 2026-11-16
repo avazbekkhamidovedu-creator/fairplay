@@ -93,3 +93,23 @@ describe("exam settings S3 / S6", () => {
     expect(toExamInput(off).resume_needs_approval).toBe(false);
   });
 });
+
+describe("why a seat is blocked (pilot 0.8.8)", () => {
+  it("names VM, remote session, weaker lock, blocked screen and watchdog restart", async () => {
+    const { seatBlockReasons } = await import("../pages/teacher/LiveRoom");
+    const flag = (type: string) => ({ event_id: 1, attempt_id: "a_1", username: "a", name: "A", type, detail: "", server_time: "" });
+    const out = seatBlockReasons(
+      { attempt_id: "a_1", app_checks: "vm=1,remote=1,sep=0,tap=0", weak_lock: false },
+      [flag("client_win_foreign_desktop"), flag("watchdog_app_killed"), { ...flag("vm_detected"), attempt_id: "other" }],
+    );
+    expect(out).toEqual([
+      "Virtual machine detected",
+      "Remote session on this computer",
+      "Weaker lock (exam is not on its own desktop)",
+      "Keyboard lock not working",
+      "Blocked screen: another desktop or the Windows lock screen is in front",
+      "FairPlay was restarted by its watchdog",
+    ]);
+    expect(seatBlockReasons({ attempt_id: "a_1", app_checks: "vm=0,mir=0", weak_lock: false }, [])).toEqual([]);
+  });
+});

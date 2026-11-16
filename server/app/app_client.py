@@ -79,6 +79,15 @@ CLIENT_EVENT_TYPES = frozenset({
     "canvas_upload_unsupported", "canvas_sso_popup", "canvas_quiz_started",
     # 2026-10-30: the Box pane of a running attempt opened (detail: host only)
     "box_opened",
+    # Pilot 0.8.8: events the Mac and Windows apps send that were stored as "client_<name>"
+    "lock_ended_by_restart", "deadline_unlock",
+    # the Windows app (src/FairPlay.Core/Events.cs): kept under their real names
+    "win_session_locked", "win_session_unlocked", "win_other_user_session", "win_policy_restored",
+    "win_clipboard_cleared", "win_virtual_desktop_switch", "win_foreign_desktop",
+    "win_clipboard_wipe_failed", "win_webview_process_failed", "win_watchdog_missing",
+    "win_second_instance_blocked", "win_session_ending", "win_check_error",
+    # the Windows app sends a weaker-lock fallback already prefixed; stored as it is
+    "client_lock_fallback", "lock_fallback",
 })
 SERVER_EVENT_TYPES = frozenset({
     "second_device", "foreign_session", "re_entry", "app_gap", "no_app_signal",

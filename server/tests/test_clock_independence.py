@@ -69,3 +69,22 @@ def test_seal_from_a_clock_one_hour_behind_is_judged_on_arrival(app_client, exam
     r = post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=utcnow() - timedelta(hours=1)))
     assert r.status_code == 200
     assert "sealed_clock_off" in [e["type"] for e in results_row(app_client, exam)["events"]]
+
+
+def test_client_event_names_are_kept_and_client_time_is_only_a_note(app_client, exam):
+    from app import app_client as ac
+    for t in ("win_foreign_desktop", "win_watchdog_missing", "win_session_locked", "lock_ended_by_restart",
+              "deadline_unlock", "client_lock_fallback"):
+        assert ac.client_event_type(t) == t
+    assert ac.client_event_type("second_device") == "client_second_device"     # server-only names stay fenced
+    h = login(app_client, "alice")
+    a = start(app_client, h, exam).json()
+    hs = {**h, "X-FairPlay-Session": a["session"]}
+    r = app_client.post(f"/api/student/attempts/{a['attempt_id']}/events", headers=hs, json={"events": [
+        {"type": "win_foreign_desktop", "detail": "x", "client_time": "2001-01-01T00:00:00Z"}]})
+    assert r.status_code == 200, r.text
+    t = login(app_client, "teacher")
+    res = app_client.get(f"/api/exams/{exam['id']}/results", headers=t).json()
+    ev = [e for x in res["attempts"] for e in x["events"] if e["type"] == "win_foreign_desktop"][0]
+    assert ev["client_time"] == "2001-01-01T00:00:00Z"            # shown as reported
+    assert ev["server_time"].startswith(str(utcnow().year))        # the server's own clock decides
