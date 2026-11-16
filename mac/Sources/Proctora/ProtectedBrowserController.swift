@@ -143,7 +143,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         var nativeTransport: ((URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void)?
         var policyKey: Data?
         var deviceFingerprint: String?
-        var now: () -> Date = Date.init
+        var now: () -> Date = { ServerClock.shared.now() }
         var monotonic: () -> NativeExit.Monotonic = NativeExit.systemMonotonic
         var random: () -> Double = { Double.random(in: 0..<1) }
         var schedule: (TimeInterval, @escaping () -> Void) -> () -> Void = { delay, fire in
@@ -852,7 +852,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     /// Every renew tick: a device certificate with under 6 hours left is issued again in the background
     /// (same key), with backoff on failure, so a long exam never loses the device. The lock is never touched.
     private func renewDeviceCertificateIfNeeded() {
-        let now = ServerClock.shared.now()
+        let now = effects.now()
         let remaining = nativeIdentity.certificateExpiry.map { $0.timeIntervalSince(now) }
         guard CertificateRenewal.shouldTryNow(remaining: remaining, inFlight: certRenewalInFlight, now: now, notBefore: certRenewalNotBefore) else { return }
         certRenewalInFlight = true
@@ -889,7 +889,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
         if nativeExam.requiresTerminalReceipt {
             var started = false
             if let session = nativeExam.binding?.session {
-                let now = ServerClock.shared.now()
+                let now = effects.now()
                 let renewDue = lastRenewSent.map { now.timeIntervalSince($0) >= NativeRenewSchedule.renewInterval * (1 - NativeRenewSchedule.jitterFraction) } ?? true
                 if renewDue {
                     started = requestNative("session/" + session + "/renew")
@@ -956,7 +956,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
                   allowHTTP: current.startURL.scheme == "http", referenceSites: sites, resourceOrigins: resources, assetOrigins: cdns),
               let page = orderedTabs.first else { return }
         updated.sitesExpire = sites.isEmpty ? nil : policyExpires
-        updated.clock = { [weak self] in ServerClock.shared.now() }
+        updated.clock = { [weak self] in self?.effects.now() ?? ServerClock.shared.now() }
         let revision = UUID(); policyRevision = revision
         let identifier = "fairplay.protected-browser." + revision.uuidString
         WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: updated.contentRules) { [weak self, weak page] rules, error in
@@ -1684,7 +1684,7 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
             refreshExamContext()
         }
         guard holdLabel == nil, isOpen else { return }
-        let now = ServerClock.shared.now().timeIntervalSince1970
+        let now = effects.now().timeIntervalSince1970
         if HandInVerification.isIncompletePage(title: title) {
             if handIn.phase == .idle { handInDeadline = nativeExam.context?.deadline; handIn.begin(at: now) }
             if handIn.phase != .failed || !handIn.refused {
