@@ -208,10 +208,10 @@ def test_unknown_malformed_and_expired_lock(synced, server_key):
     assert issue(synced).status_code == 200
 
 
-def test_reason_is_required(synced, server_key):
+def test_reason_is_optional(synced, server_key):
     reg(synced, server_key)
-    assert call(synced, "POST", f"{STU}/alice/native-exit", {"mac_code": "K7QM3XPA"}).status_code == 400
-    assert issue(synced, reason="  ").status_code == 400
+    assert call(synced, "POST", f"{STU}/alice/native-exit", {"mac_code": "K7QM3XPA"}).status_code == 200
+    assert issue(synced, reason="  ").status_code == 200
 
 
 def test_first_issue_binds_student(synced, server_key):
