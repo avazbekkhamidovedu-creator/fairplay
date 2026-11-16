@@ -19,6 +19,8 @@ public struct BoxPolicy {
     private static let appCeiling: Set<String> = ["duke.box.com", "duke.app.box.com"]
     private static let signInExact: Set<String> = ["duke.account.box.com", "account.box.com", "sso.services.box.net", "shib.oit.duke.edu"]
     private static let loginPathOnly: Set<String> = ["duke.account.box.com", "account.box.com"]
+    /// The login page and where Box returns the browser after Duke single sign-on; nothing else of the account hosts.
+    private static let accountPathPrefixes = ["/login", "/sso/ping_federate"]
     private static let signInSubdomainsOf = ["duosecurity.com"]
     private static let assetExact: Set<String> = ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com"]
     private static let assetSubdomainsOf = ["boxcloud.com"]
@@ -468,7 +470,7 @@ public struct BoxPolicy {
         guard inCeiling(p, exact: signInExact, below: signInSubdomainsOf) else { return false }
         if !p.wildcard, loginPathOnly.contains(p.base) {
             guard let paths, !paths.isEmpty else { return false }
-            return paths.allSatisfy { $0.hasPrefix("/login") }
+            return paths.allSatisfy { g in Self.accountPathPrefixes.contains { g.hasPrefix($0) } }
         }
         return true
     }
