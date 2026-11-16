@@ -37,7 +37,7 @@ Drafted on 2026-10-30 from read-only inspection of the VM and the code. The comm
 - Nightly backups (cron pg_dump, copied off the VM).
 - Certificate renewal before 2027-01-26 (a certbot dry run, then a daily cron line with the deploy hook).
 - Redis (sudo) and WEB_CONCURRENCY=2, after the first exams.
-- Port 8200 listens on all interfaces with forwarded-allow-ips=*: see "Do this on the VM: bind port 8200 to localhost" below.
+- Port 8200 listens on all interfaces with forwarded-allow-ips=*: see "Do this on the VM: bind port 8200 to localhost" below (the server logs a warning at start while this is so).
 - The Duke Box host list: record a real Duke Box sign-in as a HAR, run `server/scripts/box_trace.py` on it and update `server/app/box_profiles.py` (the Duke profile is marked "confirm with HAR").
 
 ## Do this on the VM: bind port 8200 to localhost
@@ -67,6 +67,53 @@ Verify:
 
 Revert: put back `--host 0.0.0.0 ... --forwarded-allow-ips=*` in the unit, run the same
 `daemon-reload` and `restart`.
+
+## Behind nginx: uvicorn flags and proxy headers (pilot 0.8.8)
+
+The only safe pair when nginx is in front: `--host 127.0.0.1 --forwarded-allow-ips=127.0.0.1` (also
+`--timeout-keep-alive 75` so it is longer than nginx's upstream keep-alive of 60 s). nginx must **overwrite**
+the header: `proxy_set_header X-Forwarded-For $remote_addr;` (never `$proxy_add_x_forwarded_for`). The server now
+logs a startup warning when `--forwarded-allow-ips=*` (or `FORWARDED_ALLOW_IPS=*`) is combined with a public listener
+(`0.0.0.0`). Do not add nginx `limit_req` keyed by IP: a whole campus shares one address. Set
+`FAIRPLAY_LOGIN_SCHOOL_NETS=<campus egress CIDRs>` instead: the sign-in, homework-login (start/finish/exchange) and
+class-login wrong-password limits are then much higher for those addresses (`Settings.ip_limit`), while the global
+and per-account caps stay.
+
+## Forced app updates (pilot 0.8.8)
+
+Set on the server (nothing is set by this repo; the owner sets them, outside exam windows):
+
+| variable | meaning |
+|---|---|
+| `MIN_APP_VERSION_MAC`, `MIN_APP_VERSION_WINDOWS` (`MIN_APP_VERSION_IPAD`) | oldest version allowed. Below it: no sign-in (`/api/auth/login` answers 426 to an app), no exam start, no beats; the app shows the update screen with **Update now** (not while locked) and the download link. A browser is never gated. `""` = no minimum. |
+| `FAIRPLAY_LATEST_APP_VERSION_MAC` / `_WINDOWS` | newest published version (else read from GitHub) |
+| `FAIRPLAY_APP_UPDATE_URL_MAC` / `_WINDOWS` | Mac: URL of `FairPlay-Mac.zip`; Windows: Velopack feed folder (`/app/windows/` or https on this host) |
+| `FAIRPLAY_APP_UPDATE_SHA256_MAC` / `_WINDOWS` | SHA-256 of the Mac zip / of `FairPlay-Windows-Setup.exe` |
+| `FAIRPLAY_APP_UPDATE_SETUP_URL_WINDOWS`, `FAIRPLAY_APP_UPDATE_PACKAGES_WINDOWS` | Windows setup link; JSON `{"<package>.nupkg": "<sha256>"}` |
+| `FAIRPLAY_APP_UPDATE_GITHUB` | `owner/repo` of the download repo (default the public one) or `off`; `GITHUB_TOKEN` optional |
+
+All empty = the server reads GitHub's latest release at most every 10 minutes and serves that. Format and rules:
+docs/APP-UPDATE-CONTRACT.md. How a client below the minimum is moved: at launch the app asks `GET /api/app/update`
+within seconds (not after the 6 h timer), and any 426 triggers an immediate check; the update installs by itself
+when the Mac is not locked, not in a device test and not in an exam. To force everybody: publish the release, wait
+for `latest_version` to show it (`curl -s https://<server>/api/app/update?platform=mac`), then raise
+`MIN_APP_VERSION_*` to it (never before the release exists, or students are blocked without an update to take).
+Rollback: lower or clear `MIN_APP_VERSION_*`.
+
+## Client clocks (pilot 0.8.8)
+
+A student's Mac or PC clock is no longer a requirement. The apps sign, seal and compare deadlines with the server's
+clock (`X-Server-Time` / `Date`). The server judges every deadline on its own clock, never accepts a client time as
+truth (`client_time` is only shown to the teacher next to the server's `server_time`), and notes a client whose time
+is more than 5 minutes off as `clock_off` (beats) or `sealed_clock_off` / `sealed_clock_ahead` (sealed answers)
+without refusing it. A sealed hand-in with a time before the attempt started is judged as of its arrival.
+Attempts still writing 15 minutes after their own deadline are handed in by the server's periodic sweep
+(`auto_submitted_deadline` event, marked late); sealed answers that arrive after that are kept as late answers.
+
+## Several workers and Redis (example only)
+
+`ops/fairplay.env.example` has the variables for Redis + 2 workers. Defaults are unchanged (one process, in-memory
+store, `FAIRPLAY_SINGLE_PROCESS` guard). Switch outside exam windows; see server/NOTES.md for the pool sizes.
 
 ## Go / no-go
 
