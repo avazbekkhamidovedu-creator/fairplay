@@ -76,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from . import closing
         if closing.BACKGROUND:
             bridges.append(asyncio.get_running_loop().create_task(closing.run_forever()))
+        bridges.append(asyncio.get_running_loop().create_task(monitoring.watch_event_loop()))
         try:
             yield
         finally:

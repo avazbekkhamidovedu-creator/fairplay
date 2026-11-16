@@ -75,6 +75,13 @@ class Metrics:
         self.latency_sum: dict[str, float] = {}
         self.errors_5xx: dict[str, int] = {}
         self.rejected = 0
+        # pilot 0.8.8: how late the event loop wakes up (seconds), worst since the last scrape
+        self.loop_lag_max = 0.0
+        self.loop_lag_last = 0.0
+
+    def note_lag(self, seconds: float) -> None:
+        self.loop_lag_last = seconds
+        self.loop_lag_max = max(self.loop_lag_max, seconds)
 
     def observe(self, method: str, route: str, status: int, seconds: float) -> None:
         key = (method, route, str(status))
@@ -92,6 +99,20 @@ class Metrics:
 
 
 METRICS = Metrics()
+
+
+LAG_INTERVAL_S = 0.5
+
+
+async def watch_event_loop(metrics: Metrics = METRICS, interval: float = LAG_INTERVAL_S) -> None:
+    """Sleeps `interval` over and over and records how much later than that it woke up: a loop
+    blocked by one slow synchronous handler shows up here before students notice."""
+    import asyncio
+    loop = asyncio.get_running_loop()
+    while True:
+        due = loop.time() + interval
+        await asyncio.sleep(interval)
+        metrics.note_lag(max(0.0, loop.time() - due))
 
 
 def _route_template(scope) -> str:
@@ -196,6 +217,10 @@ async def render(app: FastAPI, metrics: Metrics = METRICS) -> str:
     family("fairplay_admission_rejected_total", "counter",
            "Requests the in-flight gate answered 503/408 with Retry-After")
     out.append(f"fairplay_admission_rejected_total {metrics.rejected}")
+    family("fairplay_event_loop_lag_seconds", "gauge",
+           "Worst event-loop wake-up delay in this worker since the last scrape")
+    out.append(f"fairplay_event_loop_lag_seconds {metrics.loop_lag_max:.6f}")
+    metrics.loop_lag_max = metrics.loop_lag_last
 
     try:
         db = get_database()

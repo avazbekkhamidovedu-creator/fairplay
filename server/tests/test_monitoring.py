@@ -142,3 +142,25 @@ def test_sentry_init_with_package(monkeypatch):
     client = sentry_sdk.get_client()
     assert client.options["send_default_pii"] is False
     sentry_sdk.init()
+
+
+def test_event_loop_lag_gauge_is_exposed_and_records_a_blocked_loop(mclient):
+    import time
+    from app.monitoring import METRICS, Metrics, watch_event_loop
+
+    body = mclient.get("/metrics", headers=AUTH).text
+    assert "# TYPE fairplay_event_loop_lag_seconds gauge" in body
+    assert "fairplay_event_loop_lag_seconds " in body
+    # the watcher notices a loop that was blocked for a moment
+    import asyncio
+    m = Metrics()
+
+    async def go():
+        task = asyncio.create_task(watch_event_loop(m, interval=0.05))
+        await asyncio.sleep(0.01)
+        time.sleep(0.3)               # a handler that blocks the loop
+        await asyncio.sleep(0.15)
+        task.cancel()
+    asyncio.run(go())
+    assert m.loop_lag_max >= 0.2
+    assert METRICS is not m
