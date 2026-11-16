@@ -515,8 +515,10 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     box_link, box_error = checked_link(e.box_link)
     if box_link:
         # the Box page opens in its own pane (tools.box); framing it never worked
+        from .open_book_defaults import is_default_host
+        # the default Duke Box sites of an open-book exam are not reported as refused when a folder link is set
         refused += [{"site": w, "reason": "Opened with Duke Box (box_link) instead"}
-                    for w in websites if w not in without_box_hosts(websites)]
+                    for w in websites if w not in without_box_hosts(websites) and not is_default_host(w)]
         websites = without_box_hosts(websites)
     blocked = [b for b in (e.external_meta or {}).get("websites_blocked") or []
                if isinstance(b, dict) and isinstance(b.get("site"), str)]
@@ -839,13 +841,19 @@ async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
     from .sync import FAIRPLAY_SETTINGS, apply_fairplay_settings, apply_review
     sent, ov = _settings_body(call.data, key)
     e = await _exam_by_key(session, key)
+    from .open_book_defaults import seed as seed_open_book_sites
     if e is None:
         await _require_not_student(session, call)
+        waiting = await _pending(session, key) or {}
+        seed_open_book_sites(sent, ov, was_open_book=waiting.get("open_book") is True,
+                             has_sites=bool(waiting.get("websites_input") or waiting.get("websites")))
         pending = await _store_pending(session, key, sent, ov, (call.acting_user or "").strip())
         log.info("DKU OJ exam %s (not synced yet): FairPlay settings %s kept by %s", key, ", ".join(sent),
                  call.acting_user)
         return JSONResponse(_not_synced(pending), headers={"Cache-Control": "no-store"})
     e = await _editor_exam(session, key, call)
+    had_sites = bool(e.websites) or bool(((e.external_meta or {}).get(FAIRPLAY_SETTINGS) or {}).get("websites"))
+    seed_open_book_sites(sent, ov, was_open_book=bool(e.open_book), has_sites=had_sites)
     lock_fields = [f for f in sent if f != "review"]
     meta = dict(e.external_meta or {})
     if lock_fields and (e.external_frozen_version or e.status == "closed"):

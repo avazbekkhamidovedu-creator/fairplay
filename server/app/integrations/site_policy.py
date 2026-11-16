@@ -14,7 +14,7 @@ external source asks for now passes this policy first:
   may be used.
 
 - 2026-10-24: FAIRPLAY_SITE_POLICY_EXCEPTIONS (comma-separated exact host names; unset =
-  DEFAULT_EXCEPTIONS, "duke.app.box.com,duke.box.com"; set it empty for none): hosts the
+  DEFAULT_EXCEPTIONS, "duke.app.box.com,duke.box.com,duke.account.box.com"; set it empty for none): hosts the
   deny-list does not refuse. Duke Box is the university's own file storage, which professors
   and students use every day, so a DKU OJ professor may allow it; Box in general (app.box.com,
   other universities' and companies' Box, Dropbox, Google Drive, OneDrive ...) stays refused.
@@ -37,7 +37,10 @@ log = logging.getLogger("proctora.integrations")
 
 ENV_ALLOWLIST = "FAIRPLAY_EXTERNAL_SITE_ALLOWLIST"
 ENV_EXCEPTIONS = "FAIRPLAY_SITE_POLICY_EXCEPTIONS"
-DEFAULT_EXCEPTIONS = "duke.app.box.com,duke.box.com"
+DEFAULT_EXCEPTIONS = "duke.app.box.com,duke.box.com,duke.account.box.com"
+# 2026-11: duke.account.box.com is in the open-book default list (app.integrations.dkuoj.open_book_defaults), so the
+# unset default lets the deny-list pass it (it is never a page of its own, only the Box sign-in chain). An
+# administrator who sets the variable (also empty) decides alone.
 WILDCARD = "*."
 
 AI = "AI assistant"

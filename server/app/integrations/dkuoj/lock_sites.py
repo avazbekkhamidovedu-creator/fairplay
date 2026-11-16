@@ -11,6 +11,7 @@ from ...box_profiles import APP_HOSTS, BoxProfileError, checked_link, selected_p
 from ...schemas import WILDCARD_PREFIX, is_shared_suffix, parse_website_entry
 from ...site_companions import companions
 from ..site_policy import filter_sites
+from .open_book_defaults import CHAIN_ONLY_HOSTS
 
 MAX_LOCK_PAGES_AND_RESOURCES = 32
 CLOSED = {"pages": [], "resources": []}
@@ -44,11 +45,17 @@ def _box_hosts() -> list[str]:
     return [*APP_HOSTS, *(x["host"] for x in prof["sign_in_hosts"]), *prof["asset_hosts"]]
 
 
+# Box serves scripts, fonts and icons from more than cdn01/e3.boxcdn.net (static.boxcdn.net ...). The Box pane's own
+# ceiling (BoxPolicy) stays narrow, so this is only for Box TABS (BoxSignIn.tabAssetSubdomainsOf in the apps).
+BOX_TAB_ASSET_HOSTS = ("*.boxcdn.net",)
+
+
 def build_lock_sites(websites, links=None, box_link=None) -> dict:
     pages: list[str] = []
 
     def add(url: str, host: str) -> None:
-        if _allowed(host) and url not in pages:
+        # Box account / SSO hosts are the sign-in chain of a Box tab, never a page of their own.
+        if host.lower() not in CHAIN_ONLY_HOSTS and _allowed(host) and url not in pages:
             pages.append(url)
 
     link, _ = checked_link(box_link)
@@ -86,7 +93,7 @@ def build_lock_sites(websites, links=None, box_link=None) -> dict:
 
     # Box chain first: a Box page is useless without it.
     if any(is_box_host(urlsplit(p).hostname or "") for p in pages):
-        for h in _box_hosts():
+        for h in [*_box_hosts(), *BOX_TAB_ASSET_HOSTS]:
             add_resource(h)
     for group in companions(hosts):
         for site in group["sites"]:
