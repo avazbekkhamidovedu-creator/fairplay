@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .app_version import check_app_version
 from .browser_gate import request_from_app
 from .db import get_session
 from .models import User
@@ -61,6 +62,9 @@ def client_ip(request: Request) -> str:
 @router.post("/auth/login")
 async def login(body: LoginIn, request: Request, session: AsyncSession = Depends(get_session)):
     s = request.app.state.settings
+    # Pilot 0.8.8: an app below the minimum cannot sign in: it gets 426 and the update screen.
+    # (A browser sends no platform header and is never gated here.)
+    check_app_version(request, s)
     store = get_store()
     username = body.username.strip()
     uname = username.lower()[:64]

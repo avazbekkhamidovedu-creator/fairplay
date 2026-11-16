@@ -84,3 +84,13 @@ def test_ipad_platform_gate(app_client, exam):
     assert start(app_client, _hdr(h, "0.5", "ipad"), exam).status_code == 426
     r = start(app_client, _hdr(h, "0.6", "ipad"), exam)
     assert r.status_code == 200 and r.json()["min_app_version"] == "0.6"
+
+
+def test_old_app_cannot_sign_in_but_browsers_and_new_apps_can(app_client):
+    app_client.app.state.settings.min_app_version_mac = "0.8.8"
+    body = {"username": "alice", "password": "alice123"}
+    old = app_client.post("/api/auth/login", json=body, headers={"X-FairPlay-Platform": "mac", "X-FairPlay-Version": "0.8.7"})
+    assert old.status_code == 426 and old.json()["min_app_version"] == "0.8.8"
+    new = app_client.post("/api/auth/login", json=body, headers={"X-FairPlay-Platform": "mac", "X-FairPlay-Version": "0.8.8"})
+    assert new.status_code == 200
+    assert app_client.post("/api/auth/login", json=body).status_code == 200      # browser: never gated
