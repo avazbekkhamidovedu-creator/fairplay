@@ -94,6 +94,28 @@ def test_tools_box_shape(monkeypatch):
     assert all({"host", "path"} <= set(x) for x in t["blocked_requests"])
 
 
+def _account_paths(t):
+    return {x["host"]: x["paths"] for x in t["sign_in_hosts"] if x["host"].endswith("account.box.com")}
+
+
+def test_sso_return_path_only_for_apps_that_understand_it(monkeypatch):
+    """2026-11-16: duke.account.box.com/sso/ping_federate* only for apps >= 0.8.9; older, unknown or no version
+    keep /login* only (0.8.7/0.8.8 refuse a policy with other account paths)."""
+    monkeypatch.delenv("BOX_PROFILE", raising=False)
+    old = {"duke.account.box.com": ["/login*"], "account.box.com": ["/login*"]}
+    new = {h: ["/login*", "/sso/ping_federate*"] for h in old}
+    for v in (None, "", "0.8.7", "0.8.8", "0.8.8.9", "garbage"):
+        assert _account_paths(bp.box_tools(CANON, v)) == old, v
+    for v in ("0.8.9", "0.9", "0.10.0", "1.0"):
+        assert _account_paths(bp.box_tools(CANON, v)) == new, v
+    assert _account_paths(bp.box_tools(CANON)) == old
+    # nothing else changes, and the profile itself is never mutated
+    t_old, t_new = bp.box_tools(CANON, "0.8.8"), bp.box_tools(CANON, "0.8.9")
+    assert [x for x in t_old["sign_in_hosts"] if "account" not in x["host"]] == \
+        [x for x in t_new["sign_in_hosts"] if "account" not in x["host"]]
+    assert bp.PROFILES["duke"]["sign_in_hosts"][0]["paths"] == ["/login*"]
+
+
 # ---------------------------------------------------------------- companions
 def test_box_is_no_companion():
     from app.site_companions import allowed_sites, companions, companions_for
@@ -245,6 +267,16 @@ def test_running_box_tools_conditions():
     assert running_box_tools(a, {"status": "live"}, now) is None               # cached before the field
     a.status = "submitted"
     assert running_box_tools(a, exam, now) is None
+
+
+def test_attempt_view_sends_sso_path_by_app_version(client, alice, live_exam):
+    set_link(client, live_exam["id"], CANON)
+    a = start(client, alice, live_exam)
+    url = f"/api/student/attempts/{a['attempt_id']}"
+    paths = lambda r: _account_paths(r.json()["tools"]["box"])["duke.account.box.com"]
+    assert paths(client.get(url, headers=alice)) == ["/login*"]
+    assert paths(client.get(url, headers={**alice, "X-FairPlay-Version": "0.8.8"})) == ["/login*"]
+    assert paths(client.get(url, headers={**alice, "X-FairPlay-Version": "0.8.9"})) == ["/login*", "/sso/ping_federate*"]
 
 
 def test_fakebox_profile_outside_dev_gives_no_pane(client, alice, live_exam, monkeypatch):

@@ -479,7 +479,7 @@ def shuffled_for(attempt_id: str, questions: list) -> list:
     return out
 
 
-def running_box_tools(a: Attempt, exam: dict, now: datetime) -> dict | None:
+def running_box_tools(a: Attempt, exam: dict, now: datetime, app_version: str | None = None) -> dict | None:
     """2026-10-30: `tools.box` only while the attempt runs: in progress, before its
     deadline, exam live, a valid Box link set (app.box_profiles)."""
     if a.status != "in_progress" or exam.get("status") != "live" or now >= a.deadline_at:
@@ -488,10 +488,10 @@ def running_box_tools(a: Attempt, exam: dict, now: datetime) -> dict | None:
         return None
     from .box_profiles import box_tools, checked_link
     link = checked_link(exam.get("box_link"))[0]
-    return box_tools(link) if link else None
+    return box_tools(link, app_version) if link else None
 
 
-def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
+def attempt_view(a: Attempt, exam: dict, now: datetime, app_version: str | None = None) -> dict:
     questions = exam["questions"]
     if exam.get("shuffle_questions"):
         questions = shuffled_for(a.id, questions)
@@ -513,7 +513,7 @@ def attempt_view(a: Attempt, exam: dict, now: datetime) -> dict:
         "allowed_apps": [],
         # 2026-10-23: {calculator, open_book, websites}; the page passes websites to the
         # app as allowed_sites (the only hosts its sub-frames may load)
-        "tools": {**student_tools(exam), **({"box": box} if (box := running_box_tools(a, exam, now)) else {})},
+        "tools": {**student_tools(exam), **({"box": box} if (box := running_box_tools(a, exam, now, app_version)) else {})},
         **({"finish_url_regex": exam.get("finish_url_regex"), "external_kind": exam.get("external_kind"),
             "canvas": exam.get("canvas")} if external else {}),
         **({"canvas_scope": canvas_scope_of(exam)}

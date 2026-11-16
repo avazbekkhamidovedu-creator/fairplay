@@ -82,6 +82,13 @@ PROFILES: dict[str, dict] = {
     },
 }
 DEFAULT_PROFILE = "duke"
+
+# 2026-11-16: the last hop of the Box sign-in returns to duke.account.box.com/sso/ping_federate. Apps from this version
+# on accept it next to /login*; older apps refuse a policy whose account-host paths are not all /login*, so they keep
+# the /login*-only list.
+SSO_RETURN_PATH = "/sso/ping_federate*"
+SSO_RETURN_MIN_VERSION = "0.8.9"
+ACCOUNT_HOSTS = frozenset({"duke.account.box.com", "account.box.com"})
 DEV_ONLY = frozenset({"fakebox"})
 
 
@@ -155,16 +162,31 @@ def selected_profile(name: str | None = None, dev: bool | None = None) -> tuple[
     return name, PROFILES[name]
 
 
-def box_tools(link: str) -> dict | None:
+def sign_in_hosts_for(prof: dict, app_version: str | None = None) -> list[dict]:
+    """The profile's sign_in_hosts; for an app that understands it (>= SSO_RETURN_MIN_VERSION) the Box
+    account hosts also list SSO_RETURN_PATH. No or an older version: the profile as is."""
+    from .app_version import version_tuple
+    new = bool(app_version) and version_tuple(app_version) >= version_tuple(SSO_RETURN_MIN_VERSION)
+    out = []
+    for x in prof["sign_in_hosts"]:
+        x = dict(x)
+        if new and x["host"] in ACCOUNT_HOSTS and x.get("paths") and SSO_RETURN_PATH not in x["paths"]:
+            x["paths"] = [*x["paths"], SSO_RETURN_PATH]
+        out.append(x)
+    return out
+
+
+def box_tools(link: str, app_version: str | None = None) -> dict | None:
     """`tools.box` for a running attempt, or None when the profile can't be used (the exam
-    then simply has no Box pane; the misconfiguration is logged)."""
+    then simply has no Box pane; the misconfiguration is logged). app_version is the app's
+    X-FairPlay-Version (None = unknown: the older, /login-only account paths)."""
     try:
         _, prof = selected_profile()
     except BoxProfileError as exc:
         log.error("Box pane off: %s", exc)
         return None
     return {"start_url": link, "app_hosts": list(APP_HOSTS), "path_prefix": "/s/" + token_of(link),
-            "sign_in_hosts": [dict(x) for x in prof["sign_in_hosts"]],
+            "sign_in_hosts": sign_in_hosts_for(prof, app_version),
             "asset_hosts": list(prof["asset_hosts"]),
             "blocked_requests": [dict(x) for x in prof["blocked_requests"]]}
 

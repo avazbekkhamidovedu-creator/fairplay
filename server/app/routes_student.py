@@ -19,7 +19,7 @@ from .integrations.registry import integration_for
 from .models import Attempt, DeviceCheck, Exam, IntegrityEvent
 from . import app_client as ac
 from .access import NOT_OPEN_FOR_YOU, is_open_for, member_of_exam, require_listed, require_member, require_open_for
-from .app_version import CANVAS_LINK_DETAIL, check_app_version, check_canvas_platform
+from .app_version import VERSION_HEADER, CANVAS_LINK_DETAIL, check_app_version, check_canvas_platform
 from .canvas_mode import scope_of
 from .question_types import AnswerError, check_answer, is_extended
 from .review import (ALL, ANSWERS, BREAKDOWN, REVIEW_CLOSED, opens_detail, review_level, shows_answers,
@@ -398,7 +398,7 @@ async def start(exam_id: str, body: StartIn, request: Request,
     else:
         await _resume(session, store, a, device_id, exam, device_pub)
     await cache_attempt(store, a)
-    return JSONResponse({**attempt_view(a, exam, now), **await _view_extra(session, a, exam),   # perf 0.6.2
+    return JSONResponse({**attempt_view(a, exam, now, request.headers.get(VERSION_HEADER)), **await _view_extra(session, a, exam),   # perf 0.6.2
                          "session": a.session_id, "min_app_version": min_version,
                          "needs_approval": bool(a.pending_resume)})     # S3
 
@@ -509,8 +509,8 @@ async def get_attempt(aid: str, request: Request, p: Principal = Depends(require
         # opened the review (app.review); the done page needs neither
         review = (await session.execute(select(Exam.review_after_handin).where(Exam.id == a.exam_id))).scalar()
         if integration_for(exam) is None or not shows_answers(review_level(exam.get("source"), review)):
-            return JSONResponse({**attempt_view(a, exam, utcnow()), "questions": [], "answers": {}})
-    return JSONResponse({**attempt_view(a, exam, utcnow()), **await _view_extra(session, a, exam)})   # perf 0.6.2
+            return JSONResponse({**attempt_view(a, exam, utcnow(), request.headers.get(VERSION_HEADER)), "questions": [], "answers": {}})
+    return JSONResponse({**attempt_view(a, exam, utcnow(), request.headers.get(VERSION_HEADER)), **await _view_extra(session, a, exam)})   # perf 0.6.2
 
 
 @router.put("/attempts/{aid}/answers")
