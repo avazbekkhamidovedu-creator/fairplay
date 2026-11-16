@@ -515,10 +515,12 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     box_link, box_error = checked_link(e.box_link)
     if box_link:
         # the Box page opens in its own pane (tools.box); framing it never worked
-        from .open_book_defaults import is_default_host
-        # the default Duke Box sites of an open-book exam are not reported as refused when a folder link is set
+        from .open_book_defaults import DEFAULT_SITES
+        # an untouched default list (seeded for an open-book exam) is not reported as refused when a folder link is set
+        typed = ((e.external_meta or {}).get("fairplay_settings") or {}).get("websites_input")
+        seeded = isinstance(typed, list) and list(typed) == list(DEFAULT_SITES)
         refused += [{"site": w, "reason": "Opened with Duke Box (box_link) instead"}
-                    for w in websites if w not in without_box_hosts(websites) and not is_default_host(w)]
+                    for w in websites if w not in without_box_hosts(websites) and not seeded]
         websites = without_box_hosts(websites)
     blocked = [b for b in (e.external_meta or {}).get("websites_blocked") or []
                if isinstance(b, dict) and isinstance(b.get("site"), str)]
