@@ -286,7 +286,7 @@ struct ProtectedBrowserPolicy {
                 let escaped = Self.escapeDots(host)
                 chainRule("^https://" + escaped + (BoxSignIn.loginPathOnly.contains(host) ? "/login" : "/"))
             }
-            for base in BoxSignIn.signInSubdomainsOf + BoxSignIn.assetSubdomainsOf {
+            for base in BoxSignIn.signInSubdomainsOf + BoxSignIn.tabAssetSubdomainsOf {
                 chainRule("^https://[a-z0-9.-]+\\." + Self.escapeDots(base) + "/")
             }
         }

@@ -13,6 +13,9 @@ enum BoxSignIn {
     static let signInSubdomainsOf = ["duosecurity.com"]
     static let assetExact: Set<String> = ["cdn01.boxcdn.net", "e3.boxcdn.net", "api.box.com"]
     static let assetSubdomainsOf = ["boxcloud.com"]
+    /// What a Box TAB may load as scripts, fonts, icons and previews: the Box pane's asset bases plus all of boxcdn.net
+    /// (static.boxcdn.net and others, not only cdn01/e3). BoxPolicy (the pane) keeps the narrow assetSubdomainsOf.
+    static let tabAssetSubdomainsOf = assetSubdomainsOf + ["boxcdn.net"]
 
     /// A Box page (an app host): the page a Box tab starts on.
     static func isBoxPage(_ url: URL?) -> Bool {
@@ -54,16 +57,16 @@ enum BoxSignIn {
         let boxExact = signInExact.subtracting(["shib.oit.duke.edu"]).union(assetExact).union(appHosts)
         if host.hasPrefix("*.") {
             let base = String(host.dropFirst(2))
-            return assetSubdomainsOf.contains { base == $0 || base.hasSuffix("." + $0) }
+            return tabAssetSubdomainsOf.contains { base == $0 || base.hasSuffix("." + $0) }
         }
-        return boxExact.contains(host) || assetSubdomainsOf.contains { host.hasSuffix("." + $0) }
+        return boxExact.contains(host) || tabAssetSubdomainsOf.contains { host.hasSuffix("." + $0) }
     }
 
     /// A subframe of a Box tab: the sign-in chain pages (account hosts on /login only) and the asset hosts.
     static func allowsFrame(_ url: URL?) -> Bool {
         if allowsSignIn(url) { return true }
         guard let url, let host = BoxPolicy.basicHost(url) else { return false }
-        return assetExact.contains(host) || assetSubdomainsOf.contains { host.hasSuffix("." + $0) }
+        return assetExact.contains(host) || tabAssetSubdomainsOf.contains { host.hasSuffix("." + $0) }
     }
 
     /// May a frame (not a page) of this tab load `target`? Only in a Box tab that is on the chain.
