@@ -249,6 +249,8 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
   this exam; `last_beat_at` = ISO time of the last signed app beat or null (beats expire after a while).
   `code_state` = legacy alias of `device_state` (kept for older DKU OJ builds); `reopened` = attempt was reopened once; `hand_in_count` = reopens + 1
   if submitted; `waiting_since` = ISO time when pending resume began (null if not waiting).
+  2026-11: an exam that becomes open book (`open_book: true` while it was off, no websites yet, none sent) gets the
+  default sites of docs/open-book-default-sites.md as its websites; a closed-book exam gets none.
   `settings.websites` = the sites the lock really opens; `settings.websites_blocked` = the
   ones DKU OJ asked for that FairPlay refused, each with its reason (always present, `[]`
   when none). Security review 2026-10-24: FairPlay has its own policy for sites an external
