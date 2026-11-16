@@ -231,7 +231,7 @@ class Settings:
         default_factory=lambda: os.environ.get("MIN_APP_VERSION_WINDOWS", "").strip())
     min_app_version_ipad: str = field(default_factory=lambda: os.environ.get("MIN_APP_VERSION_IPAD", "").strip())
 
-    # Pilot 0.8.8: what GET /api/app/latest answers (app/app_update.py). Each value, when set,
+    # Pilot 0.8.8: what GET /api/app/update answers (app/app_update.py). Each value, when set,
     # wins over what the server learned from GitHub, so an operator can pin a release by hand.
     # All empty = the server asks GitHub (at most every 10 min) and caches the answer.
     latest_app_version_mac: str = field(default_factory=lambda: os.environ.get("FAIRPLAY_LATEST_APP_VERSION_MAC", "").strip())
@@ -243,6 +243,11 @@ class Settings:
         default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_SHA256_MAC", "").strip().lower())
     app_update_sha256_windows: str = field(
         default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_SHA256_WINDOWS", "").strip().lower())
+    app_update_setup_url_windows: str = field(
+        default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_SETUP_URL_WINDOWS", "").strip())
+    # JSON object {"FairPlay.Exam-0.8.8-full.nupkg": "<sha256>"} for the Windows packages
+    app_update_packages_windows: str = field(
+        default_factory=lambda: os.environ.get("FAIRPLAY_APP_UPDATE_PACKAGES_WINDOWS", "").strip())
     # "owner/repo" of the public download repo; "off" = never call GitHub from the server.
     app_update_github: str = field(default_factory=lambda: os.environ.get(
         "FAIRPLAY_APP_UPDATE_GITHUB", "avazbekkhamidovedu-creator/fairplay-download").strip())
@@ -401,6 +406,35 @@ class Settings:
     def warn_insecure(self) -> None:
         if not self.redis_url:
             log.warning("REDIS_URL is not set; using in-memory store (single process, dev only)")
+        msg = proxy_trust_warning()
+        if msg:
+            log.warning(msg)
+
+
+def proxy_trust_warning(argv: list[str] | None = None, environ=None) -> str | None:
+    """Pilot 0.8.8: uvicorn trusting X-Forwarded-For from anyone (forwarded-allow-ips=*) while it
+    listens on a public address lets any client fake its IP, which every per-IP limit and
+    FAIRPLAY_LOGIN_SCHOOL_NETS rely on. Behind nginx use --host 127.0.0.1 and
+    --forwarded-allow-ips=127.0.0.1 (docs/DEPLOY-RUNBOOK.md). Returns the warning or None."""
+    import sys
+    argv = list(sys.argv if argv is None else argv)
+    env = os.environ if environ is None else environ
+
+    def opt(name: str, env_name: str, default: str) -> str:
+        for i, a in enumerate(argv):
+            if a == name and i + 1 < len(argv):
+                return argv[i + 1]
+            if a.startswith(name + "="):
+                return a.split("=", 1)[1]
+        return env.get(env_name, default)
+
+    forwarded = opt("--forwarded-allow-ips", "FORWARDED_ALLOW_IPS", "127.0.0.1").strip()
+    host = opt("--host", "UVICORN_HOST", "127.0.0.1").strip()
+    if forwarded == "*" and host in ("0.0.0.0", "::", ""):
+        return ("uvicorn trusts X-Forwarded-For from anyone (--forwarded-allow-ips=*) and listens on a public "
+                f"address ({host or 'all interfaces'}): a client can fake its IP and dodge per-IP limits. "
+                "Use --host 127.0.0.1 --forwarded-allow-ips=127.0.0.1 behind nginx.")
+    return None
 
 
 def _dev_secret(data_dir: str) -> str:

@@ -5,7 +5,7 @@ import Security
 /// 2026-10-22: in-app updates (release builds only).
 ///
 /// Check: a few seconds after launch and then every 6 hours, ask the exam server first
-/// (GET api/app/latest?platform=mac, ETag kept on disk), and GitHub's API only when the server
+/// (GET api/app/update?platform=mac, ETag kept on disk), and GitHub's API only when the server
 /// gives no answer (older server: 404; offline; error), after a random delay. Pilot 0.8.8:
 /// this keeps a campus full of Macs off GitHub's 60-requests-per-hour limit. A 426 from the
 /// server checks again at once. An update is offered only when
@@ -142,8 +142,8 @@ final class Updater {
     }
 
     private func askServer(immediately: Bool) {
-        var comps = URLComponents(url: Config.serverURL.appendingPathComponent("api/app/latest"), resolvingAgainstBaseURL: false)
-        comps?.queryItems = [URLQueryItem(name: "platform", value: "mac")]
+        var comps = URLComponents(url: Config.serverURL.appendingPathComponent("api/app/update"), resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "platform", value: "mac"), URLQueryItem(name: "version", value: Config.version)]
         guard let url = comps?.url else { fallBackToGitHub(immediately: immediately); return }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -287,15 +287,16 @@ final class Updater {
         return Release(version: ver, zipURL: url, sha256: sha)
     }
 
-    /// The exam server's GET /api/app/latest answer -> the Mac update in it, or nil when anything
+    /// The exam server's GET /api/app/update answer (docs/APP-UPDATE-CONTRACT.md: latest_version,
+    /// setup_url = the zip, setup_sha256) -> the Mac update in it, or nil when anything
     /// is off. The file must be on this repo's GitHub release path or on the exam server's own
     /// host, over https, and come with a 64-hex SHA-256 (checked again after the download).
     static func parseManifest(json: Data, serverHost: String?) -> Release? {
         guard let obj = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any] else { return nil }
         if let platform = obj["platform"] as? String, platform != "mac" { return nil }
-        guard let ver = obj["version"] as? String, isPlainVersion(ver),
-              let raw = obj["url"] as? String, let url = URL(string: raw),
-              let shaRaw = obj["sha256"] as? String else { return nil }
+        guard let ver = obj["latest_version"] as? String, isPlainVersion(ver),
+              let raw = obj["setup_url"] as? String, let url = URL(string: raw),
+              let shaRaw = obj["setup_sha256"] as? String else { return nil }
         let sha = shaRaw.lowercased()
         guard sha.count == 64, sha.unicodeScalars.allSatisfy({ ($0.value >= 48 && $0.value <= 57) || ($0.value >= 97 && $0.value <= 102) })
         else { return nil }

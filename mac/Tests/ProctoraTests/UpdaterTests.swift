@@ -234,13 +234,13 @@ private func releaseJSON(tag: String = "v0.5.4",
     }
 }
 
-// Pilot 0.8.8: the exam server's /api/app/latest answer, the on-disk ETag cache and the jitter.
+// Pilot 0.8.8: the exam server's /api/app/update answer, the on-disk ETag cache and the jitter.
 @Suite struct UpdaterServerManifestTests {
     private let sha = String(repeating: "ab12", count: 16)
     private func manifest(version: String = "0.8.8", url: String? = nil, sha: String? = nil, platform: String = "mac") -> Data {
         let u = url ?? "https://github.com/avazbekkhamidovedu-creator/fairplay-download/releases/download/v\(version)/FairPlay-Mac.zip"
-        let obj: [String: Any] = ["platform": platform, "version": version, "url": u,
-                                  "sha256": sha ?? self.sha, "min_version": "0.8.7"]
+        let obj: [String: Any] = ["platform": platform, "latest_version": version, "setup_url": u,
+                                  "setup_sha256": sha ?? self.sha, "min_version": "0.8.7"]
         return try! JSONSerialization.data(withJSONObject: obj)
     }
 

@@ -1,16 +1,14 @@
-"""Pilot 0.8.8: GET /api/app/latest?platform=mac|windows -- what the apps' updaters ask first.
+"""Pilot 0.8.8: GET /api/app/update?platform=mac|windows -- what the apps' updaters ask first.
 
 Every Mac and Windows app used to call api.github.com itself (60 requests/hour per public
 address, shared by a whole campus). Now they ask this server, which asks GitHub at most once
 every REFRESH_S and keeps the last good answer.
 
-Answer (JSON, no auth, strong ETag, 304 on If-None-Match, Cache-Control max-age=300):
-    {"platform": "mac", "version": "0.8.8", "url": "https://github.com/<owner>/<repo>/releases/download/v0.8.8/FairPlay-Mac.zip",
-     "sha256": "<64 hex>", "min_version": "<MIN_APP_VERSION_MAC or empty>", "checked_at": "<ISO UTC>"}
-`version` empty / HTTP 404: nothing known (clients then ask GitHub themselves). `url` or
-`sha256` empty: the server knows a version but not a verified file; clients offer no install.
-`checked_at` is not part of the ETag. FAIRPLAY_LATEST_APP_VERSION_<P>, FAIRPLAY_APP_UPDATE_URL_<P>
-and FAIRPLAY_APP_UPDATE_SHA256_<P> override the GitHub values field by field.
+Route: GET /api/app/update?platform=mac|windows[&version=x] (alias: /api/app/latest). No auth,
+never 426, always a Date header, strong ETag + 304, Cache-Control max-age=60. The JSON shape is in
+docs/APP-UPDATE-CONTRACT.md. HTTP 404 = nothing known (clients then ask GitHub themselves).
+FAIRPLAY_LATEST_APP_VERSION_<P>, FAIRPLAY_APP_UPDATE_URL_<P>, FAIRPLAY_APP_UPDATE_SHA256_<P>
+(and ..._SETUP_URL_WINDOWS, ..._PACKAGES_WINDOWS) win over what GitHub says.
 """
 from __future__ import annotations
 
@@ -101,36 +99,88 @@ async def github_copy(store: Store, settings: Settings, fetch=None) -> dict:
     return data
 
 
-def _override(settings: Settings, platform: str) -> dict:
-    return {"version": getattr(settings, f"latest_app_version_{platform}"),
-            "url": getattr(settings, f"app_update_url_{platform}"),
-            "sha256": getattr(settings, f"app_update_sha256_{platform}")}
+def _own_host(request: Request, settings: Settings) -> set[str]:
+    from urllib.parse import urlsplit
+    hosts = {(request.url.hostname or "").lower()}
+    if settings.public_url:
+        hosts.add((urlsplit(settings.public_url).hostname or "").lower())
+    hosts.discard("")
+    return hosts
 
 
-async def manifest(store: Store, settings: Settings, platform: str, fetch=None) -> dict | None:
-    pinned = _override(settings, platform)
+def own_host_url(value: str, hosts: set[str], allow_http: bool) -> str:
+    """`value` when it is a path ("/app/windows/") or an https URL on this server's own host
+    without credentials (http only on a dev server); else "" (the client would ignore it)."""
+    from urllib.parse import urlsplit
+    value = (value or "").strip()
+    if value.startswith("/") and not value.startswith("//"):
+        return value
+    u = urlsplit(value)
+    if u.scheme not in ("https", "http") or (u.scheme == "http" and not allow_http):
+        return ""
+    if u.username or u.password or (u.hostname or "").lower() not in hosts:
+        return ""
+    return value
+
+
+def _sha(value: str) -> str:
+    v = (value or "").strip().lower()
+    return v if _SHA.match(v) else ""
+
+
+async def manifest(request: Request, store: Store, settings: Settings, platform: str, fetch=None) -> dict | None:
+    """The contract of docs/APP-UPDATE-CONTRACT.md. Operator env values first, then GitHub's
+    (cached) release; empty fields are left out."""
     gh = (await github_copy(store, settings, fetch)).get(platform) or {}
-    out = {"platform": platform}
-    for k in ("version", "url", "sha256"):
-        out[k] = pinned[k] or gh.get(k, "")
-    # a hand-pinned version with no hand-pinned file must not borrow a different release's file
-    if pinned["version"] and pinned["version"] != gh.get("version") and not (pinned["url"] and pinned["sha256"]):
-        out["url"] = pinned["url"]
-        out["sha256"] = pinned["sha256"]
-    if not out["version"]:
-        return None
-    out["min_version"] = settings.min_app_version(platform) or ""
-    return out
+    version = getattr(settings, f"latest_app_version_{platform}") or gh.get("version", "")
+    pinned_url = getattr(settings, f"app_update_url_{platform}")
+    pinned_sha = _sha(getattr(settings, f"app_update_sha256_{platform}"))
+    hosts = _own_host(request, settings)
+    out: dict = {"platform": platform}
+    if version:
+        out["latest_version"] = version
+    minimum = settings.min_app_version(platform) or ""
+    if minimum:
+        out["min_version"] = minimum
+    if platform == "windows":
+        feed = own_host_url(pinned_url, hosts, settings.dev)
+        setup = own_host_url(settings.app_update_setup_url_windows, hosts, settings.dev)
+        if feed:
+            out["feed_url"] = feed
+        if setup:
+            out["setup_url"] = setup
+        if pinned_sha:
+            out["setup_sha256"] = pinned_sha
+        try:
+            pk = json.loads(settings.app_update_packages_windows or "{}")
+        except ValueError:
+            pk = {}
+        pk = {k: _sha(v) for k, v in pk.items() if isinstance(k, str) and _sha(str(v))} if isinstance(pk, dict) else {}
+        if pk:
+            out["package_sha256"] = pk
+    else:
+        # mac: setup_url is the FairPlay-Mac.zip (GitHub release path or this server) and
+        # setup_sha256 its SHA-256; the app checks both again. A hand-pinned version never
+        # borrows another release's file.
+        borrowed = not pinned_url and not pinned_sha and (not getattr(settings, "latest_app_version_mac") or
+                                                          getattr(settings, "latest_app_version_mac") == gh.get("version"))
+        url = pinned_url or (gh.get("url", "") if borrowed else "")
+        sha = pinned_sha or (gh.get("sha256", "") if borrowed else "")
+        if url and sha:
+            out["setup_url"], out["setup_sha256"] = url, sha
+    return out if len(out) > 1 else None
 
 
-async def latest_response(request: Request, store: Store, settings: Settings, platform: str, fetch=None) -> Response:
+async def update_response(request: Request, store: Store, settings: Settings, platform: str, fetch=None) -> Response:
+    from email.utils import formatdate
+    base = {"Date": formatdate(usegmt=True)}      # the apps' server-corrected clocks read it
     if platform not in PLATFORMS:
-        return JSONResponse({"detail": "Unknown platform"}, status_code=404)
-    body = await manifest(store, settings, platform, fetch)
+        return JSONResponse({"detail": "Unknown platform"}, status_code=404, headers=base)
+    body = await manifest(request, store, settings, platform, fetch)
     if body is None:
-        return JSONResponse({"detail": "No release known"}, status_code=404)
+        return JSONResponse({"detail": "No release known"}, status_code=404, headers=base)
     etag = '"' + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:32] + '"'
-    headers = {"ETag": etag, "Cache-Control": "public, max-age=300"}
+    headers = {**base, "ETag": etag, "Cache-Control": "max-age=60"}
     if request.headers.get("if-none-match", "").strip() == etag:
         return Response(status_code=304, headers=headers)
-    return JSONResponse({**body, "checked_at": iso(utcnow())}, headers=headers)
+    return JSONResponse(body, headers=headers)
