@@ -321,6 +321,13 @@ class Settings:
             return False
         return any(addr.version == n.version and addr in n for n in nets)
 
+    def ip_limit(self, ip: str, base: int, school: int) -> int:
+        """Per-address limit for pre-sign-in endpoints: `school` for an address inside
+        FAIRPLAY_LOGIN_SCHOOL_NETS (a whole lab behind one NAT address), else `base`. Never lower
+        than `base`. Only the address decides: a client-claimed device id is never a key, and the
+        global and per-account caps stay in force."""
+        return max(base, school) if self.in_school_net(ip) else base
+
     def login_limit_for(self, ip: str) -> int:
         """Sign-in tries per minute allowed from this address (audit S-05, perf 0.6.2)."""
         if self.in_school_net(ip):

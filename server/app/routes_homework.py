@@ -45,6 +45,10 @@ from .timeutil import iso, utcnow
 
 log = logging.getLogger("proctora.homework")
 
+def settings_of(request: Request):
+    return request.app.state.settings
+
+
 router = APIRouter(prefix="/api/homework", tags=["homework"])
 
 STATE_TTL_S = 600
@@ -54,6 +58,11 @@ FINISH_PER_MIN = 10
 FINISH_PER_NETID_HOUR = 20
 RENEW_PER_MIN = 12
 EXCHANGE_PER_MIN = 20
+# Pilot 0.8.8: per address for a school network (FAIRPLAY_LOGIN_SCHOOL_NETS): a lab shares one
+# NAT address. The global (START_GLOBAL_PER_MIN) and per-NetID / per-user caps are unchanged.
+START_SCHOOL_PER_MIN = 600
+FINISH_SCHOOL_PER_MIN = 600
+EXCHANGE_SCHOOL_PER_MIN = 600
 EXCHANGE_PER_USER_HOUR = 10
 SESSION_OVER = "This session has ended. Sign in again."
 REMEMBER_REFUSED = "This device is no longer remembered. Sign in again."
@@ -125,7 +134,7 @@ async def start(request: Request):
     settings = request.app.state.settings
     store = get_store()
     ip = client_ip(request)
-    if await store.incr(f"hwl:rl:start:{_prefix(ip, 64) if ':' in ip else ip}", 60) > START_PER_MIN:
+    if await store.incr(f"hwl:rl:start:{_prefix(ip, 64) if ':' in ip else ip}", 60) > settings.ip_limit(ip, START_PER_MIN, START_SCHOOL_PER_MIN):
         raise HTTPException(429, TOO_MANY)
     if await store.incr("hwl:rl:start:all", 60) > START_GLOBAL_PER_MIN:
         raise HTTPException(429, TOO_MANY)
@@ -145,7 +154,7 @@ async def finish(body: FinishIn, request: Request, session: AsyncSession = Depen
     settings = request.app.state.settings
     store = get_store()
     ip = client_ip(request)
-    if await store.incr(f"hwl:rl:finish:{ip}", 60) > FINISH_PER_MIN:
+    if await store.incr(f"hwl:rl:finish:{ip}", 60) > settings_of(request).ip_limit(ip, FINISH_PER_MIN, FINISH_SCHOOL_PER_MIN):
         raise HTTPException(429, TOO_MANY)
     tag = _tag(body.state)
     raw = await store.getdel(f"hwl:{body.state}") if STATE_RE.fullmatch(body.state) else None
@@ -290,7 +299,8 @@ async def remember_exchange(body: RememberIn, request: Request, session: AsyncSe
     provider = _provider(request)
     settings = request.app.state.settings
     store = get_store()
-    if await store.incr(f"hwl:rl:rexch:{client_ip(request)}", 60) > EXCHANGE_PER_MIN:
+    if await store.incr(f"hwl:rl:rexch:{client_ip(request)}", 60) > settings.ip_limit(
+            client_ip(request), EXCHANGE_PER_MIN, EXCHANGE_SCHOOL_PER_MIN):
         raise HTTPException(429, TOO_MANY)
     row = await rem.find(session, body.remember_token)
     tag = rem.tag(body.remember_token)
@@ -346,7 +356,8 @@ async def remember_exchange(body: RememberIn, request: Request, session: AsyncSe
 @router.post("/remember/forget")
 async def remember_forget(body: RememberIn, request: Request, session: AsyncSession = Depends(get_session)):
     _provider(request)
-    if await get_store().incr(f"hwl:rl:rforget:{client_ip(request)}", 60) > EXCHANGE_PER_MIN:
+    if await get_store().incr(f"hwl:rl:rforget:{client_ip(request)}", 60) > settings_of(request).ip_limit(
+            client_ip(request), EXCHANGE_PER_MIN, EXCHANGE_SCHOOL_PER_MIN):
         raise HTTPException(429, TOO_MANY)
     await rem.forget(session, body.remember_token)
     return _no_store({"ok": True})

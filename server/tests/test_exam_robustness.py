@@ -36,11 +36,12 @@ def test_a_seal_from_a_fast_clock_is_accepted_and_flagged(app_client, exam):
     assert "sealed_clock_ahead" in ev and "sealed_submit" in ev
 
 
-def test_a_seal_from_before_the_attempt_started_is_still_refused(app_client, exam):
+def test_a_seal_from_before_the_attempt_started_is_judged_on_arrival(app_client, exam):
+    # Pilot 0.8.8: a wrong Mac clock is not a reason to refuse the answers (they used to get 422)
     h, a, qs = setup(app_client, exam)
     qid, answers = mcq_answer(qs)
     body = seal(a["attempt_id"], a["session"], answers, sealed_at=utcnow() - timedelta(hours=5))
-    assert post(app_client, h, a["attempt_id"], body).status_code == 422
+    assert post(app_client, h, a["attempt_id"], body).status_code == 200
 
 
 # ---------------------------------------------------------------- 6. exit code

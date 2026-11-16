@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 IP_WINDOW = 60   # per-IP limit: Settings.login_ip_limit (FAIRPLAY_LOGIN_IP_LIMIT, default 300)
 USER_IP_FAILS, USER_FAILS, FAIL_WINDOW = 10, 50, 300
 CLASS_LOGIN_IP_FAILS = 60
+CLASS_LOGIN_SCHOOL_IP_FAILS = 600      # a school network (FAIRPLAY_LOGIN_SCHOOL_NETS), per address
 MAX_PARALLEL_HASHES = 4
 TOO_MANY = "Too many sign-in attempts. Wait a few minutes and try again."
 
@@ -99,7 +100,7 @@ async def login(body: LoginIn, request: Request, session: AsyncSession = Depends
             if ok and request_from_app(request):
                 from .integrations.dkuoj.setup import class_login_answer
                 return class_login_answer(s, class_login)
-            if await store.incr(fails_cl, FAIL_WINDOW) > CLASS_LOGIN_IP_FAILS:
+            if await store.incr(fails_cl, FAIL_WINDOW) > s.ip_limit(ip, CLASS_LOGIN_IP_FAILS, CLASS_LOGIN_SCHOOL_IP_FAILS):
                 raise HTTPException(429, TOO_MANY)
             raise HTTPException(401, "Invalid username or password")
         if row is None or not ok or (row.role == "student" and not request_from_app(request)):

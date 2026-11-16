@@ -35,6 +35,13 @@ AUTO_CLOSE_EVENT = "exam_closed_automatically"
 LEASE_NAME = "autoclose"
 LEASE_TTL = timedelta(seconds=60)
 TICK_S = 15
+# Pilot 0.8.8: an attempt still writing this long after ITS OWN deadline is handed in with what
+# was saved (before, only the exam's close did that, so a student who left and never came back
+# stayed "in progress" until the teacher closed the exam). The long wait leaves room for sealed
+# answers an app uploads late (routes_sealed judges them by their sealed time) and for "Add time".
+AUTO_SUBMIT_AFTER = timedelta(minutes=15)
+AUTO_SUBMIT_BATCH = 200
+DEADLINE_EVENT = "auto_submitted_deadline"
 BACKGROUND = True            # tests switch the loop off and call run_once themselves
 
 
@@ -136,8 +143,53 @@ def _leftovers(now: datetime):
             exists().where(Attempt.exam_id == Exam.id, Attempt.status == "in_progress"))
 
 
+def _expired(now: datetime):
+    return (Attempt.status == "in_progress", Attempt.deadline_at <= now - AUTO_SUBMIT_AFTER)
+
+
+async def sweep_expired_attempts(session: AsyncSession, now: datetime) -> list[str]:
+    """Hand in attempts whose own deadline (+ AUTO_SUBMIT_AFTER) passed, with the saved answers,
+    marked late and auto-submitted. Conditional UPDATE: a racing student submit keeps its receipt."""
+    from . import app_client as ac
+    rows = (await session.execute(
+        select(Attempt.id, Attempt.exam_id, Attempt.answers, Attempt.deadline_at)
+        .join(Exam, Exam.id == Attempt.exam_id)
+        .where(*_expired(now), Exam.is_trial == false())
+        .order_by(Attempt.deadline_at).limit(AUTO_SUBMIT_BATCH))).all()
+    done: list[str] = []
+    exams: dict[str, Exam | None] = {}
+    for aid, exam_id, answers, _deadline in rows:
+        if exam_id not in exams:
+            exams[exam_id] = await session.get(Exam, exam_id)
+        e = exams[exam_id]
+        if e is None:
+            continue
+        score, pending = handin_grade(e, answers or {}, None)
+        res = await session.execute(
+            update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress",
+                                  Attempt.deadline_at <= now - AUTO_SUBMIT_AFTER).values(
+                status="submitted", submitted_at=now, auto_submitted=True, receipt=new_receipt(),
+                score=score, needs_grading=pending, late=True, updated_at=now))
+        if res.rowcount == 1:
+            done.append(aid)
+            integ = integration_for(e)
+            if integ is not None:
+                await integ.on_handin(session, aid, e.id, now, "closed")
+    await session.commit()
+    store = get_store()
+    for aid, exam_id, _a, _d in rows:
+        if aid in done:
+            await ac.add_event(session, store, aid, exam_id, DEADLINE_EVENT,
+                               "handed in by the server: this student's own time ran out and nobody came back")
+    if done:
+        await store.delete(*[attempt_key(a) for a in done])
+    return done
+
+
 async def any_candidate(session: AsyncSession, now: datetime | None = None) -> bool:
     now = now or utcnow()
+    if (await session.execute(select(Attempt.id).where(*_expired(now)).limit(1))).first() is not None:
+        return True
     if (await session.execute(select(Exam.id).where(*_candidates()).limit(1))).first() is not None:
         return True
     return (await session.execute(select(Exam.id).where(*_leftovers(now)).limit(1))).first() is not None
@@ -170,6 +222,13 @@ async def run_once(sessionmaker, now: datetime | None = None) -> list[str]:
             except Exception:  # noqa: BLE001
                 await session.rollback()
                 log.exception("hand-in after the close of %s", e.id)
+        try:
+            handed = await sweep_expired_attempts(session, now)
+            if handed:
+                log.info("%d attempt(s) handed in after their own deadline", len(handed))
+        except Exception:  # noqa: BLE001
+            await session.rollback()
+            log.exception("hand-in after the deadline")
     return closed
 
 
