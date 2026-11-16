@@ -1186,6 +1186,7 @@ path segments; never cookies, headers, queries or bodies) and refine the profile
                                {"host": "*", "path": "/api/2.0/folders", "methods": ["POST"]}, ...]}
   ```
   `sign_in_hosts[].paths` null = any path, else path globs with a trailing `*`; a host `*.base` is the subdomains
+  of base. From app 0.8.9 (X-FairPlay-Version) the Box account hosts list `["/login*", "/sso/ping_federate*"]`; older apps get `["/login*"]`.
   of base. `blocked_requests[].host` `*` = any host the pane may load; `methods` absent = any method. The pane
   loads `app_hosts` only under `path_prefix`. `tools.box` is never in the exam list, the offline package, or for a
   submitted, not started, expired or closed attempt, or when the link is empty or invalid.

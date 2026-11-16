@@ -54,7 +54,7 @@ and it is deliberate: Box and the Duke sign-in must not be reachable from the ex
 |---|---|---|
 | DKU OJ sign-in (the exam tab) | `oj.dukekunshan.edu.cn` only; the signed launch signs the student in, no external IdP | everything the OJ page loads, except the deny-list (`ProtectedBrowserPolicy` OJ-page rule; Windows equivalent) |
 | Duke Shibboleth | `shib.oit.duke.edu` (any path: SAML SSO redirect, POST back to the service provider) | its own static files; Duo prompt in a frame or page from `*.duosecurity.com` (`api-<id>.duosecurity.com`) |
-| Box sign-in with Duke SSO | `duke.app.box.com` or `duke.box.com` -> `duke.account.box.com/login*` -> `sso.services.box.net/*` -> `shib.oit.duke.edu/*` -> Duo -> `sso.services.box.net/*` (ACS) -> back to the Box page | scripts, fonts, icons from `*.boxcdn.net` (`cdn01`, `e3`, `static`, others); previews and downloads from `*.boxcloud.com`; `api.box.com` |
+| Box sign-in with Duke SSO (recorded 2026-11-16, see below) | `duke.app.box.com` or `duke.box.com` -> `duke.account.box.com/login*` -> `sso.services.box.net/sp/startSSO.ping` -> `shib.oit.duke.edu/idp/authn/external` -> Duo (unconfirmed) -> IdP -> `sso.services.box.net/sp/ACS.saml2` -> `duke.account.box.com/sso/ping_federate*` -> back to the Box page | scripts, fonts, icons from `*.boxcdn.net` (`cdn01`, `e3`, `static`, others); previews and downloads from `*.boxcloud.com`; `api.box.com`; `assets.adobedtm.com` (analytics, harmless if blocked) |
 | Box browsing after sign-in | `duke.app.box.com`, `duke.box.com` (every path) | as above |
 
 Cookies are kept by the page's own WebView/WKWebView store across these hosts (they are ordinary third-party and
@@ -84,6 +84,28 @@ recorded login. Before an exam, log in on:
 with an open-book exam that has these defaults: open the OJ, open the Box tab from the page menu, sign in with Duke
 (Shibboleth + Duo), open a Box folder and a file preview, return. Record the hosts the browser actually used (HAR or the
 app's blocked-request log). Anything refused shows as a blocked request; add its host here, in `BoxSignIn` (Mac and
-Windows, same lists) and in `lock_sites.BOX_TAB_ASSET_HOSTS`, together with a test. Unconfirmed: whether Box returns
-to `duke.account.box.com` on a path other than `/login*` after SSO (the apps allow `/login*` only), and any Duke
+Windows, same lists) and in `lock_sites.BOX_TAB_ASSET_HOSTS`, together with a test. Unconfirmed: the Duo / Duke MFA hops (see the recorded chain below), and any Duke
 host beyond `shib.oit.duke.edu` and `*.duosecurity.com`.
+
+### Recorded Box sign-in chain (2026-11-16)
+
+Recorded on 2026-11-16 with a headless Chromium against the live Duke Box, no credentials typed. Steps 1-4 were observed; step 5
+is not observable without credentials and is taken from the `TargetResource` of step 3.
+
+1. `https://duke.app.box.com/folder/0` -> 302 `https://duke.account.box.com/login?redirect_url=%2Ffolder%2F0`
+2. The page's "Continue" form POSTs to `https://duke.account.box.com/login` (same host, `/login`).
+3. -> `https://sso.services.box.net/sp/startSSO.ping?PartnerIdpId=urn:mace:incommon:duke.edu&TargetResource=https%3A%2F%2Fduke.account.box.com%2Fsso%2Fping_federate%3Ffrom%3Dbox%26redirect_url%3D%252Ffolder%252F0`
+4. -> `https://shib.oit.duke.edu/idp/authn/external?conversation=e1s1` ("Duke | Log In": a form posting to `shib.oit.duke.edu` with
+   `j_username`/`j_password`, WebAuthn and Beyond Identity fields; all scripts and styles from `shib.oit.duke.edu`; no iframes).
+5. (taken from `TargetResource`) after Duo, the IdP, and the SAML POST to `https://sso.services.box.net/sp/ACS.saml2`, Box returns the
+   browser to `https://duke.account.box.com/sso/ping_federate?from=box&redirect_url=%2Ffolder%2F0`, then `https://duke.app.box.com/folder/0`.
+
+Request hosts seen on the Box login page: `duke.account.box.com`, `cdn01.boxcdn.net`, `assets.adobedtm.com`, `sso.services.box.net`,
+`shib.oit.duke.edu`.
+
+Fix: the account hosts (`duke.account.box.com`, `account.box.com`) allow exactly the path prefixes `/login` and `/sso/ping_federate`
+(tab rule in Mac `BoxSignIn` and `ProtectedBrowserPolicy`, Windows `BoxSignIn`, Mac/Windows/iOS `BoxPolicy` validation). The server sends
+`/sso/ping_federate*` in `tools.box.sign_in_hosts` only to apps that send `X-FairPlay-Version` 0.8.9 or newer; 0.8.7/0.8.8 reject a policy
+with other account paths, so they keep `["/login*"]`. The tab flow of open-book website lists is client-side and needs no server change.
+
+Still unconfirmed: the Duo and Duke MFA hops (hosts and any extra redirects between step 4 and step 5).
