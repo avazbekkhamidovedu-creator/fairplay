@@ -11,7 +11,7 @@ from judge.utils.fairplay_audience import audience_descriptor, confirm_audience
 
 __all__ = [
     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
-    'BOX_CHANGE_REFUSED', 'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
+    'BOX_CHANGE_REFUSED', 'OPEN_BOOK_DEFAULT_WEBSITES', 'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
     'fairplay_box_error', 'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
     'parse_fairplay_payload', 'push_settings', 'websites_text',
 ]
@@ -25,6 +25,13 @@ DEFAULT_SETTINGS = {
     'calculator': 'off', 'open_book': False, 'websites': [], 'strong_lock': False,
     'resume_needs_approval': True, 'upload_opens_days': 0, 'review': 'nothing',
 }
+# The allowed websites an open-book (open exam) starts with, the Safe Exam Browser list the university used: the OJ,
+# Duke Shibboleth and Duke Box (sign-in hosts included). Same list as FairPlay's open_book_defaults.py; the instructor
+# can edit and extend it.
+OPEN_BOOK_DEFAULT_WEBSITES = (
+    'oj.dukekunshan.edu.cn', 'shib.oit.duke.edu', 'duke.app.box.com', 'duke.account.box.com',
+    'sso.services.box.net', 'duke.box.com',
+)
 MAX_WEBSITE_LINES = 100
 MAX_WEBSITE_LENGTH = 2100
 MAX_UPLOAD_DAYS = 7
@@ -517,7 +524,8 @@ def signed_lock_sites(contest):
 
 def fairplay_editor_context(request, contest, restricted):
     on = is_fairplay_exam(contest) if contest is not None else False
-    context = {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on, 'fairplay_open_exam': None}
+    context = {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on, 'fairplay_open_exam': None,
+               'fairplay_default_websites': list(OPEN_BOOK_DEFAULT_WEBSITES)}
     context['fairplay_audience'] = audience_descriptor(contest) if contest is not None else None
     if fairplay_enabled() and 'fairplay_settings' not in restricted:
         context['fairplay_open_exam'] = (open_exam_values(contest, request.user.username) if on

@@ -1903,7 +1903,15 @@
                 var fields = document.getElementById('fp-open-exam-fields');
                 if (fields && openExamCb) fields.style.display = openExamCb.checked ? '' : 'none';
             }
-            if (openExamCb) openExamCb.addEventListener('change', syncOpenExam);
+            // Ticking Open exam with no websites yet starts the list with the default sites (OJ, Duke Shibboleth, Duke Box);
+            // the instructor can edit or extend it. Closed-book exams (box unticked) never get them.
+            function fillDefaultSites() {
+                var card = document.getElementById('fp-open-exam');
+                var area = document.getElementById('id_fairplay_websites');
+                if (!card || !area || !openExamCb || !openExamCb.checked || area.value.trim()) return;
+                try { area.value = JSON.parse(card.getAttribute('data-defaults') || '[]').join('\n'); } catch (e) {}
+            }
+            if (openExamCb) openExamCb.addEventListener('change', function () { fillDefaultSites(); syncOpenExam(); });
             syncOpenExam();
             try {
                 var pendingBoxError = sessionStorage.getItem('fpBoxError');
@@ -3206,7 +3214,7 @@
                             </div>
                             {% if fairplay_open_exam is not none %}
                             {% set fp_open = fairplay_open_exam.websites or fairplay_open_exam.box_link %}
-                            <div class="ac-card" id="fp-open-exam" data-initial='{{ fairplay_open_exam|tojson }}'{% if exam_lock != 'fairplay' %} style="display:none;"{% endif %}>
+                            <div class="ac-card" id="fp-open-exam" data-initial='{{ fairplay_open_exam|tojson }}' data-defaults='{{ fairplay_default_websites|tojson }}'{% if exam_lock != 'fairplay' %} style="display:none;"{% endif %}>
                                 <div class="form-row">
                                     <label>{{ _('Open exam') }}</label>
                                     <div class="field">
@@ -3220,7 +3228,7 @@
                                         <label>{{ _('Allowed websites') }}</label>
                                         <div class="field">
                                             <textarea name="fairplay_websites" id="id_fairplay_websites" rows="3" placeholder="{{ _('One per line: docs.python.org, or a link (optionally after a title)') }}">{{ fairplay_open_exam.websites|join('\n') }}</textarea>
-                                            <div class="helptext" style="margin-top:0.2rem;">{{ _('A link opens first and every page of its site is allowed. AI chat, messaging and file-sharing sites are always blocked by FairPlay, even if listed here.') }}</div>
+                                            <div class="helptext" style="margin-top:0.2rem;">{{ _('A new open exam starts with the Duke sites students need to sign in (this OJ, Duke Shibboleth, Duke Box); you can change them. A link opens first and every page of its site is allowed. AI chat, messaging and file-sharing sites are always blocked by FairPlay, even if listed here.') }}</div>
                                         </div>
                                     </div>
                                     <div class="form-row">

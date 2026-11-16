@@ -445,6 +445,18 @@ class FairPlayOpenExamTestCase(FairPlayEditorMixin, TestCase):
         self.assertRegex(html, r'data-initial=\'\{"box_link": "", "websites": \[\]\}\'')
         self.assertNotIn('open_book', html.split('id="fp-open-exam"')[1].split('id="cheat-seb-section"')[0])
 
+    def test_open_exam_panel_carries_the_default_sites(self):
+        from judge.utils.fairplay_editor import OPEN_BOOK_DEFAULT_WEBSITES
+        self.fp.exam.return_value = {'synced': True, 'status': 'draft', 'settings': {'websites': []}}
+        for html in (self.page(), self.page('contest_create', ())):
+            self.assertIn("data-defaults='%s'" % json.dumps(list(OPEN_BOOK_DEFAULT_WEBSITES)), html)
+            self.assertIn('fillDefaultSites', html)
+        self.assertEqual(list(OPEN_BOOK_DEFAULT_WEBSITES), [
+            'oj.dukekunshan.edu.cn', 'shib.oit.duke.edu', 'duke.app.box.com', 'duke.account.box.com',
+            'sso.services.box.net', 'duke.box.com'])
+        # the saved list stays what the instructor saved: the defaults are only offered, never forced
+        self.assertRegex(self.page(), r'data-initial=\'\{"box_link": "", "websites": \[\]\}\'')
+
     def test_create_page_has_a_hidden_empty_panel(self):
         html = self.page('contest_create', ())
         self.assertIn('id="fp-open-exam"', html)
