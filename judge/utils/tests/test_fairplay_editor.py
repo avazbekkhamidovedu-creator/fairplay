@@ -1,43 +1,53 @@
-from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
-from judge.utils.fairplay_editor import BOX_CHANGE_REFUSED, FairPlaySaveResult, clean_settings, editor_settings, \
-    fairplay_box_error
+from django.core.exceptions import ValidationError
+
+from judge.utils.fairplay_editor import clean_settings, editor_settings
 
 LINK = 'https://duke.box.com/s/abc123'
 
 
 class OpenExamSettingsTestCase(SimpleTestCase):
     def test_partial_keeps_only_what_was_sent(self):
-        self.assertEqual(clean_settings({'websites': ' a.org \n\nb.org', 'box_link': ' %s ' % LINK}, partial=True),
-                         {'websites': ['a.org', 'b.org'], 'box_link': LINK})
+        self.assertEqual(clean_settings({'websites': ' a.org \n\nb.org'}, partial=True), {'websites': ['a.org', 'b.org']})
 
-    def test_box_link_is_optional_and_may_be_cleared(self):
-        self.assertNotIn('box_link', clean_settings({}))
-        self.assertEqual(clean_settings({'box_link': None}, partial=True), {'box_link': ''})
-        self.assertEqual(clean_settings({'box_link': ''}, partial=True), {'box_link': ''})
+    def test_a_duke_box_link_is_an_ordinary_website_line(self):
+        lines = ['https://duke.app.box.com/folder/0', LINK, 'https://duke.app.box.com/s/Zz_9-x', 'docs.python.org']
+        self.assertEqual(clean_settings({'websites': lines}, partial=True), {'websites': lines})
 
-    def test_both_box_hosts(self):
-        for link in (LINK, 'https://duke.app.box.com/s/Zz_9-x', 'HTTPS://DUKE.BOX.COM/s/abc'):
-            self.assertEqual(clean_settings({'box_link': link}, partial=True)['box_link'], link)
+    def test_the_separate_box_link_is_no_longer_sent_on(self):
+        self.assertEqual(clean_settings({'websites': ['a.org'], 'box_link': LINK}, partial=True), {'websites': ['a.org']})
+        self.assertNotIn('box_link', clean_settings({'box_link': LINK}))
+        self.assertEqual(clean_settings({'box_link': 7}, partial=True), {})
 
-    def test_refused_links(self):
-        for link in ('http://duke.box.com/s/a', 'https://box.com/s/a', 'https://duke.box.com/s/a/b',
-                     'https://duke.box.com/s/a#x', 'https://duke.box.com:444/s/a', 'https://x.duke.box.com/s/a', 3):
-            with self.assertRaises(ValidationError, msg=link):
-                clean_settings({'box_link': link}, partial=True)
+    def test_a_box_link_saved_before_is_shown_as_the_first_website_line(self):
+        self.assertEqual(editor_settings({'box_link': ' %s ' % LINK, 'websites': ['docs.python.org']})['websites'],
+                         '%s\ndocs.python.org' % LINK)
+        self.assertEqual(editor_settings({'box_link': LINK})['websites'], LINK)
+        # not twice when the websites already hold that folder (any spelling of the host)
+        self.assertEqual(editor_settings({'box_link': 'https://duke.app.box.com/s/abc123',
+                                          'websites_input': [LINK, 'docs.python.org']})['websites'],
+                         '%s\ndocs.python.org' % LINK)
+        for settings in (None, {}, {'box_link': ''}, {'box_link': None}):
+            self.assertNotIn('box_link', editor_settings(settings))
+            self.assertEqual(editor_settings(settings)['websites'], '')
 
-    def test_editor_settings_echo_the_box_link(self):
-        self.assertEqual(editor_settings({'box_link': ' %s ' % LINK})['box_link'], LINK)
-        self.assertNotIn('box_link', editor_settings({'box_link': ''}))
-        self.assertNotIn('box_link', editor_settings(None))
+    def test_the_dedupe_compares_the_whole_token_and_the_host(self):
+        for listed in ('https://example.org/abc123-notes', 'https://duke.box.com/s/abc1234', 'https://other.box.com/s/abc123',
+                       'https://example.org/s/abc123', 'http://duke.box.com/s/abc123x'):
+            text = editor_settings({'box_link': LINK, 'websites_input': [listed]})['websites']
+            self.assertEqual(text, '%s\n%s' % (LINK, listed), listed)
+        for listed in ('https://duke.app.box.com/s/abc123', 'Notes HTTPS://DUKE.BOX.COM./s/abc123/', LINK):
+            self.assertEqual(editor_settings({'box_link': LINK, 'websites_input': [listed]})['websites'], listed)
 
-    def test_box_error_only_for_the_box_link(self):
-        sent = {'websites': [], 'box_link': LINK}
-        self.assertEqual(fairplay_box_error(FairPlaySaveResult(not_saved='x', settings=sent, status=409)),
-                         BOX_CHANGE_REFUSED)
-        self.assertEqual(fairplay_box_error(FairPlaySaveResult(not_saved='box_link: no', settings=sent, status=400)),
-                         'box_link: no')
-        self.assertIsNone(fairplay_box_error(FairPlaySaveResult(not_saved='websites: no', settings=sent, status=400)))
-        self.assertIsNone(fairplay_box_error(FairPlaySaveResult(not_saved='x', settings={'websites': []}, status=409)))
-        self.assertIsNone(fairplay_box_error(FairPlaySaveResult()))
+    def test_a_carried_box_link_may_be_the_hundred_and_first_line(self):
+        lines = ['site%d.example.org' % i for i in range(100)]
+        text = editor_settings({'box_link': LINK, 'websites_input': lines})['websites']
+        self.assertEqual(len(text.splitlines()), 101)
+        self.assertEqual(len(clean_settings({'websites': text}, partial=True)['websites']), 101)
+        with self.assertRaises(ValidationError):                      # not for any other 101st line
+            clean_settings({'websites': lines + ['one.more.example.org']}, partial=True)
+        with self.assertRaises(ValidationError):
+            clean_settings({'websites': ['x.example.org'] + lines}, partial=True)
+        with self.assertRaises(ValidationError):
+            clean_settings({'websites': [LINK] + lines + ['one.more.example.org']}, partial=True)

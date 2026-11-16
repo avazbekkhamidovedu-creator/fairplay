@@ -776,10 +776,8 @@
                     var wasSaved = JSON.parse(openExam.getAttribute('data-initial') || '{}');
                     var siteLines = openOn ? (fd.get('fairplay_websites') || '').split('\n').map(function (l) { return l.trim(); })
                         .filter(function (l) { return l; }) : [];
-                    var boxLink = openOn ? String(fd.get('fairplay_box_link') || '').trim() : '';
-                    if (JSON.stringify(siteLines) !== JSON.stringify(wasSaved.websites || []) ||
-                        boxLink !== (wasSaved.box_link || '')) {
-                        data.fairplay_settings = {websites: siteLines, box_link: boxLink};
+                    if (JSON.stringify(siteLines) !== JSON.stringify(wasSaved.websites || [])) {
+                        data.fairplay_settings = {websites: siteLines};
                     }
                 }
 
@@ -958,16 +956,6 @@
                             window.location.href = res.redirect || {{ url("contest_list")|htmltojs }};
                         }
                     } else {
-                        if (res.field === 'fairplay_box_link' && res.saved) {
-                            isDirty = false;
-                            if (window.DMOJ_IS_EDIT) {
-                                showFairplayBoxError(res.error);
-                            } else {
-                                try { sessionStorage.setItem('fpBoxError', res.error); } catch (e) {}
-                                window.location.href = res.redirect;
-                            }
-                            return;
-                        }
                         var lockErr = res.field === 'exam_lock' ? document.getElementById('lock-error') : null;
                         if (lockErr) {
                             lockErr.textContent = res.error;
@@ -993,13 +981,6 @@
             // Defined at DOMContentLoaded scope, NOT inside the submit handler:
             // a function scoped inside the handler would be unavailable to any
             // other initialisation, so we keep it at this outer scope.
-            function showFairplayBoxError(message) {
-                var box = document.getElementById('fp-box-error');
-                if (!box) { showToast(message, true); return; }
-                box.textContent = message;
-                box.style.display = '';
-                box.scrollIntoView({block: 'center'});
-            }
             function wallClockToUtcIso(v, tz) {
                 var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || '');
                 if (!m) return '';
@@ -1913,13 +1894,6 @@
             }
             if (openExamCb) openExamCb.addEventListener('change', function () { fillDefaultSites(); syncOpenExam(); });
             syncOpenExam();
-            try {
-                var pendingBoxError = sessionStorage.getItem('fpBoxError');
-                if (pendingBoxError) {
-                    sessionStorage.removeItem('fpBoxError');
-                    showFairplayBoxError(pendingBoxError);
-                }
-            } catch (e) {}
             for (var li = 0; li < lockRadios.length; li++) lockRadios[li].addEventListener('change', syncExamLock);
             syncExamLock();
             // Auto grade after end: Off unchecks → submit −1; On keeps minutes (≥0).
@@ -3213,13 +3187,13 @@
                                 </div>
                             </div>
                             {% if fairplay_open_exam is not none %}
-                            {% set fp_open = fairplay_open_exam.websites or fairplay_open_exam.box_link %}
+                            {% set fp_open = fairplay_open_exam.websites %}
                             <div class="ac-card" id="fp-open-exam" data-initial='{{ fairplay_open_exam|tojson }}' data-defaults='{{ fairplay_default_websites|tojson }}'{% if exam_lock != 'fairplay' %} style="display:none;"{% endif %}>
                                 <div class="form-row">
                                     <label>{{ _('Open exam') }}</label>
                                     <div class="field">
                                         <label style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;">
-                                            <input type="checkbox" name="fairplay_open_exam" id="id_fairplay_open_exam"{% if fp_open %} checked{% endif %}> {{ _('Students may use the websites and the Duke Box folder below') }}
+                                            <input type="checkbox" name="fairplay_open_exam" id="id_fairplay_open_exam"{% if fp_open %} checked{% endif %}> {{ _('Students may use the websites below') }}
                                         </label>
                                     </div>
                                 </div>
@@ -3228,16 +3202,7 @@
                                         <label>{{ _('Allowed websites') }}</label>
                                         <div class="field">
                                             <textarea name="fairplay_websites" id="id_fairplay_websites" rows="3" placeholder="{{ _('One per line: docs.python.org, or a link (optionally after a title)') }}">{{ fairplay_open_exam.websites|join('\n') }}</textarea>
-                                            <div class="helptext" style="margin-top:0.2rem;">{{ _('A new open exam starts with the Duke sites students need to sign in (this OJ, Duke Shibboleth, Duke Box); you can change them. A link opens first and every page of its site is allowed. AI chat, messaging and file-sharing sites are always blocked by FairPlay, even if listed here.') }}</div>
-                                        </div>
-                                    </div>
-                                    <div class="form-row">
-                                        <label>{{ _('Duke Box shared folder link') }}</label>
-                                        <div class="field">
-                                            <input type="text" name="fairplay_box_link" id="id_fairplay_box_link" maxlength="300" autocomplete="off"
-                                                   placeholder="https://duke.box.com/s/..." value="{{ fairplay_open_exam.box_link }}">
-                                            <div class="helptext" style="margin-top:0.2rem;">{{ _('A shared link to a Duke Box folder (https://duke.box.com/s/... or https://duke.app.box.com/s/...). It cannot be changed after students have started.') }}</div>
-                                            <div id="fp-box-error" style="display:none;color:#b91c1c;font-size:13px;margin-top:0.3rem;"></div>
+                                            <div class="helptext" style="margin-top:0.2rem;">{{ _('A new open exam starts with the Duke sites students need to sign in (this OJ, Duke Shibboleth, Duke Box); you can change them. A link opens first and every page of its site is allowed. A Duke Box folder link (https://duke.app.box.com/folder/... or https://duke.box.com/s/...) goes here too; its sign-in sites are allowed for you. AI chat, messaging and file-sharing sites are always blocked by FairPlay, even if listed here.') }}</div>
                                         </div>
                                     </div>
                                 </div>

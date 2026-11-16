@@ -11,8 +11,8 @@ from judge.utils.fairplay_audience import audience_descriptor, confirm_audience
 
 __all__ = [
     'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
-    'BOX_CHANGE_REFUSED', 'OPEN_BOOK_DEFAULT_WEBSITES', 'apply_fairplay_editor', 'clean_settings', 'editor_settings', 'fairplay_check_edit',
-    'fairplay_box_error', 'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
+    'OPEN_BOOK_DEFAULT_WEBSITES', 'apply_fairplay_editor', 'clean_settings', 'editor_settings',
+    'fairplay_check_edit', 'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
     'parse_fairplay_payload', 'push_settings', 'websites_text',
 ]
 
@@ -36,8 +36,6 @@ MAX_WEBSITE_LINES = 100
 MAX_WEBSITE_LENGTH = 2100
 MAX_UPLOAD_DAYS = 7
 _AUDIENCE_FIELDS = {'classes', 'organizations', 'private_contestants', 'is_private', 'is_organization_private'}
-BOX_LINK_RE = re.compile(r'https://duke(?:\.app)?\.box\.com/s/[A-Za-z0-9_-]+', re.IGNORECASE)
-BOX_CHANGE_REFUSED = _('The Duke Box folder cannot be changed after students have started.')
 
 
 def _bool(value):
@@ -66,22 +64,13 @@ def clean_settings(raw, partial=False):
         if not isinstance(websites, list) or not all(isinstance(line, str) for line in websites):
             raise ValidationError(_('Allowed websites: one site or link per line.'))
         lines = [line.strip() for line in websites if line.strip()]
-        if len(lines) > MAX_WEBSITE_LINES:
+        # A Duke Box link carried over from the old separate field comes first and is the one line past the limit.
+        limit = MAX_WEBSITE_LINES + (1 if lines and _box_token(lines[0]) else 0)
+        if len(lines) > limit:
             raise ValidationError(_('Allowed websites: at most %d lines.') % MAX_WEBSITE_LINES)
         if any(len(line) > MAX_WEBSITE_LENGTH for line in lines):
             raise ValidationError(_('Allowed websites: a line is too long.'))
         out['websites'] = lines
-    if 'box_link' in raw:
-        link = raw['box_link']
-        if link is None:
-            link = ''
-        if not isinstance(link, str):
-            raise ValidationError(_('Duke Box shared folder link: use a link like https://duke.box.com/s/...'))
-        link = link.strip()
-        if link and not BOX_LINK_RE.fullmatch(link):
-            raise ValidationError(_('Duke Box shared folder link: use a shared link like '
-                                    'https://duke.box.com/s/... or https://duke.app.box.com/s/...'))
-        out['box_link'] = link
     if 'upload_opens_days' in raw or not partial:
         try:
             days = int(raw.get('upload_opens_days') or 0)
@@ -114,6 +103,22 @@ def websites_text(settings):
     return '\n'.join(lines)
 
 
+_URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_BOX_HOSTS = ('duke.box.com', 'duke.app.box.com')
+
+
+def _box_token(url):
+    """The shared-link token of a Duke Box link (either Duke host, any case, trailing dot), else None."""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    match = re.fullmatch(r'/s/([A-Za-z0-9_-]+)/?', parts.path or '')
+    host = (parts.hostname or '').lower().rstrip('.')
+    return match.group(1) if match and host in _BOX_HOSTS and parts.scheme.lower() == 'https' else None
+
+
 def _int(value, default=0):
     try:
         return int(value)
@@ -135,8 +140,14 @@ def editor_settings(fp_settings):
     days = _int(fp_settings.get('upload_opens_days'), DEFAULT_SETTINGS['upload_opens_days'])
     out['upload_opens_days'] = days if 0 <= days <= MAX_UPLOAD_DAYS else DEFAULT_SETTINGS['upload_opens_days']
     out['websites'] = websites_text(fp_settings)
-    if isinstance(fp_settings.get('box_link'), str) and fp_settings['box_link'].strip():
-        out['box_link'] = fp_settings['box_link'].strip()
+    legacy = fp_settings.get('box_link')
+    if isinstance(legacy, str) and legacy.strip():
+        # A contest saved with the old separate Duke Box link: the link is shown, and saved again, as one of the websites.
+        lines = out['websites'].splitlines()
+        legacy = legacy.strip()
+        listed = {_box_token(url) for line in lines for url in _URL_RE.findall(line)} - {None}
+        if _box_token(legacy) not in listed:
+            out['websites'] = '\n'.join([legacy] + lines)
     out['websites_blocked'] = [
         {'site': str(item.get('site') or ''), 'reason': str(item.get('reason') or '')}
         for item in fp_settings.get('websites_blocked') or [] if isinstance(item, dict) and item.get('site')
@@ -280,10 +291,10 @@ OPEN_EXAM_FAILURE = 5
 
 
 def open_exam_values(contest, acting_user=None, with_lock_sites=False):
-    """The saved allowed websites and Duke Box link for the form, and FairPlay's lock_sites (the only
+    """The saved allowed websites for the form, and FairPlay's lock_sites (the only
     thing ever signed for a client); empty when FairPlay cannot say."""
     from judge.utils.fairplay_client import FairPlayClient, FairPlayError, QUICK_READ_TIMEOUT
-    empty = {'websites': [], 'box_link': ''}
+    empty = {'websites': []}
     if with_lock_sites:
         empty['lock_sites'] = clean_lock_sites(None)
     from django.core.cache import cache
@@ -297,8 +308,7 @@ def open_exam_values(contest, acting_user=None, with_lock_sites=False):
         return empty
     fp_settings = view.get('settings') if isinstance(view, dict) else None
     settings = editor_settings(fp_settings)
-    values = {'websites': [line for line in settings['websites'].splitlines() if line.strip()],
-              'box_link': settings.get('box_link', '')}
+    values = {'websites': [line for line in settings['websites'].splitlines() if line.strip()]}
     if with_lock_sites:
         values['lock_sites'] = clean_lock_sites(fp_settings.get('lock_sites') if isinstance(fp_settings, dict) else None)
     return values
@@ -529,7 +539,7 @@ def fairplay_editor_context(request, contest, restricted):
     context['fairplay_audience'] = audience_descriptor(contest) if contest is not None else None
     if fairplay_enabled() and 'fairplay_settings' not in restricted:
         context['fairplay_open_exam'] = (open_exam_values(contest, request.user.username) if on
-                                         else {'websites': [], 'box_link': ''})
+                                         else {'websites': []})
     return context
 
 
@@ -537,17 +547,6 @@ class FairPlaySaveResult:
 
     def __init__(self, warnings=(), not_saved=None, settings=None, status=None):
         self.warnings, self.not_saved, self.settings, self.status = list(warnings), not_saved, settings, status
-
-
-def fairplay_box_error(result):
-    """The message for a refused Duke Box link, or None for any other outcome."""
-    if result.not_saved is None or not (result.settings and 'box_link' in result.settings):
-        return None
-    if result.status == 409:
-        return BOX_CHANGE_REFUSED
-    if result.status == 400 and str(result.not_saved).startswith('box_link:'):
-        return str(result.not_saved)
-    return None
 
 
 def fairplay_save_settings(acting_user, contest, plan, old_key=None):
