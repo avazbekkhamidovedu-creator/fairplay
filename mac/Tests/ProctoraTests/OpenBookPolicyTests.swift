@@ -413,12 +413,14 @@ import WebKit
     @Test func theOJAllowanceNeverCoversDocuments() throws {
         let p = policy()
         let all = try rules(p)
-        let open = try #require(all.first { action($0) == "ignore-previous-rules" && trigger($0)["if-top-url"] != nil })
+        let open = try #require(all.first { action($0) == "ignore-previous-rules" && trigger($0)["if-top-url"] != nil && trigger($0)["resource-type"] != nil })
         let types = try #require(trigger(open)["resource-type"] as? [String])
         #expect(!types.contains("document"))
         #expect(!types.contains("popup"))
         for t in ["image", "script", "style-sheet", "font", "raw", "media", "fetch"] { #expect(types.contains(t), "\(t)") }
-        for r in all where action(r) == "ignore-previous-rules" && trigger(r)["if-top-url"] != nil {
+        // The Duke NetID chain (DukeNetIDSignIn) is the one scoped allowance that covers documents: the OJ tab's own sign-in pages.
+        for r in all where action(r) == "ignore-previous-rules" && trigger(r)["if-top-url"] != nil
+            && !["4431", "shib", "duosecurity"].contains(where: { (trigger(r)["url-filter"] as? String ?? "").contains($0) }) {
             #expect(trigger(r)["resource-type"] != nil, "\(trigger(r)["url-filter"] ?? "")")
         }
     }

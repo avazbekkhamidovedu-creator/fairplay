@@ -1118,6 +1118,12 @@ final class ProtectedBrowserController: NSObject, WKNavigationDelegate, WKUIDele
     private func verdict(_ url: URL?, mainFrame: Bool, in webView: WKWebView?) -> Bool? {
         guard let policy else { return nil }
         if policy.allows(url, mainFrame: mainFrame) { return true }
+        // Duke NetID sign-in: only the first (OJ) tab, only from the OJ or while already on the chain.
+        if let webView, webView === orderedTabs.first {
+            let ok = mainFrame ? DukeNetIDSignIn.allowsTopLevel(target: url, current: webView.url, currentIsOJ: policy.isOJPage(webView.url))
+                               : DukeNetIDSignIn.allowsSubframe(target: url, current: webView.url)
+            if ok { return true }
+        }
         // The chain exists only while the current list still has a Box page, only in a Box tab and never in the exam tab.
         guard policy.hasBoxPage, let webView, webView !== orderedTabs.first else { return false }
         // Same signed lifetime as every other allowed site: once the list has expired the chain is closed too.

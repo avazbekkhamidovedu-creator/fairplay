@@ -335,6 +335,8 @@ struct ProtectedBrowserPolicy {
         for host in SiteDenyList.allowedExceptions {
             rules.append(scoped("^https?://" + escape(host) + "[:/]", "ignore-previous-rules"))
         }
+        // Duke NetID sign-in chain of the OJ tab (auth service, Duke SSO, Duo): scoped by the top page, see DukeNetIDSignIn.
+        rules += DukeNetIDSignIn.contentRules()
         // A network-free initial popup document is needed by opener-based SSO.
         // Native navigation policy still rejects arbitrary top-level about:blank navigation.
         rules.append(["trigger": ["url-filter": "^about:blank$"], "action": ["type": "ignore-previous-rules"]])
