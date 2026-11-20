@@ -25,17 +25,31 @@ def _client(request):
     return FairPlayClient(acting_user=request.user.username)
 
 
-def _fairplay_contest(request, key):
-    contest = get_object_or_404(Contest, key=key)
-    if not fairplay_enabled() or not is_fairplay_exam(contest) or not contest.is_editable_by(request.user):
+def _had_locks(contest):
+    """FairPlay was switched off on this exam after devices locked for it in the last day: an offline computer may
+    never have got the unlock, so its editors keep the Participation tab's offline exit code for those locks."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from judge.models import FairPlayDeviceSession
+    return FairPlayDeviceSession.objects.filter(
+        contest=contest, lease_until__gte=timezone.now() - timedelta(days=1)).exists()
+
+
+def _fairplay_contest(request, key, offline_exit=False):
+    contest = Contest.get_by_key(key)
+    if contest is None:
+        raise Http404()
+    if not fairplay_enabled() or not contest.is_editable_by(request.user):
+        raise Http404()
+    if not is_fairplay_exam(contest) and not (offline_exit and _had_locks(contest)):
         raise Http404()
     return contest
 
 
 ON_RECORD_ACTION = 'offline-exit-on-record'
 MAX_REASON = 200
-MAX_MINUTES = 8 * 60
-MAX_REOPEN_MINUTES = 1440  # a reopen may be as long as instructor_reopen allows, so it never shortens the time left
+# The classic FairPlay service still wants a length for its own reopen call; the native path takes none.
+CLASSIC_REOPEN_MINUTES = 480
 NETID_MAX = 64
 
 
@@ -46,11 +60,11 @@ ACTIONS = {
     'quick-unlock': (_l('Unlock student device'),
                      _l('Unlock %(name)s (%(netid)s)? Their computer is released within a few seconds and they return to the start page. Their saved answers are kept.'), False),
     'unlock-reopen': (_l('Unlock and reopen'),
-                      _l('Unlock %(name)s’s device and let them start the exam again right away?'), True),
+                      _l('Unlock %(name)s’s device and let them start the exam again right away?'), False),
     'approve': (_l('Approve resume'), _l('Approve %(name)s to resume the exam?'), False),
     'release-device': (_l('Move to another computer'),
                        _l('Let %(name)s sign in again from another computer?'), False),
-    'reopen': (_l('Reopen exam'), _l('Reopen the exam for %(name)s, who has handed in?'), True),
+    'reopen': (_l('Reopen exam'), _l('Reopen the exam for %(name)s, who has handed in?'), False),
     'extra-time': (_l('Give extra time'), _l('Give %(name)s extra time?'), True),
     'offline-exit': (_l('Offline exit code'), _l('Get the offline exit code for %(name)s?'), False),
 }
@@ -61,53 +75,6 @@ def _default_reason(action, username):
     label = {'extra-time': _('Extra time given by instructor %s'), 'offline-exit': _('Exit code requested by instructor %s'),
              'approve': _('Approved by instructor %s'), 'reopen': _('Reopened by instructor %s')}
     return (label.get(action) or _('Unlocked by instructor %s')) % username
-
-
-def _extra_given(contest, netid=None):
-    """{netid: extra minutes already given} from the audit rows this OJ wrote ('Extra time +N min by ...')."""
-    import re
-    if not native_browser_enabled():
-        return {}
-    from judge.models import FairPlayDeviceAudit
-    rows = FairPlayDeviceAudit.objects.filter(session__contest=contest, action='extra-time')
-    if netid is not None:
-        rows = rows.filter(session__user__username=netid)
-    given = {}
-    for username, reason in rows.values_list('session__user__username', 'reason'):
-        found = re.search(r'\+(\d+) min', reason or '')
-        if found:
-            given[username] = given.get(username, 0) + int(found.group(1))
-    return given
-
-
-def base_total_minutes(contest):
-    """The exam's per-student time in minutes, or None without a time limit."""
-    return None if contest.time_limit is None else int(contest.time_limit.total_seconds() // 60)
-
-
-def student_total_minutes(contest, netid):
-    """The student's current total time in minutes: the exam's time limit plus the extra time already given; None for
-    an exam without a per-student time limit."""
-    base = base_total_minutes(contest)
-    return None if base is None else base + _extra_given(contest, netid).get(netid, 0)
-
-
-def _extra_from_total(request, contest, netid):
-    """(extra minutes, problem, no-op message) from the posted new total: extra = new total - current total."""
-    try:
-        new_total = int(request.POST.get('total_minutes', ''))
-    except ValueError:
-        new_total = 0
-    current = student_total_minutes(contest, netid)
-    if current is None or new_total < 1:
-        return None, _('Enter the new total time in whole minutes.'), None
-    if new_total <= current:
-        return None, None, _('The time is not longer than the current %(minutes)d minutes, so nothing was changed.') % {
-            'minutes': current}
-    extra = new_total - current
-    if extra > _minutes_limit():
-        return None, _('Extra time must be at most %d minutes.') % _minutes_limit(), None
-    return extra, None, None
 
 
 def _no_store(response):
@@ -140,6 +107,12 @@ def _exit_target_problem(request, contest, netid):
         return _('%(netid)s is not a student of this exam.') % {'netid': netid}
     if contest.is_editable_by(user):
         return _('%(netid)s is an instructor of this exam, not a student. No exit code was issued.') % {'netid': netid}
+    if not is_fairplay_exam(contest):
+        # FairPlay was switched off: only a student whose device locked for this exam gets a code.
+        from judge.models import FairPlayDeviceSession
+        if not FairPlayDeviceSession.objects.filter(user=user, contest=contest).exists():
+            return _('No locked computer is on record for %(netid)s in this exam.') % {'netid': netid}
+        return None
     target = SimpleNamespace(user=user, profile=profile)
     if not student_can_launch(target, contest):
         return _('%(netid)s cannot start this exam, so no exit code was issued.') % {'netid': netid}
@@ -199,14 +172,11 @@ def _audit_issued(request, contest, netid, code):
                    netid, contest.key, code, source, '' if anchor is not None else ' [no session to audit on]')
 
 
-def _reopen_note(contest, session, minutes):
-    from datetime import timedelta, timezone as dt_timezone
+def _reopen_note(contest, session):
+    from datetime import timezone as dt_timezone
     from judge.utils.fairplay_device_session import reopen_until
     until = reopen_until(session)
-    text = _('Reopened until %(time)s UTC.') % {'time': until.astimezone(dt_timezone.utc).strftime('%Y-%m-%d %H:%M')}
-    if until == contest.end_time and timezone.now() + timedelta(minutes=minutes) > contest.end_time:
-        text += ' ' + _('The request was capped at the exam end.')
-    return text
+    return _('Reopened until %(time)s UTC.') % {'time': until.astimezone(dt_timezone.utc).strftime('%Y-%m-%d %H:%M')}
 
 
 def _fail(request, error):
@@ -218,19 +188,14 @@ def _fail(request, error):
         messages.error(request, _('FairPlay could not do that.'))
 
 
-def _minutes_limit():
-    """The longest extra time or classic reopen: the native paths take up to 1440, the FairPlay service 480."""
-    return MAX_REOPEN_MINUTES if native_browser_enabled() else MAX_MINUTES
-
-
-def _parse_minutes(request, maximum):
-    """(minutes, problem): the posted whole number of minutes from 1 to `maximum`."""
+def _parse_minutes(request):
+    """(minutes, problem): the posted whole number of minutes, 1 or more; there is no upper limit."""
     try:
         minutes = int(request.POST.get('minutes', ''))
     except ValueError:
         minutes = 0
-    if not 1 <= minutes <= maximum:
-        return None, _('Minutes must be a whole number from 1 to %d.') % maximum
+    if minutes < 1:
+        return None, _('Minutes must be a whole number, 1 or more.')
     return minutes, None
 
 
@@ -285,7 +250,8 @@ def _session_status(session, reopen_live, flags=None):
 
 def is_fairplay_instructor(request, contest):
     """The one gate for everything FairPlay shows an instructor on the Participation tab."""
-    return bool(fairplay_enabled() and is_fairplay_exam(contest) and contest.is_editable_by(request.user))
+    return bool(fairplay_enabled() and contest.is_editable_by(request.user)
+                and (is_fairplay_exam(contest) or _had_locks(contest)))
 
 
 def participation_rows(request, contest, instructor=None):
@@ -298,7 +264,7 @@ def participation_rows(request, contest, instructor=None):
         return []
     from judge.models import FairPlayDeviceAudit, FairPlayDeviceSession
     from judge.utils.fairplay_device_session import (audit_summary, lease_expired_flagged, parse_window,
-                                                     personal_deadline, reopen_minutes_from)
+                                                     personal_deadline)
     from judge.utils.fairplay_package import exam_roster
     from datetime import timezone as dt_timezone
     from django.db.models import Count, Exists, Max, OuterRef, Q
@@ -318,7 +284,7 @@ def participation_rows(request, contest, instructor=None):
     for username, label in ((p.user.username, p.user.get_full_name() or p.user.username)
                             for p in exam_roster(contest).select_related('user').order_by('user__username')[:2000]):
         rows[username] = {'netid': username, 'name': label, 'state': 'not_started', 'short_status': _('Not started'),
-                          'notes': [], 'reopen_minutes': reopen_minutes_from(None)}
+                          'notes': []}
     for username, session in latest.items():
         row = rows.setdefault(username, {'netid': username, 'name': session.user.get_full_name() or username})
         window = parse_window(flags['windows'].get(session.pk))[0]
@@ -326,7 +292,6 @@ def participation_rows(request, contest, instructor=None):
         row.update(_session_status(session, ended and session.pk in flags['reopened']
                                    and window is not None and window > now, flags))
         deadline = personal_deadline(session, reopen_at=window)
-        row['reopen_minutes'] = reopen_minutes_from((deadline - now).total_seconds())
         notes = []
         if row['state'] == 'submitting':
             notes.append(_('Reopen the exam once the hand-in is complete if they need to continue.'))
@@ -463,7 +428,8 @@ def participation_context(request, contest, with_rows=True, instructor=None):
     context = {'fairplay_instructor': instructor, 'fairplay_students': [], 'fairplay_unreachable': False,
                'fairplay_ranked': {}, 'fairplay_problems': [],
                'fairplay_exam': {}, 'fairplay_stale': None, 'fairplay_block': instructor and with_rows,
-               'fairplay_max_minutes': _minutes_limit(), 'fairplay_max_reopen_minutes': MAX_REOPEN_MINUTES}
+               # FairPlay was switched off with devices still locked: only the offline exit code still works.
+               'fairplay_offline_only': bool(instructor) and not is_fairplay_exam(contest)}
     if not (instructor and with_rows):
         return context
     if native_browser_enabled():
@@ -480,14 +446,9 @@ def participation_context(request, contest, with_rows=True, instructor=None):
     # the instructor's own participation, or FairPlay unreachable), shown without a FairPlay status.
     known = {row['netid'] for row in context['fairplay_students']}
     extra = [{'netid': name, 'name': ranked.user.get_full_name() or name, 'state': 'other',
-              'short_status': '\u2014', 'notes': [], 'reopen_minutes': 30}
+              'short_status': '\u2014', 'notes': []}
              for name, ranked in context['fairplay_ranked'].items() if name not in known]
     context['fairplay_students'] = sorted(list(context['fairplay_students']) + extra, key=lambda row: row['netid'])
-    base = base_total_minutes(contest)
-    if base is not None:
-        given = _extra_given(contest)
-        for row in context['fairplay_students']:
-            row['total_minutes'] = base + given.get(row['netid'], 0)
     return context
 
 
@@ -504,8 +465,8 @@ class ContestStudentHelp(LoginRequiredMixin, View):
         return HttpResponseRedirect(reverse('contest_participation_own', args=[contest.key]))
 
     def post(self, request, contest):
-        contest = _fairplay_contest(request, contest)
         action = request.POST.get('action', '')
+        contest = _fairplay_contest(request, contest, offline_exit=action in ('offline-exit', ON_RECORD_ACTION))
         # 'offline-exit-on-record' is the Participation menu's own action: the exit code is issued for the lock on
         # record
         # and no code is typed. The help page's 'offline-exit' always needs the typed code.
@@ -541,20 +502,12 @@ class ContestStudentHelp(LoginRequiredMixin, View):
             mode = mode if 'mode' in request.POST else 'only'
             if not native_browser_enabled() or mode not in ('continue', 'only'):
                 raise Http404()
-            if mode == 'continue' and request.POST.get('minutes', '').strip():
-                # The instructor chose how long the reopened exam lasts; without a value the default applies.
-                minutes, problem = _parse_minutes(request, MAX_REOPEN_MINUTES)
         if not reason:
             # No reason is asked for: the audit trail records who, when, student and minutes by itself.
             reason = _default_reason(action, request.user.username)
         reason = reason[:MAX_REASON]
-        if action == 'extra-time' and 'total_minutes' in request.POST:
-            minutes, problem, noop = _extra_from_total(request, contest, netid)
-            if noop:
-                messages.info(request, noop)
-                return back
         if problem is None and needs_minutes and minutes is None:
-            minutes, problem = _parse_minutes(request, _minutes_limit())
+            minutes, problem = _parse_minutes(request)
         mac_code, lock_field, source, choices, can_type, ask = '', '', 'typed', [], False, False
         lock_kind = ''
         if problem is None and action == 'offline-exit':
@@ -606,8 +559,7 @@ class ContestStudentHelp(LoginRequiredMixin, View):
 
         if action == 'quick-unlock':
             from judge.utils.fairplay_device_session import (DeviceSessionDenied, NoActiveDevice,
-                                                             default_reopen_minutes, instructor_unlock,
-                                                             instructor_unlock_and_reopen)
+                                                             instructor_unlock, instructor_unlock_and_reopen)
             try:
                 if mode == 'only':
                     # Unlock student device: the computer unlocks and the app returns to its home screen. The attempt
@@ -618,12 +570,11 @@ class ContestStudentHelp(LoginRequiredMixin, View):
                               _('Device unlocked. %(name)s returns to the start page. The attempt is not ended: the '
                                 'student can start the exam again.') % {'name': name})
                 else:
-                    minutes = minutes or default_reopen_minutes(contest, netid)
                     reopened = instructor_unlock_and_reopen(contest=contest, username=netid, actor=request.user,
-                                                            minutes=minutes, reason=reason)
+                                                            reason=reason)
                     _accepted(request, contest,
                               _('Device unlocked. %(name)s returns to the start page and can start again. ')
-                              % {'name': name} + _reopen_note(contest, reopened, minutes))
+                              % {'name': name} + _reopen_note(contest, reopened))
             except NoActiveDevice:
                 messages.info(request, _("This student's computer is not locked by this exam right now."))
             except DeviceSessionDenied as error:
@@ -636,12 +587,12 @@ class ContestStudentHelp(LoginRequiredMixin, View):
             from judge.utils.fairplay_device_session import instructor_unlock_and_reopen, DeviceSessionDenied
             try:
                 reopened = instructor_unlock_and_reopen(contest=contest, username=netid, actor=request.user,
-                                                        minutes=minutes, reason=reason)
+                                                        reason=reason)
             except DeviceSessionDenied as error:
                 messages.error(request, str(error))
             else:
                 _accepted(request, contest, _('Device unlocked and exam reopened. The student can start it again now.')
-                                 + ' ' + _reopen_note(contest, reopened, minutes))
+                                 + ' ' + _reopen_note(contest, reopened))
             return back
 
         if action in ('unlock-device', 'release-device') and native_browser_enabled():
@@ -670,13 +621,12 @@ class ContestStudentHelp(LoginRequiredMixin, View):
             if FairPlayDeviceSession.objects.filter(contest=contest, user__username=netid).exists():
                 from judge.utils.fairplay_device_session import instructor_reopen, DeviceSessionDenied
                 try:
-                    reopened = instructor_reopen(contest=contest, username=netid, actor=request.user,
-                                                 minutes=minutes, reason=reason)
+                    reopened = instructor_reopen(contest=contest, username=netid, actor=request.user, reason=reason)
                 except DeviceSessionDenied as error:
                     messages.error(request, str(error))
                 else:
                     _accepted(request, contest, _('Exam reopened. The student can start one new native session.')
-                                     + ' ' + _reopen_note(contest, reopened, minutes))
+                                     + ' ' + _reopen_note(contest, reopened))
                 return back
 
         if action == 'offline-exit':
@@ -703,7 +653,7 @@ class ContestStudentHelp(LoginRequiredMixin, View):
             elif action == 'release-device':
                 client.release_device(contest.key, netid, reason)
             elif action == 'reopen':
-                client.reopen(contest.key, netid, minutes, reason)
+                client.reopen(contest.key, netid, CLASSIC_REOPEN_MINUTES, reason)
             elif action == 'extra-time':
                 client.extra_time(contest.key, netid, minutes, reason)
             else:

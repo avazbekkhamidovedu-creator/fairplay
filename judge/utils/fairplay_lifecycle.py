@@ -7,7 +7,6 @@ from django.dispatch import receiver
 
 from judge.models import Class, Contest, Organization, Profile
 from judge.utils.fairplay import fairplay_enabled, fairplay_exams
-from judge.utils.fairplay_audience import audience_descriptor
 from judge.utils.fairplay_client import FairPlayClient, FairPlayError
 from judge.utils.fairplay_sync import _run_later
 
@@ -79,9 +78,7 @@ def contest_relation(sender, instance, action, reverse, pk_set, **kwargs):
         instance._fp_lifecycle_relations = cache
     else:
         keys, classes, organizations = cache.pop(sender._meta.label, ([], [], []))
-        current = fairplay_exams().filter(key__in=keys)
-        revoked = any(not audience_descriptor(row)['confirmed'] for row in current)
-        notify('audience_revoked' if revoked else 'changed', keys, classes, organizations)
+        notify('changed', keys, classes, organizations)
 
 
 for field in ('classes', 'organizations', 'private_contestants', 'banned_users', 'authors', 'curators', 'testers', 'tags'):

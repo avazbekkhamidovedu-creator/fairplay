@@ -11,21 +11,21 @@ from django.utils.translation import gettext as _
 from django.views import View
 
 from judge.models import Contest
-from judge.utils.fairplay import fairplay_enabled, fairplay_hidden_for, is_fairplay_exam
-from judge.utils.fairplay_package import exam_roster
-from judge.utils.fairplay_audience import audience_descriptor
+from judge.utils.fairplay import fairplay_enabled, fairplay_exempt, fairplay_hidden_for, is_fairplay_exam
 
 
 def student_can_launch(request, contest):
     return bool(request.user.is_authenticated and fairplay_enabled() and
                 is_fairplay_exam(contest) and contest.is_visible and
                 re.fullmatch(r'[A-Za-z0-9_-]{1,128}', contest.key) and
-                audience_descriptor(contest)['confirmed'] and
-                exam_roster(contest).filter(pk=request.profile.pk).exists())
+                not fairplay_exempt(request.user, contest) and
+                contest.audience_allows(request.profile))
 
 
 def _contest(request, key):
-    contest = get_object_or_404(Contest, key=key)
+    contest = Contest.get_by_key(key)
+    if contest is None:
+        raise Http404()
     if not request.user.is_authenticated or not fairplay_enabled() or not is_fairplay_exam(contest):
         raise Http404()
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', contest.key):
@@ -54,7 +54,7 @@ def _page(request, contest):
 def hidden_exam_launch(request, key, redirect=False):
     if not request.user.is_authenticated or not fairplay_enabled():
         return None
-    contest = Contest.objects.filter(key=key).first()
+    contest = Contest.get_by_key(key)
     if contest is None or not is_fairplay_exam(contest) or not fairplay_hidden_for(request.user, contest):
         return None
     contest = _contest(request, key)

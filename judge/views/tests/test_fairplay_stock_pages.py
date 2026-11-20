@@ -5,7 +5,7 @@ from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from judge.models import ContestParticipation, FairPlayDeviceSession, FairPlayDeviceSlot, Profile
-from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, create_contest
+from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, create_contest, set_fairplay
 
 LISTS = ['/', '/contests/', '/problems/', '/submissions/', '/users/', '/user']
 MARKERS = ('Open exam in FairPlay', 'fairplay://launch')
@@ -95,6 +95,7 @@ class StaleAttachmentTests(FairPlayDataMixin, TestCase):
         now = timezone.now()
         other = create_contest('otherexam', name='Other', start_time=now - timedelta(hours=1),
                                end_time=now + timedelta(hours=2), is_visible=True, format_name='exam')
+        set_fairplay(other, True)   # a claimable exam carries the lock
         return other
 
     def test_stale_unjoined_auto_release_clears_the_attachment(self):

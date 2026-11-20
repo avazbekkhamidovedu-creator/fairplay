@@ -74,16 +74,11 @@ class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
         self.assertTrue(fairplay_hidden_for(self.student, self.exam))
         self.assertFalse(self.exam.is_accessible_by(self.student))
 
-    def test_private_exam_needs_class_membership_and_explicit_student_list(self):
+    def test_private_exam_follows_dku_oj_class_and_student_list_rules(self):
         Contest.objects.filter(pk=self.exam.pk).update(is_private=True)
         self.assertEqual(self.client.get(self.url()).status_code, 404)
         self.exam.private_contestants.add(self.student.profile)
-        self.assertEqual(self.client.get(self.url()).status_code, 404)
-        from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
-        exam = Contest.objects.get(pk=self.exam.pk)
-        apply_fairplay_editor(exam, parse_fairplay_payload(exam, {
-            'fairplay_required': True, 'fairplay_audience_confirm': True,
-            'fairplay_audience_mode': 'classes'}, set()))
+        # No separate confirmation step: DKU OJ's own audience rules decide.
         self.assertEqual(self.client.get(self.url()).status_code, 200)
         self.exam.private_contestants.add(self.outsider.profile)
         self.client.force_login(self.outsider)
@@ -91,10 +86,6 @@ class FairPlayLaunchTestCase(FairPlayDataMixin, TestCase):
 
     def test_org_only_exam_uses_org_membership_when_no_classes_are_assigned(self):
         self.exam.classes.clear()
-        from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
-        apply_fairplay_editor(self.exam, parse_fairplay_payload(self.exam, {
-            'fairplay_required': True, 'fairplay_audience_confirm': True,
-            'fairplay_audience_mode': 'organizations'}, set()))
         self.client.force_login(self.outsider)
         self.assertEqual(self.client.get(self.url()).status_code, 200)
         self.outsider.profile.organizations.clear()

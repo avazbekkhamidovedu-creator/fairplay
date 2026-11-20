@@ -32,7 +32,7 @@
                 <td class="fp-status{% if s.state == 'in_progress' %} fp-status-in-progress{% endif %}">{{ s.short_status }}{% for note in s.notes %}<br><small class="fp-note">{{ note }}</small>{% endfor %}</td>
                 <td class="fp-cell">
                     <button type="button" class="fp-kebab" aria-label="{{ _('Actions') }}" aria-haspopup="menu" aria-expanded="false"
-                            data-netid="{{ s.netid }}" data-name="{{ s.name or s.netid }}" data-state="{{ s.state }}" data-reopen-minutes="{{ s.reopen_minutes or 30 }}"{% if s.total_minutes %} data-total-minutes="{{ s.total_minutes }}"{% endif %}>&#8943;</button>
+                            data-netid="{{ s.netid }}" data-name="{{ s.name or s.netid }}" data-state="{{ s.state }}">&#8943;</button>
                 </td>
             </tr>
         {% else %}
@@ -44,23 +44,23 @@
 
 <div class="fp-part-menu" id="fp-part-menu" role="menu" hidden>
 {% if fairplay_native_mode %}
-    <button type="button" role="menuitem" data-action="quick-unlock" data-mode="continue" data-states="completed unlocked not_locked"
-            data-direct="1">{{ _('Reopen exam') }}</button>
-    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="in_progress" data-minutes="1"
-            data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" data-action="quick-unlock" data-mode="continue" data-states="completed unlocked not_locked"
+            data-direct="1">{{ _('Reopen exam') }}</button>{% endif %}
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="in_progress completed unlocked reopened not_locked" data-minutes="1"
+            data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>{% endif %}
     <button type="button" role="menuitem" data-action="offline-exit-on-record" data-mode="" data-states="not_started in_progress submitting completed unlocked reopened not_locked"
             data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ. You can choose the lock code shown on their screen or type it.') }}">{{ _('Offline exit code') }}</button>
-    <button type="button" role="menuitem" class="fp-danger" data-action="quick-unlock" data-mode="only" data-states="in_progress completed unlocked reopened not_locked"
-            data-question="{{ _('Unlock the computer of {who}? It is unlocked and returns to the start page. The attempt is not ended: the student can start the exam again. Saved answers are kept.') }}">{{ _('Unlock student device') }}</button>
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" class="fp-danger" data-action="quick-unlock" data-mode="only" data-states="in_progress completed unlocked reopened not_locked"
+            data-question="{{ _('Unlock the computer of {who}? It is unlocked and returns to the start page. The attempt is not ended: the student can start the exam again. Saved answers are kept.') }}">{{ _('Unlock student device') }}</button>{% endif %}
 {% else %}
-    <button type="button" role="menuitem" data-action="approve" data-mode="" data-states="waiting"
-            data-question="{{ _('Approve {who} to resume the exam?') }}">{{ _('Approve resume') }}</button>
-    <button type="button" role="menuitem" data-action="reopen" data-mode="" data-states="completed"
-            data-direct="1" data-minutes-default="row">{{ _('Reopen exam') }}</button>
-    <button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="not_started in_progress waiting" data-minutes="1"
-            data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>
-    <button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed"
-            data-question="{{ _('Let {who} sign in again from another computer?') }}">{{ _('Move to another computer') }}</button>
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" data-action="approve" data-mode="" data-states="waiting"
+            data-question="{{ _('Approve {who} to resume the exam?') }}">{{ _('Approve resume') }}</button>{% endif %}
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" data-action="reopen" data-mode="" data-states="completed"
+            data-direct="1">{{ _('Reopen exam') }}</button>{% endif %}
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" data-action="extra-time" data-mode="" data-states="not_started in_progress waiting" data-minutes="1"
+            data-question="{{ _('Give {who} extra time?') }}">{{ _('Give extra time') }}</button>{% endif %}
+    {% if not fairplay_offline_only %}<button type="button" role="menuitem" data-action="release-device" data-mode="" data-states="not_started in_progress waiting completed"
+            data-question="{{ _('Let {who} sign in again from another computer?') }}">{{ _('Move to another computer') }}</button>{% endif %}
     <button type="button" role="menuitem" data-action="offline-exit" data-mode="" data-states="not_started in_progress waiting completed"
             data-question="{{ _('Get the offline exit code for {who}? Use it only when their computer cannot reach DKU OJ.') }}">{{ _('Offline exit code') }}</button>
 {% endif %}
@@ -74,7 +74,6 @@
     <input type="hidden" name="netid" value="">
     <input type="hidden" name="name" value="">
     <input type="hidden" name="minutes" value="">
-    <input type="hidden" name="total_minutes" value="">
     <input type="hidden" name="confirm" value="1">
 </form>
 
@@ -116,10 +115,8 @@
         minutesWrap = document.getElementById('fp-part-minutes-wrap'), minutesLabel = document.getElementById('fp-part-minutes-label'),
         minutesIn = document.getElementById('fp-part-minutes'), confirmBtn = document.getElementById('fp-part-confirm');
     var T = {
-        minutes: {{ _('Minutes (1 to {max})')|tojson }},
-        total: {{ _('Student time in minutes (1 to {max})')|tojson }}
+        minutes: {{ _('Extra minutes')|tojson }}
     };
-    var maxMinutes = 0, totalMode = false, currentTotal = 0;
 
     function closeDialog(value) {
         if (typeof dlg.close === 'function') { dlg.close(value); return; }
@@ -133,32 +130,21 @@
         var ok = true;
         if (!minutesWrap.hidden) {
             var n = Number(minutesIn.value), v = minutesIn.value.trim();
-            ok = v !== '' && /^\d+$/.test(v) && n >= 1 && n <= (totalMode ? currentTotal + maxMinutes : maxMinutes);
+            ok = v !== '' && /^\d+$/.test(v) && n >= 1;
         }
         confirmBtn.disabled = !ok;
     }
     function openDialog(item) {
-        var kebab = current, who = kebab.dataset.name + ' (' + kebab.dataset.netid + ')', rowDefault = item.dataset.minutesDefault === 'row';
+        var kebab = current, who = kebab.dataset.name + ' (' + kebab.dataset.netid + ')';
         chosen = item;
         opener = kebab;
         title.textContent = item.textContent.trim();
         questionEl.textContent = (item.dataset.question || '').replace('{who}', who);
         minutesWrap.hidden = !item.dataset.minutes;
-        totalMode = !!(item.dataset.minutes && item.dataset.action === 'extra-time' && kebab.dataset.totalMinutes);
         if (item.dataset.minutes) {
-            maxMinutes = rowDefault ? {{ fairplay_max_reopen_minutes }} : {{ fairplay_max_minutes }};
-            if (totalMode) {
-                // The student's time is shown (the exam's time plus any extra already given) and is editable: the
-                // new total is what the instructor types; the server works out the extra minutes.
-                currentTotal = Number(kebab.dataset.totalMinutes);
-                minutesLabel.textContent = T.total.replace('{max}', currentTotal + maxMinutes);
-                minutesIn.min = 1; minutesIn.max = currentTotal + maxMinutes;
-                minutesIn.value = String(currentTotal);
-            } else {
-                minutesLabel.textContent = T.minutes.replace('{max}', maxMinutes);
-                minutesIn.min = 1; minutesIn.max = maxMinutes;
-                minutesIn.value = rowDefault ? kebab.dataset.reopenMinutes : '15';
-            }
+            minutesLabel.textContent = T.minutes;
+            minutesIn.min = 1; minutesIn.removeAttribute('max');
+            minutesIn.value = '15';
         }
         validate();
         close();
@@ -168,14 +154,10 @@
         (field || (confirmBtn.disabled ? dlg.querySelector('.fp-cancel') : confirmBtn)).focus();
     }
     window.addEventListener('pageshow', function () { document.getElementById('fp-part-busy').hidden = true; });
-    // One click, no dialog: the neutral defaults are filled here (minutes left empty so the server uses
-    // the student's remaining time or 30 minutes), then the same busy overlay and POST as a confirmed dialog.
+    // One click, no dialog and no minutes: the same busy overlay and POST as a confirmed dialog.
     function submitDirect(item) {
-        var kebab = current, minutes = '';
-        if (item.dataset.minutesDefault === 'row') {
-            minutes = String(Math.min(Number(kebab.dataset.reopenMinutes) || 30, {{ fairplay_max_minutes }}));
-        }
-        form.elements.minutes.value = minutes;
+        var kebab = current;
+        form.elements.minutes.value = '';
         form.elements.action.value = item.dataset.action;
         form.elements.mode.value = item.dataset.mode;
         form.elements.netid.value = kebab.dataset.netid;
@@ -187,8 +169,7 @@
     }
     function finish() {
         if (!chosen || confirmBtn.disabled) { return; }
-        form.elements.minutes.value = minutesWrap.hidden || totalMode ? '' : minutesIn.value.trim();
-        form.elements.total_minutes.value = totalMode ? minutesIn.value.trim() : '';
+        form.elements.minutes.value = minutesWrap.hidden ? '' : minutesIn.value.trim();
         form.elements.action.value = chosen.dataset.action;
         form.elements.mode.value = chosen.dataset.mode;
         form.elements.netid.value = opener.dataset.netid;

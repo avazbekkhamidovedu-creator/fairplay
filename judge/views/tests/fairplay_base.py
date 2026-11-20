@@ -116,8 +116,7 @@ class FairPlayDataMixin:
                                    partial=True)
         from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
         apply_fairplay_editor(cls.exam, parse_fairplay_payload(cls.exam, {
-            'fairplay_required': True, 'fairplay_audience_confirm': True,
-            'fairplay_audience_mode': 'classes'}, set()))
+            'fairplay_required': True}, set()))
 
     @classmethod
     def setUpClass(cls):

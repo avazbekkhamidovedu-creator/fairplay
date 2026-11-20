@@ -725,7 +725,7 @@ class ContestCloneForm(Form):
 
     def clean_key(self):
         key = self.cleaned_data['key']
-        if Contest.objects.filter(key=key).exists():
+        if Contest.objects.filter(key=key).exists() or Contest.key_reserved(key):
             if is_series_id(key, 'c'):
                 return Contest.generate_unique_key()
             raise ValidationError(_('Assignment ID "%(key)s" already exists. Choose a different ID.') % {

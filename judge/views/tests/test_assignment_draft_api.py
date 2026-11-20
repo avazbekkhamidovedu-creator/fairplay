@@ -320,3 +320,50 @@ class WorkspaceDraftPageTestCase(TestCase):
             language=self.python, harvested_at=timezone.now(),
         )
         self.assertIsNone(self._page().context['workspace_server_draft'])
+
+
+class AssignmentDraftRenamedKeyTestCase(AssignmentDraftAPITestCase):
+    """A workspace opened before the assignment's id was renamed keeps saving and can still leave."""
+
+    def _rename(self, new_key):
+        from judge.models import Contest, ContestKeyAlias
+        old = self.contest.key
+        Contest.objects.filter(pk=self.contest.pk).update(key=new_key)
+        ContestKeyAlias.objects.create(contest=self.contest, key=old)
+        return old
+
+    def test_draft_saves_through_the_old_key_after_rename(self):
+        participation = self._join()
+        old = self._rename('draftapirenamed')
+        response = self.client.post(self._url(self.code, contest=old),
+                                    {'content': 'print(7)', 'language': self.python.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(AssignmentDraft.objects.filter(participation=participation, problem=self.code).exists())
+        self.assertEqual(self.client.post(self._url(self.code, contest='draftapirenamed'),
+                                          {'content': 'print(8)', 'language': self.python.id}).status_code, 200)
+
+    def test_an_unrelated_old_key_is_still_refused(self):
+        from judge.models import ContestKeyAlias
+        other = create_contest(key='draftapiother', name='Other', start_time=timezone.now() - timedelta(hours=1),
+                               end_time=timezone.now() + timedelta(days=1), authors=('draftapi_teacher',),
+                               is_visible=True)
+        ContestKeyAlias.objects.create(contest=other, key='draftapiolder')
+        self._join()
+        self.assertEqual(self.client.post(self._url(self.code, contest='draftapiolder'),
+                                          {'content': 'x', 'language': self.python.id}).status_code, 403)
+
+    def test_detail_and_join_through_the_old_key_after_rename(self):
+        old = self._rename('draftapirenamed3')
+        self.assertEqual(self.client.get(reverse('contest_view', args=[old])).status_code, 200)
+        response = self.client.post(reverse('contest_join', args=[old]))
+        self.assertEqual(response.status_code, 302)
+        self.student.profile.refresh_from_db()
+        self.assertEqual(self.student.profile.current_contest.contest_id, self.contest.pk)
+
+    def test_leave_through_the_old_key_after_rename(self):
+        self._join()
+        old = self._rename('draftapirenamed2')
+        response = self.client.post(reverse('contest_leave', args=[old]))
+        self.assertIn(response.status_code, (200, 302))
+        self.student.profile.refresh_from_db()
+        self.assertIsNone(self.student.profile.current_contest)

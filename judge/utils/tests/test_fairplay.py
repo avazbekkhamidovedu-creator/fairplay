@@ -12,8 +12,8 @@ from django.utils import timezone
 from judge.models import Contest, ContestProblem, ContestTag, EditorAttachment, Problem, Submission
 from judge.models.tests.util import create_contest_problem, create_organization, create_problem, create_user
 from judge.utils import fairplay as fairplay_utils
-from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_audience_error, fairplay_check_contest, fairplay_enabled, \
-    fairplay_exams, fairplay_hidden_for, fairplay_hidden_q, is_fairplay_exam, set_fairplay_exam
+from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_check_contest, fairplay_seb_error, fairplay_enabled, \
+    fairplay_exams, fairplay_exempt, fairplay_hidden_for, fairplay_hidden_q, is_fairplay_exam, set_fairplay_exam
 from judge.utils.fairplay_delivery import record_added_minutes
 from judge.utils.fairplay_package import build_exam_entry, build_package, exam_roster, extract_samples
 from judge.views.tests.fairplay_base import FairPlayDataMixin, SECRETS, TOKEN, create_contest, set_fairplay
@@ -91,18 +91,29 @@ class FairPlayCheckTestCase(TestCase):
     def test_seb_and_fairplay_not_both(self):
         create_organization(name='fpcheckorg')
         contest = self._contest(seb_required=True, organizations=('fpcheckorg',))
-        self.assertIn('not both', fairplay_audience_error(contest))
+        self.assertIn('not both', fairplay_seb_error(contest))
         with self.assertRaises(ValidationError):
             fairplay_check_contest(contest)
 
-    def test_fairplay_needs_a_student_list(self):
+    def test_classic_mode_needs_a_student_list(self):
+        for kwargs in (dict(is_organization_private=True),
+                       dict(is_organization_private=False, is_private=True)):
+            with self.subTest(**kwargs):
+                contest = self._contest(**kwargs)
+                self.assertIsNone(fairplay_seb_error(contest))
+                fairplay_check_contest(contest)
+                contest.delete()
         contest = self._contest(is_organization_private=False, is_private=False)
-        self.assertIn('student list', fairplay_audience_error(contest))
-        contest = Contest.objects.get(pk=contest.pk)
-        Contest.objects.filter(pk=contest.pk).update(is_organization_private=True)
-        self.assertIn('course or class', fairplay_audience_error(Contest.objects.get(pk=contest.pk)))
-        Contest.objects.filter(pk=contest.pk).update(is_organization_private=False, is_private=True)
-        self.assertIn('Private assignees', fairplay_audience_error(Contest.objects.get(pk=contest.pk)))
+        self.assertIn('student list', fairplay_seb_error(contest))
+        with self.assertRaises(ValidationError):
+            fairplay_check_contest(contest)
+
+    def test_native_mode_allows_a_public_exam(self):
+        from django.test import override_settings
+        contest = self._contest(is_organization_private=False, is_private=False)
+        with override_settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=True):
+            self.assertIsNone(fairplay_seb_error(contest))
+            fairplay_check_contest(contest)
 
     def test_not_a_fairplay_exam_is_not_checked(self):
         contest = create_contest('fpplain', is_organization_private=False)
@@ -136,6 +147,42 @@ class FairPlayHidingRuleTestCase(FairPlayDataMixin, TestCase):
     def test_staff_see_everything(self):
         for user in (self.teacher, self.tester, self.course_admin, self.staff):
             self.assertRule(user, False)
+
+    def test_every_kind_of_staff_is_exempt_and_students_stay_locked(self):
+        from judge.models.notification import ensure_instructors_group
+        ta = create_user(username='fp_ta')  # a class admin: the TA of the course's class
+        self.klass.admins.add(ta.profile)
+        course_instructor = create_user(username='fp_course_instructor')
+        self.org.instructors.add(course_instructor.profile)
+        curator = create_user(username='fp_curator')
+        self.exam.curators.add(curator.profile)
+        spectator = create_user(username='fp_spectator')
+        self.exam.spectators.add(spectator.profile)
+        site_instructor = create_user(username='fp_site_instructor')
+        site_instructor.groups.add(ensure_instructors_group())
+        django_staff = create_user(username='fp_django_staff', is_staff=True)
+        superuser = create_user(username='fp_superuser', is_superuser=True, is_staff=True)
+        for user in (ta, course_instructor, curator, spectator, site_instructor, django_staff, superuser):
+            self.assertRule(user, False)
+            self.assertTrue(fairplay_exempt(user, self.reload_exam()), user.username)
+        for user in (self.student, self.classmate, self.outsider):
+            self.assertRule(user, True)
+            self.assertFalse(fairplay_exempt(user, self.reload_exam()), user.username)
+
+    def test_a_ta_of_another_course_is_not_staff_of_this_exam(self):
+        other = create_organization(name='fpotherorg')
+        stranger = create_user(username='fp_other_ta')
+        other.admins.add(stranger.profile)
+        self.assertRule(stranger, True)
+
+    def test_audience_is_whoever_dku_oj_lets_join(self):
+        exam = self.reload_exam()
+        self.assertTrue(exam.audience_allows(self.student.profile))
+        self.assertFalse(exam.audience_allows(self.outsider.profile))  # in the course, not in the class
+        exam.banned_users.add(self.classmate.profile)
+        self.assertFalse(exam.audience_allows(self.classmate.profile))
+        Contest.objects.filter(pk=exam.pk).update(is_organization_private=False, is_private=False)
+        self.assertTrue(self.reload_exam().audience_allows(self.outsider.profile))  # a public exam: anyone
 
     def test_problem_author_keeps_the_problem(self):
         author = create_user(username='fp_problem_author')

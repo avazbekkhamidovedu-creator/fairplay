@@ -14,7 +14,8 @@ from django.utils.translation import gettext as _
 from django.views.generic import View
 
 from judge.forms import FileSubmitForm
-from judge.models import AssignmentDraft, AssignmentDraftFile, Language, Problem, ProblemSubmissionType
+from judge.models import AssignmentDraft, AssignmentDraftFile, Contest, Language, Problem, \
+    ProblemSubmissionType
 from judge.utils.assignment_draft import DraftContentError, normalize_draft_content
 from judge.utils.assignment_harvest import user_bypasses_assignment_rules
 
@@ -36,7 +37,7 @@ class AssignmentDraftView(LoginRequiredMixin, View):
         ``current_contest``, and being joined is what grants access to the assignment's problems.
         """
         participation = self.request.profile.current_contest
-        if participation is None or participation.contest.key != self.kwargs['contest']:
+        if participation is None or Contest.get_by_key(self.kwargs['contest']) != participation.contest:
             return self._error(_('Join the assignment before saving answers.'), 403)
         contest = participation.contest
         # A retained participation is not proof of current protected admission.

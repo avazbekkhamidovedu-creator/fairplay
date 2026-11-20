@@ -40,7 +40,9 @@ class NativeBrowserAdmissionMiddleware:
         left to the normal handling."""
         from judge.models import FairPlayDeviceSession
         from judge.views.fairplay_native_session import submitted_response
-        newest = FairPlayDeviceSession.objects.filter(user_id=request.user.pk, contest__key=route.kwargs.get('contest')) \
+        from judge.models import Contest
+        asked = Contest.get_by_key(route.kwargs.get('contest'))
+        newest = FairPlayDeviceSession.objects.filter(user_id=request.user.pk, contest=asked) \
             .order_by('-created_at', '-pk').first()
         if newest is None or newest.state != 'completed' or newest.fingerprint != fingerprint \
                 or newest.browser_digest != digest:
@@ -92,7 +94,8 @@ class NativeBrowserAdmissionMiddleware:
             if session is None:
                 return self.get_response(request)
             if name in _CONTEST_ROUTES:
-                matches = route.kwargs.get('contest') == session.contest.key
+                from judge.models import Contest
+                matches = Contest.get_by_key(route.kwargs.get('contest')) == session.contest
             else:
                 matches = (session.participation_id is not None and
                            locked_profile.current_contest_id == session.participation_id and

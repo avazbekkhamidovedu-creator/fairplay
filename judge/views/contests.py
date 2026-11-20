@@ -46,7 +46,7 @@ from judge import contest_format
 from judge import event_poster as event
 from judge.comments import CommentedDetailView
 from judge.forms import ContestCloneForm
-from judge.models import Contest, ContestMoss, ContestParticipation, ContestProblem, \
+from judge.models import Contest, ContestKeyAlias, ContestMoss, ContestParticipation, ContestProblem, \
     ContestTag, Problem, ProblemSubmissionType, Profile, SEBConfigPreset, Submission, SubmissionManualGrade, \
     contest_problem_display_name
 from judge.models.profile import Class, Organization
@@ -54,8 +54,8 @@ from judge.storage import StorageUnavailableError
 from judge.tasks import run_moss
 from judge.utils.celery import redirect_to_task_status, task_status_url
 from judge.utils.fairplay import FAIRPLAY_TAG, fairplay_visible_problems, is_fairplay_exam, native_browser_enabled
-from judge.utils.fairplay_editor import FAIRPLAY_EDITOR_FIELDS, apply_fairplay_editor, fairplay_check_edit, \
-    fairplay_edit_lock, fairplay_editor_context, parse_fairplay_payload
+from judge.utils.fairplay_editor import FAIRPLAY_EDITOR_FIELDS, apply_fairplay_editor, fairplay_editor_context, \
+    parse_fairplay_payload
 from judge.utils.fairplay_modes import mode_table_from_exam
 from judge.utils.opengraph import generate_opengraph
 from judge.utils.problems import _get_result_data, assignment_problem_stats, participation_submit_progress, \
@@ -1176,8 +1176,6 @@ class ContestCreate(LoginRequiredMixin, View):
             # Django's ValidationError can carry dicts / lists of messages
             # (e.g. from full_clean()); flatten them into one readable line.
             body = {'error': ' '.join(exception.messages)}
-            if getattr(exception, 'code', None) == 'fairplay_lock':
-                body['field'] = 'exam_lock'
             return JsonResponse(body, status=400)
         if isinstance(exception, IntegrityError):
             logger.exception('Contest save integrity error: %s', exception)
@@ -1204,7 +1202,7 @@ class ContestCreate(LoginRequiredMixin, View):
             if not re.match(r'^[a-z0-9]+$', key):
                 return JsonResponse({'error': _('Assignment ID must contain only lowercase letters and numbers.')},
                                     status=400)
-            if Contest.objects.filter(key=key).exists():
+            if Contest.objects.filter(key=key).exists() or Contest.key_reserved(key):
                 return JsonResponse({
                     'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {'key': key},
                 }, status=400)
@@ -1264,7 +1262,6 @@ class ContestCreate(LoginRequiredMixin, View):
         """Update an existing contest row (and optionally its key) in place."""
         contest = self.contest
         old_key = contest.key
-        fairplay_lock = fairplay_edit_lock(contest)
         try:
             with transaction.atomic():
                 # Renaming the key (the URL slug) needs a uniqueness check that
@@ -1276,13 +1273,31 @@ class ContestCreate(LoginRequiredMixin, View):
                             {'error': _('Assignment ID must contain only lowercase letters and numbers.')},
                             status=400,
                         )
-                    if Contest.objects.filter(key=new_key).exclude(pk=contest.pk).exists():
+                    from judge.utils.fairplay import is_fairplay_exam
+                    from datetime import timedelta
+                    from judge.utils.fairplay_delivery import DELIVERY_WINDOW, exam_closes_at
+                    now = timezone.now()
+                    if ((contest.had_fairplay or is_fairplay_exam(contest)) and contest.start_time is not None
+                            and contest.start_time - timedelta(hours=24) <= now
+                            <= exam_closes_at(contest) + DELIVERY_WINDOW):
+                        # From a day before the start until hand-ins are over, FairPlay knows this exam, its attempts
+                        # and its locked computers by this ID, so the ID stays. Before and after, it can change.
+                        return JsonResponse({
+                            'error': _('FairPlay is using this exam\'s Assignment ID until its hand-ins are over, so the ID '
+                                       'cannot change now. The title and everything else can.'),
+                        }, status=400)
+                    if (Contest.objects.filter(key=new_key).exclude(pk=contest.pk).exists() or
+                            Contest.key_reserved(new_key, exclude=contest)):
                         return JsonResponse({
                             'error': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {
                                 'key': new_key,
                             },
                         }, status=400)
                     contest.key = new_key
+                    # A workspace a student already has open still carries the old key in its autosave and
+                    # Leave URLs, so the old key keeps resolving to this contest for those two endpoints.
+                    ContestKeyAlias.objects.filter(key=new_key).delete()
+                    ContestKeyAlias.objects.get_or_create(key=old_key, defaults={'contest': contest})
 
                 before_score = self._scoring_snapshot(contest)
                 self._apply_payload(contest, payload)
@@ -1291,7 +1306,7 @@ class ContestCreate(LoginRequiredMixin, View):
                 contest.full_clean()
                 contest.save()
                 self._save_m2m(contest, payload)
-                apply_fairplay_editor(contest, self._fairplay_plan)
+                apply_fairplay_editor(contest, self._fairplay_plan, actor=request.user)
                 # Authors are only editable here; create auto-adds the current user.
                 if 'authors' in payload:
                     values = payload['authors']
@@ -1302,7 +1317,6 @@ class ContestCreate(LoginRequiredMixin, View):
                     except (TypeError, ValueError):
                         raise ValidationError(_('Invalid value for "authors".'))
                 self._sync_problems(contest, payload)
-                fairplay_check_edit(fairplay_lock, contest, self._fairplay_plan)
                 contest_id = contest.pk
                 contest_key = contest.key
                 if self._scoring_snapshot(contest) != before_score:
@@ -1882,6 +1896,13 @@ class ContestMixin(object):
         return context
 
     def get_object(self, queryset=None):
+        # A page or form opened before the contest's id was renamed still carries the old one: swap in the current
+        # key, then let the normal lookup and the visibility rules below decide.
+        asked = self.kwargs.get(self.slug_url_kwarg)
+        if asked is not None:
+            current = Contest.get_by_key(asked)
+            if current is not None and current.key != asked:
+                self.kwargs[self.slug_url_kwarg] = current.key
         contest = super(ContestMixin, self).get_object(queryset)
 
         profile = self.request.profile
@@ -2061,6 +2082,8 @@ class ContestClone(ContestMixin, PermissionRequiredMixin, TitleMixin, SingleObje
         # A clone is a fresh, unrun contest: never carry over the finalize state, or its results would
         # be revealed (and folded into the scoreboard) before it has even started.
         contest.results_finalized = False
+        # FairPlay was never on for the clone, so it is not a FairPlay delivery exam either.
+        contest.had_fairplay = False
         contest.key = form.cleaned_data['key']
         with revisions.create_revision(atomic=True):
             contest.save()

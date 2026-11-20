@@ -13,6 +13,9 @@ from django.http import Http404, JsonResponse
 from django.views.decorators.http import require_GET
 
 
+from judge.utils.fairplay_device_session import claimed_contest_key
+
+
 def record_browser_completion(request, participation):
     request.session.pop('fairplay_browser_completed', None)
     if not getattr(settings, 'FAIRPLAY_BROWSER_SIGNING_KEY', '') or participation.spectate:
@@ -23,7 +26,7 @@ def record_browser_completion(request, participation):
     if any(draft.has_content() for draft in drafts):
         return
     request.session['fairplay_browser_completed'] = {
-        'user': str(request.user.pk), 'contest': participation.contest.key,
+        'user': str(request.user.pk), 'contest': claimed_contest_key(request.user.pk, participation.contest),
         'participation': str(participation.pk), 'at': int(time.time()),
     }
 
@@ -46,7 +49,7 @@ def browser_context(request):
     if participation:
         request.session.pop('fairplay_browser_completed', None)
     if participation and not participation.spectate and not participation.is_disqualified:
-        payload.update(contest=participation.contest.key, participation=str(participation.pk), state='active')
+        payload.update(contest=claimed_contest_key(request.user.pk, participation.contest), participation=str(participation.pk), state='active')
     elif participation is None:
         receipt = request.session.get('fairplay_browser_completed') or {}
         if (receipt.get('user') == payload['user'] and type(receipt.get('at')) is int

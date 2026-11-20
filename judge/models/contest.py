@@ -21,7 +21,7 @@ from judge.utils.seb import first_invalid_seb_key, parse_seb_keys
 from judge.utils.unique_ids import next_prefixed_id
 
 __all__ = [
-    'Contest', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating',
+    'Contest', 'ContestKeyAlias', 'ContestTag', 'ContestParticipation', 'ContestProblem', 'ContestSubmission', 'Rating',
     'contest_problem_display_name',
 ]
 
@@ -212,6 +212,9 @@ class Contest(models.Model):
     is_organization_private = models.BooleanField(verbose_name=_('private to organizations'), default=False)
     organizations = models.ManyToManyField(Organization, blank=True, verbose_name=_('organizations'),
                                            help_text=_('If non-empty, only these organizations may see the contest.'))
+    had_fairplay = models.BooleanField(default=False, editable=False,
+                                       help_text='Set once the FairPlay lock has been on; keeps hand-in delivery '
+                                                 'working after the lock is switched off.')
     limit_join_organizations = models.BooleanField(verbose_name=_('limit organizations that can join'), default=False)
     join_organizations = models.ManyToManyField(Organization, blank=True, verbose_name=_('join organizations'),
                                                 help_text=_('If non-empty, only these organizations may join '
@@ -325,10 +328,30 @@ class Contest(models.Model):
     def generate_unique_key(cls):
         """Next unused assignment/contest id in the clone/admin series ``c000000``."""
         return next_prefixed_id(
-            cls.objects.values_list('key', flat=True),
+            set(cls.objects.values_list('key', flat=True)) | set(ContestKeyAlias.objects.values_list('key', flat=True)),
             'c',
             fallback_prefix='contest',
         )
+
+    @classmethod
+    def key_reserved(cls, key, exclude=None):
+        """Whether ``key`` is an old key of another contest. Such a key can never be taken again, because open
+        workspaces and pending hand-ins of that contest still arrive through it."""
+        aliases = ContestKeyAlias.objects.filter(key=key)
+        if exclude is not None and exclude.pk is not None:
+            aliases = aliases.exclude(contest_id=exclude.pk)
+        return aliases.exists()
+
+    @classmethod
+    def get_by_key(cls, key, queryset=None):
+        """The contest with this key, or the one that used to have it; None when there is none. The one lookup
+        every route that a workspace or the FairPlay app opened before a rename may still use."""
+        queryset = cls.objects.all() if queryset is None else queryset
+        contest = queryset.filter(key=key).first()
+        if contest is not None:
+            return contest
+        alias = ContestKeyAlias.objects.filter(key=key).first()
+        return queryset.filter(pk=alias.contest_id).first() if alias is not None else None
 
     @cached_property
     def format_class(self):
@@ -349,6 +372,9 @@ class Contest(models.Model):
         return lua.eval(self.problem_label_script)
 
     def clean(self):
+        if self.key and Contest.key_reserved(self.key, exclude=self):
+            raise ValidationError({'key': _('Assignment ID "%(key)s" already exists. Choose a different ID.') % {
+                'key': self.key}})
         # Django will complain if you didn't fill in start_time or end_time, so we don't have to.
         if self.start_time and self.end_time and self.start_time >= self.end_time:
             raise ValidationError(_('What is this? An assignment that ended before it starts?'))
@@ -595,6 +621,24 @@ class Contest(models.Model):
         if not self.is_visible:
             raise self.Inaccessible()
 
+        self._audience_check(user)
+
+    def audience_allows(self, profile):
+        """Whether DKU OJ's own audience rules let this profile into the contest (and it is not banned from it).
+        Used for FairPlay: whoever DKU OJ lets join is who takes the exam."""
+        if self.banned_users.filter(id=profile.id).exists():
+            return False
+        try:
+            self._audience_check(profile.user)
+        except (self.Inaccessible, self.PrivateContest):
+            return False
+        # The same restriction ContestJoin applies (is_live_joinable_by), without its time and role checks.
+        if self.limit_join_organizations and \
+                not self.join_organizations.filter(id__in=profile.organizations.all()).exists():
+            return False
+        return True
+
+    def _audience_check(self, user):
         # Contest is not private
         if not self.is_private and not self.is_organization_private:
             return
@@ -878,6 +922,23 @@ class Contest(models.Model):
         )
         verbose_name = _('contest')
         verbose_name_plural = _('contests')
+
+
+class ContestKeyAlias(models.Model):
+    """A key a contest used to have. Keeps the in-flight endpoints of a workspace opened before a rename (autosave,
+    leave) working, because the page that student already holds still points at the old key."""
+    contest = models.ForeignKey(Contest, verbose_name=_('contest'), related_name='key_aliases',
+                                on_delete=models.CASCADE)
+    key = models.CharField(max_length=20, verbose_name=_('old contest id'), unique=True)
+
+    class Meta:
+        app_label = 'judge'
+
+    @classmethod
+    def resolve(cls, key):
+        """The contest that once used ``key``, or None."""
+        alias = cls.objects.filter(key=key).select_related('contest').first()
+        return alias.contest if alias is not None else None
 
 
 class ContestParticipation(models.Model):

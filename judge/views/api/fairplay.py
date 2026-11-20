@@ -10,8 +10,8 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from judge.models import Class, Profile
-from judge.utils.fairplay import FAIRPLAY_LEAD, fairplay_exams, fairplay_token
+from judge.models import Class, Contest, Profile
+from judge.utils.fairplay import FAIRPLAY_LEAD, fairplay_delivery_exams, fairplay_exams, fairplay_token
 from judge.utils.fairplay_delivery import DeliveryError, TRANSIENT_ERRORS, deliver_submission, parse_time, \
     results_page, store_upload, transient_error
 from judge.utils.fairplay_package import PACKAGE_MAX_BYTES, build_package, exam_list_page, iso
@@ -136,8 +136,8 @@ def _changed_since(request):
         raise DeliveryError(400, 'changed_since must be an ISO-8601 time.')
 
 
-def _exam(key):
-    contest = fairplay_exams().filter(key=key).first()
+def _exam(key, delivery=False):
+    contest = Contest.get_by_key(key, fairplay_delivery_exams() if delivery else fairplay_exams())
     if contest is None:
         raise DeliveryError(404, 'No FairPlay exam with this key.')
     return contest
@@ -224,7 +224,7 @@ def exam_asset(request, key, name):
 @require_POST
 def exam_uploads(request, key):
     # The signature covers the query string; X-Sha256 is checked against the signed body.
-    contest = _exam(key)
+    contest = _exam(key, delivery=True)
     data = request.fairplay_body
     upload_id = store_upload(
         contest,
@@ -240,7 +240,7 @@ def exam_uploads(request, key):
 @fairplay_api(max_bytes=SUBMISSION_MAX_BYTES)
 @require_POST
 def exam_submissions(request, key):
-    contest = _exam(key)
+    contest = _exam(key, delivery=True)
     data = request.fairplay_body
     try:
         payload = json.loads(data.decode('utf-8'))

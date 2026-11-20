@@ -86,7 +86,7 @@ def native_contest(request, key):
     """(contest, None) when this account may claim, else (None, response) or Http404 for anything not safe to reveal."""
     from judge.utils.fairplay import is_fairplay_exam
     from judge.views.fairplay_launch import student_can_launch
-    contest = Contest.objects.filter(key=key).first()
+    contest = Contest.get_by_key(key)
     if contest is None:
         raise deny(request, 'invalid-key', key)
     if contest.is_editable_by(request.user):
@@ -98,19 +98,12 @@ def native_contest(request, key):
         raise deny(request, 'not-fairplay-exam', key)
     if not student_can_launch(request, contest):
         from judge.utils.fairplay import fairplay_enabled
-        from judge.utils.fairplay_audience import audience_descriptor
-        from judge.utils.fairplay_package import exam_roster
         reasons = {
             'fairplay-not-configured': 'FairPlay is not set up on this server yet. Ask your instructor or administrator.',
-            'audience-unconfirmed': 'The student list for this exam is not confirmed yet. Ask your instructor.',
             'launch-refused': 'This exam cannot be started in FairPlay right now. Ask your instructor.'}
         if not fairplay_enabled():
             code = 'fairplay-not-configured'
-        elif not audience_descriptor(contest)['confirmed']:
-            code = 'audience-unconfirmed'
-            if exam_roster(contest).filter(pk=request.profile.pk).exists():
-                note_lock_hint(request, contest)  # a hint only for a student of this exam
-        elif not exam_roster(contest).filter(pk=request.profile.pk).exists():
+        elif not contest.audience_allows(request.profile):
             raise deny(request, 'not-on-roster', key)
         else:
             code = 'launch-refused'
@@ -196,7 +189,7 @@ def signed_state(request, session, hold=None, extras=None):
     key = signing_key()
     payload = {'v': 2, 'nonce': nonce, 'expires': int(time.time()) + 30,
                'session': str(session.pk), 'device': session.fingerprint, 'user': str(session.user_id),
-               'contest': session.contest.key, 'participation': str(session.participation_id or ''),
+               'contest': getattr(session, 'claimed_key', '') or session.contest.key, 'participation': str(session.participation_id or ''),
                'state': session.state}
     payload['lease_until'] = min(int(session.lease_until.timestamp()), payload['expires'])
     if isinstance(session, FairPlayDeviceSession) and session.state == 'active':
@@ -238,7 +231,7 @@ def native_claim(request, key):
     extras = prefetch_extras(contest, wait=True)
     owner = known_lock_owner(request.POST.get('lock', ''))
     close_blocking_session(request.user.pk)
-    response = _claim_locked(request, contest, fingerprint, digest, extras, owner)
+    response = _claim_locked(request, contest, fingerprint, digest, extras, owner, claimed_key=key)
     if response.status_code != 200:
         note_lock_hint(request, contest)  # refused or held: kept as a hint, after the locked section
     return response
@@ -292,9 +285,9 @@ def _note_launch_if_running(request, contest, session):
 
 
 @transaction.atomic
-def _claim_locked(request, contest, fingerprint, digest, extras=None, owner=None):
+def _claim_locked(request, contest, fingerprint, digest, extras=None, owner=None, claimed_key=None):
     try:
-        session = claim_device(user_id=request.user.pk, contest=contest, fingerprint=fingerprint, browser_digest=digest)
+        session = claim_device(user_id=request.user.pk, contest=contest, fingerprint=fingerprint, browser_digest=digest, claimed_key=claimed_key)
     except DeviceSessionDenied as error:
         if error.reason:
             return refusal_response(str(error), error.reason)
@@ -397,8 +390,9 @@ def close_after_deadline(record):
     from judge.utils.fairplay_device_session import LEASE_SECONDS
     with transaction.atomic():
         Profile.objects.select_for_update().get(user_id=record.user_id)
-        record = FairPlayDeviceSession.objects.select_for_update().select_related(
-            'contest', 'participation').get(pk=record.pk)
+        # Only the session row is locked (a join would lock the contest too, against the order
+        # release_contest_sessions takes: contest, then sessions).
+        record = FairPlayDeviceSession.objects.select_for_update().get(pk=record.pk)
         if record.state not in ('active', 'finishing'):
             return record
         now = timezone.now()
@@ -442,7 +436,7 @@ def close_after_deadline(record):
         except DeviceSessionDenied:
             record = FairPlayDeviceSession.objects.select_related('contest', 'participation').get(pk=record.pk)
         if now >= deadline + RELEASE_AFTER_DEADLINE_GRACE:
-            record = FairPlayDeviceSession.objects.select_for_update().select_related('contest', 'participation').get(pk=record.pk)
+            record = FairPlayDeviceSession.objects.select_for_update().get(pk=record.pk)
             if record.state in ('active', 'finishing') and personal_deadline(record) + RELEASE_AFTER_DEADLINE_GRACE <= timezone.now():
                 record.state = 'released'
                 record.ended_at = now
@@ -508,27 +502,46 @@ def native_abort(request, session_id):
     return signed_state(request, record)
 
 
+def _unlock_only_contest(request, key):
+    """The contest, when FairPlay was switched off for it but this account still has a finished (released or
+    completed) native session in it: that student must still be able to fetch a signed unlock. Never a way to start
+    a new session."""
+    from judge.models import FairPlayDeviceSession
+    from judge.utils.fairplay import is_fairplay_exam
+    contest = Contest.get_by_key(key)
+    if contest is None or is_fairplay_exam(contest):
+        return None
+    if FairPlayDeviceSession.objects.filter(user_id=request.user.pk, contest=contest,
+                                            state__in=('released', 'completed')).exists():
+        return contest
+    return None
+
+
 @require_POST
 def native_recover(request, key):
     fingerprint, digest = request_identity(request)
-    contest, refusal = native_contest(request, key)
-    if refusal is not None:
-        return refusal
-    extras = prefetch_extras(contest, wait=True)
+    contest = _unlock_only_contest(request, key)
+    if contest is not None:
+        extras = None
+    else:
+        contest, refusal = native_contest(request, key)
+        if refusal is not None:
+            return refusal
+        extras = prefetch_extras(contest, wait=True)
     owner = known_lock_owner(request.POST.get('lock', ''))
-    response = _recover_locked(request, contest, fingerprint, digest, extras, owner)
+    response = _recover_locked(request, contest, fingerprint, digest, extras, owner, claimed_key=key)
     if response.status_code != 200:
         note_lock_hint(request, contest)  # refused or held; an answer of 200 (even 'rejected') stores nothing
     return response
 
 
 @transaction.atomic
-def _recover_locked(request, contest, fingerprint, digest, extras=None, owner=None):
+def _recover_locked(request, contest, fingerprint, digest, extras=None, owner=None, claimed_key=None):
     from judge.utils.fairplay_device_session import recover_device
     try:
         record = recover_device(user_id=request.user.pk, contest=contest,
                                 fingerprint=fingerprint, browser_digest=digest,
-                                unclean=request.POST.get('unclean') == '1')
+                                unclean=request.POST.get('unclean') == '1', claimed_key=claimed_key)
     except DeviceSessionDenied as error:
         # Only an authenticated, serialized check may prove this device owns no
         # active attempt. An unsigned HTTP error is never an unlock instruction.
@@ -543,7 +556,8 @@ def _recover_locked(request, contest, fingerprint, digest, extras=None, owner=No
                 return refusal_response(str(error), error.reason)
             return JsonResponse({'error': str(error)}, status=409)
         record = SimpleNamespace(pk=uuid4(), fingerprint=fingerprint, user_id=request.user.pk,
-            contest=contest, participation_id=None, state='rejected', lease_until=timezone.now())
+            contest=contest, participation_id=None, state='rejected', lease_until=timezone.now(),
+            claimed_key=claimed_key or '')
     else:
         if not bind_lock(record, request.POST.get('lock', ''), owner=owner):
             transaction.set_rollback(True)

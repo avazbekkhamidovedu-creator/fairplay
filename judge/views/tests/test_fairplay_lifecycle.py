@@ -8,8 +8,6 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from judge.models import Class, Contest, Organization
-from judge.utils.fairplay_audience import MODES, CONFIRMED, audience_descriptor
-from judge.utils.fairplay_editor import apply_fairplay_editor, parse_fairplay_payload
 from judge.utils.fairplay_package import build_exam_entry, build_package
 from judge.utils.fairplay_signing import body_sha256, canonical_string, direction_key, DIRECTION_OJ_TO_FP
 from judge.views.tests.fairplay_base import FAIRPLAY_ON, FairPlayDataMixin, INSTALLATION_ID, TOKEN, fp_signed
@@ -21,69 +19,15 @@ class FairPlayLifecycleTestCase(FairPlayDataMixin, TestCase):
         super().setUp()
         self.client.force_login(self.teacher)
 
-    def confirm(self, mode):
-        plan = parse_fairplay_payload(self.exam, {'fairplay_required': True,
-            'fairplay_audience_confirm': True, 'fairplay_audience_mode': mode}, set())
-        apply_fairplay_editor(self.exam, plan)
-
-    def test_explicit_confirmation_and_empty_class_never_falls_back(self):
-        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
+    def test_no_audience_confirmation_exists(self):
+        """No instructor confirmation step: the audience the classic service reads is derived from the contest and is
+        always confirmed."""
         self.exam.classes.clear()
-        descriptor = audience_descriptor(self.exam)
-        self.assertEqual(descriptor['mode'], 'classes')
-        self.assertFalse(descriptor['confirmed'])
-        self.assertEqual(descriptor['organization_ids'], [self.org.pk])
-        self.assertEqual(build_exam_entry(self.exam)['audience'], descriptor)
-        self.assertEqual(build_package(self.exam)[0]['audience'], descriptor)
-        self.client.force_login(self.outsider)
-        self.assertEqual(self.client.get(reverse('contest_fairplay_launch', args=[self.exam.key])).status_code, 404)
-
-    def test_legacy_scope_needs_explicit_authorized_confirmation(self):
-        self.exam.tags.remove(*self.exam.tags.filter(name__startswith='fp-aud-'))
-        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
-        apply_fairplay_editor(self.exam, parse_fairplay_payload(self.exam, {'fairplay_required': True}, set()))
-        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
-        self.confirm('classes')
-        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
-
-    def test_org_scope_is_allowed_only_after_explicit_confirmation(self):
-        self.exam.classes.clear()
-        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
-        self.confirm('organizations')
-        self.assertEqual(audience_descriptor(self.exam)['mode'], 'organizations')
-        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
-        self.exam.organizations.clear()
-        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
-
-    def test_reused_class_name_does_not_replace_the_selected_class_id(self):
-        original_name = self.klass.name
-        Class.objects.filter(pk=self.klass.pk).update(name=original_name + ' renamed')
-        other = Class.objects.create(name=original_name, slug='fp-other', organization=self.org)
-        self.assertEqual(audience_descriptor(self.exam)['class_ids'], [self.klass.pk])
-        self.assertNotIn(other.pk, audience_descriptor(self.exam)['class_ids'])
-
-    def test_private_class_scope_cannot_expand_without_explicit_reconfirmation(self):
-        self._private_scope_requires_reconfirmation('classes')
-
-    def test_private_org_scope_cannot_expand_without_explicit_reconfirmation(self):
-        self.exam.classes.clear()
-        self._private_scope_requires_reconfirmation('organizations')
-
-    def _private_scope_requires_reconfirmation(self, mode):
-        self.exam.is_private = True
-        self.exam.save(update_fields=['is_private'])
-        self.exam.private_contestants.add(self.student.profile)
-        self.confirm(mode)
-        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
-        self.assertTrue(audience_descriptor(self.exam)['selected_only'])
-        self.exam.is_private = False
-        self.exam.save(update_fields=['is_private'])
-        apply_fairplay_editor(self.exam, parse_fairplay_payload(self.exam, {'fairplay_required': True}, set()))
-        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
-        self.assertTrue(audience_descriptor(self.exam)['selected_only'])
-        self.confirm(mode)
-        self.assertTrue(audience_descriptor(self.exam)['confirmed'])
-        self.assertFalse(audience_descriptor(self.exam)['selected_only'])
+        audience = build_package(self.exam)[0]['audience']
+        self.assertEqual((audience['mode'], audience['confirmed'], audience['class_ids']),
+                         ('organizations', True, []))
+        self.assertNotIn('fp-aud-', ''.join(self.exam.tags.values_list('name', flat=True)))
+        self.assertEqual(build_exam_entry(self.exam)['audience'], audience)
 
     def test_class_deletion_before_any_sync_preserves_key_and_revokes_scope(self):
         key, class_id = self.exam.key, self.klass.pk
@@ -93,8 +37,6 @@ class FairPlayLifecycleTestCase(FairPlayDataMixin, TestCase):
             self.klass.delete()
         calls = [call.kwargs for call in send.call_args_list if call.kwargs.get('event') == 'audience_revoked']
         self.assertTrue(any(key in call['exam_keys'] and class_id in call['class_ids'] for call in calls))
-        self.assertEqual(audience_descriptor(self.exam)['mode'], 'classes')
-        self.assertFalse(audience_descriptor(self.exam)['confirmed'])
 
     def test_org_deletion_and_editor_clear_notify_explicit_keys(self):
         key, org_id = self.exam.key, self.org.pk

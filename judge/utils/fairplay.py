@@ -14,10 +14,11 @@ from django.utils.translation import gettext as _, gettext_lazy as _lazy
 __all__ = [
     'DELIVERY_WINDOW', 'FAIRPLAY_CALCULATOR_CHOICES', 'FAIRPLAY_LEAD', 'FAIRPLAY_MIN_TOKEN_LENGTH',
     'FAIRPLAY_REVIEW_CHOICES', 'FAIRPLAY_REVIEW_HELP', 'FAIRPLAY_TAG', 'KEY_ADDED_MINUTES', 'KEY_FAIRPLAY_CLOSES',
-    'MAX_ADDED_MINUTES', 'fairplay_audience_error', 'fairplay_check_contest', 'fairplay_clean_admin_form',
-    'fairplay_edit_locked', 'fairplay_enabled', 'fairplay_exams', 'fairplay_hidden_for',
+    'MAX_ADDED_MINUTES', 'fairplay_check_contest', 'fairplay_clean_admin_form', 'fairplay_delivery_exams',
+    'fairplay_enabled', 'fairplay_exams', 'fairplay_exempt', 'fairplay_hidden_for',
     'fairplay_hidden_problem_ids', 'fairplay_hidden_q', 'fairplay_hiding_active', 'fairplay_in_window',
-    'fairplay_public_list', 'fairplay_public_problems', 'fairplay_released', 'fairplay_shared_problems',
+    'fairplay_public_list', 'fairplay_public_problems', 'fairplay_released', 'fairplay_seb_error',
+    'fairplay_shared_problems',
     'fairplay_tag', 'fairplay_tags_changed', 'fairplay_template_problem', 'fairplay_token', 'fairplay_tokens',
     'fairplay_url_insecure', 'fairplay_visible_breakdown', 'fairplay_visible_problems', 'fairplay_window_start',
     'is_fairplay_exam', 'native_browser_enabled', 'set_fairplay_exam',
@@ -116,6 +117,18 @@ def fairplay_exams(queryset=None):
     from judge.models import Contest
     queryset = Contest.objects.all() if queryset is None else queryset
     return queryset.filter(id__in=Contest.objects.filter(tags__name=FAIRPLAY_TAG).values('id'))
+
+
+def fairplay_delivery_exams(queryset=None):
+    """The exams that may still receive hand-ins: the FairPlay ones, and any contest that ever had the lock (or
+    native sessions), within 30 days of its end, so a hand-in waiting in a student's outbox is not lost when the
+    lock is switched off."""
+    from judge.models import Contest, FairPlayDeviceSession
+    queryset = Contest.objects.all() if queryset is None else queryset
+    recent = timezone.now() - timedelta(days=30)
+    return queryset.filter(Q(id__in=Contest.objects.filter(tags__name=FAIRPLAY_TAG).values('id')) |
+                           ((Q(had_fairplay=True) | Q(id__in=FairPlayDeviceSession.objects.values('contest_id'))) &
+                            Q(end_time__gte=recent)))
 
 
 def is_fairplay_exam(contest):
@@ -217,18 +230,6 @@ def fairplay_in_window(contest, now=None):
     return now >= fairplay_window_start(contest) and not fairplay_released(contest, now)
 
 
-def fairplay_edit_locked(contest, now=None):
-    """Whether the editor must keep the exam's key, lock and problems."""
-    if not is_fairplay_exam(contest):
-        return False
-    now = now or timezone.now()
-    if now < fairplay_window_start(contest):
-        return False
-    if contest.end_time is None:
-        return not contest.results_finalized
-    return now < contest.end_time + DELIVERY_WINDOW
-
-
 def _window_q(now):
     """FairPlay exams hiding themselves now."""
     from judge.models import Contest
@@ -243,22 +244,34 @@ def _window_q(now):
     return Q(id__in=sorted({cid for cid, _end, _done in rows} - released))
 
 
+def _site_staff(user):
+    """Site staff are never locked: superusers, Django staff and members of the Instructors group."""
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser or user.is_staff:
+        return True
+    from judge.models.notification import user_in_instructors_group
+    return user_in_instructors_group(user)
+
+
 def _sees_all_contests(user):
     return user.is_authenticated and (
-        user.has_perm('judge.see_private_contest') or user.has_perm('judge.edit_all_contest'))
+        _site_staff(user) or user.has_perm('judge.see_private_contest') or user.has_perm('judge.edit_all_contest'))
 
 
 def _sees_all_problems(user):
     return user.is_authenticated and (
-        user.has_perm('judge.see_private_problem') or
+        _site_staff(user) or user.has_perm('judge.see_private_problem') or
         (user.has_perm('judge.edit_own_problem') and user.has_perm('judge.edit_all_problem')))
 
 
 def _contest_staff_q(profile):
+    """Contest authors, curators, testers and spectators, and the teaching staff (course instructors, course admins
+    and class admins, the TAs) of the courses and classes the contest belongs to."""
     from judge.models import Organization
     teaching_orgs = Organization.objects.filter(
         Q(instructors=profile) | Q(admins=profile) | Q(class__admins=profile)).values('id')
-    return (Q(authors=profile) | Q(curators=profile) | Q(testers=profile) |
+    return (Q(authors=profile) | Q(curators=profile) | Q(testers=profile) | Q(spectators=profile) |
             Q(organizations__in=teaching_orgs) | Q(classes__organization__in=teaching_orgs))
 
 
@@ -372,7 +385,14 @@ def _is_contest_staff(user, contest):
         return True
     profile_id = user.profile.id
     return (profile_id in contest.editor_ids or profile_id in contest.tester_ids or
+            profile_id in contest.spectator_ids or
             contest.is_viewable_by_org_admin(user) or contest.is_viewable_by_course_teacher(user))
+
+
+def fairplay_exempt(user, contest):
+    """Whether ``user`` is staff for ``contest`` (never locked, never hidden from): site staff, the contest's authors,
+    curators, testers and spectators, and the instructors, admins and class admins (TAs) of its courses."""
+    return _is_contest_staff(user, contest)
 
 
 def fairplay_hidden_q(user, model):
@@ -448,24 +468,16 @@ def fairplay_shared_problems(contest, problems=None):
     return (problems.filter(Q(is_public=True) | Q(id__in=others)).distinct().order_by('code'))
 
 
-def fairplay_audience_error(contest, seb_required=None, is_private=None, is_organization_private=None,
-                            has_courses=None, has_private_contestants=None):
-    """Why ``contest`` can't be a FairPlay exam, or None; unsaved form values may be passed."""
-    def given(value, read):
-        return read() if value is None else value
-
-    seb_required = given(seb_required, lambda: contest.seb_required)
-    is_private = given(is_private, lambda: contest.is_private)
-    is_organization_private = given(is_organization_private, lambda: contest.is_organization_private)
-    if seb_required:
+def fairplay_seb_error(contest, seb_required=None, audience=None):
+    """Why ``contest`` can't be a FairPlay exam, or None. The one rule: Safe Exam Browser and FairPlay exclude each
+    other. In native mode whoever DKU OJ lets join the contest is who takes it; the classic bridge needs a student
+    list, so there a public exam is refused."""
+    if contest.seb_required if seb_required is None else seb_required:
         return _('Choose either Safe Exam Browser or FairPlay as the lock, not both.')
-    if not (is_private or is_organization_private):
-        return _('A FairPlay assignment needs a student list: limit it to a course, classes or selected students.')
-    if is_organization_private and not given(
-            has_courses, lambda: contest.organizations.exists() or contest.classes.exists()):
-        return _('A FairPlay assignment needs a student list: pick at least one course or class.')
-    if is_private and not given(has_private_contestants, lambda: contest.private_contestants.exists()):
-        return _('A FairPlay assignment needs a student list: add the students under Private assignees.')
+    private, org_private = audience if audience is not None else (contest.is_private, contest.is_organization_private)
+    if not native_browser_enabled() and not private and not org_private:
+        return _('Without the native FairPlay browser an exam needs a student list: make it private, or restrict it '
+                 'to an organization or class.')
     return None
 
 
@@ -475,20 +487,10 @@ def fairplay_clean_admin_form(form, cleaned_data):
     if tags is None or not any(tag.name == FAIRPLAY_TAG for tag in tags):
         return
     instance = form.instance
-
-    def value(name):
-        return bool(cleaned_data[name] if name in cleaned_data else getattr(instance, name, None))
-
-    def chosen(name):
-        if name in cleaned_data:
-            return bool(cleaned_data[name])
-        return bool(instance.pk and getattr(instance, name).exists())
-
-    error = fairplay_audience_error(
-        instance, seb_required=value('seb_required'), is_private=value('is_private'),
-        is_organization_private=value('is_organization_private'),
-        has_courses=chosen('organizations') or chosen('classes'),
-        has_private_contestants=chosen('private_contestants'))
+    seb = cleaned_data['seb_required'] if 'seb_required' in cleaned_data else getattr(instance, 'seb_required', None)
+    audience = tuple(cleaned_data[name] if name in cleaned_data else getattr(instance, name, False)
+                     for name in ('is_private', 'is_organization_private'))
+    error = fairplay_seb_error(instance, seb_required=bool(seb), audience=audience)
     if error:
         raise ValidationError(error)
 
@@ -496,6 +498,6 @@ def fairplay_clean_admin_form(form, cleaned_data):
 def fairplay_check_contest(contest):
     if not is_fairplay_exam(contest):
         return
-    error = fairplay_audience_error(contest)
+    error = fairplay_seb_error(contest)
     if error:
         raise ValidationError(error)

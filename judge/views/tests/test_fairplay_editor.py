@@ -3,7 +3,7 @@ import json
 from datetime import timedelta
 from unittest import mock
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import NoReverseMatch, Resolver404, resolve, reverse
 from django.utils import timezone
 
@@ -58,7 +58,7 @@ class FairPlayEditorMixin(FairPlayDataMixin):
         return {k: v for k, v in payload.items() if v is not Ellipsis}
 
     def before_the_window(self):
-        """Move the exam to three days from now, before the editor lock."""
+        """Move the exam to three days from now."""
         start = timezone.now() + timedelta(days=3)
         Contest.objects.filter(pk=self.exam.pk).update(start_time=start, end_time=start + timedelta(hours=2))
 
@@ -183,8 +183,7 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
                           {'fairplay_settings': dict(EDITOR_SETTINGS, calculator='abacus')},
                           {'fairplay_settings': dict(EDITOR_SETTINGS, review='everything')},
                           {'fairplay_settings': dict(EDITOR_SETTINGS, upload_opens_days=9)},
-                          {'fairplay_settings': dict(EDITOR_SETTINGS, websites=['x'] * 101)},
-                          {'vis_mode': 'public'}):
+                          {'fairplay_settings': dict(EDITOR_SETTINGS, websites=['x'] * 101)}):
             with self.subTest(overrides=overrides):
                 response = self.save(**overrides)
                 self.assertEqual(response.status_code, 400, response.content)
@@ -192,18 +191,23 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
         self.assertFalse(self.reload_exam().seb_required)
         self.fp.set_settings.assert_not_called()
 
-    def test_needs_a_student_list(self):
-        # No course picked: nobody could take it, so it is refused and the stored course stays.
-        for overrides in ({'organizations': [], 'classes': []},
-                          {'vis_mode': 'private', 'private_contestants': []}):
+    PUBLIC = {'vis_mode': 'public', 'organizations': [], 'classes': []}
+
+    def test_classic_mode_refuses_a_public_exam_but_keeps_other_scopes(self):
+        for overrides in ({'vis_mode': 'private', 'private_contestants': []}, {}):
             with self.subTest(overrides=overrides):
                 response = self.save(**overrides)
-                self.assertEqual(response.status_code, 400, response.content)
-                self.assertIn('student list', response.json()['error'])
-        self.assertTrue(self.reload_exam().organizations.exists())
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertTrue(is_fairplay_exam(self.reload_exam()))
+        response = self.save(**self.PUBLIC)
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn('student list', json.loads(response.content)['error'])
+
+    @override_settings(FAIRPLAY_NATIVE_BROWSER_ENABLED=True)
+    def test_native_mode_allows_a_public_exam(self):
+        response = self.save(**self.PUBLIC)
+        self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(is_fairplay_exam(self.reload_exam()))
-        # a class alone (with its course) is fine
-        self.assertEqual(self.save().status_code, 200)
 
     def test_needs_seb_permission(self):
         curator = create_user(username='fp_curator', user_permissions=('edit_own_contest',))
@@ -244,8 +248,8 @@ class FairPlayEditorTestCase(FairPlayEditorMixin, TestCase):
 
 
 @FAIRPLAY_ON
-class FairPlayEditorLockTestCase(FairPlayEditorMixin, TestCase):
-    """Key, lock and problems are locked from 24 hours before the start until the end + 14 days."""
+class FairPlayEditorNoEditLockTestCase(FairPlayEditorMixin, TestCase):
+    """Nothing is frozen: key, lock and problems change at any time, as in a normal DKU OJ contest."""
 
     def problems(self, *problems):
         return [{'id': p.id, 'points': p.points} for p in problems]
@@ -256,37 +260,44 @@ class FairPlayEditorLockTestCase(FairPlayEditorMixin, TestCase):
     def all_problems(self):
         return (self.mcq, self.blank, self.short, self.file, self.code)
 
-    def test_locked_changes_refused(self):
-        before = self.current_problems()
-        for label, overrides, text in (
-                ('key', {'key': 'fpexam2'}, "The assignment ID can't be changed now."),
-                ('lock off', {'fairplay_required': False}, "The lock can't be changed now."),
-                ('problem removed', {'problems': self.problems(*self.all_problems()[:4])},
-                 "The problems can't be changed now."),
-                ('problem added', {'problems': self.problems(*self.all_problems(), self.extra)},
-                 "The problems can't be changed now."),
-                ('problem replaced', {'problems': self.problems(*self.all_problems()[:4], self.extra)},
-                 "The problems can't be changed now.")):
+    def test_problems_can_be_changed_while_the_exam_runs(self):
+        for label, problems in (
+                ('removed', self.all_problems()[:4]),
+                ('added', (*self.all_problems(), self.extra)),
+                ('replaced', (*self.all_problems()[:4], self.extra))):
             with self.subTest(label):
-                response = self.save(**overrides)
-                self.assertEqual(response.status_code, 400, response.content)
-                self.assertEqual(response.json()['error'], text)
-                self.assertEqual(response.json().get('field'), 'exam_lock' if 'lock' in text else None)
-                exam = self.reload_exam()
-                self.assertEqual(exam.key, 'fpexam')
-                self.assertTrue(is_fairplay_exam(exam))
-                self.assertEqual(self.current_problems(), before)
+                response = self.save(problems=self.problems(*problems))
+                self.assertEqual(response.status_code, 200, response.content)
+                self.assertEqual(self.current_problems(), [p.id for p in problems])
+
+    def test_lock_can_be_switched_off_while_the_exam_runs(self):
+        response = self.save(fairplay_required=False)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(is_fairplay_exam(self.reload_exam()))
+
+    def test_key_stays_while_the_exam_runs(self):
+        # FairPlay knows the exam, its attempts and its locked computers by this ID.
+        response = self.save(key='fpexam2')
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(Contest.objects.get(pk=self.exam.pk).key, 'fpexam')
+
+    def test_time_can_be_changed_while_the_exam_runs(self):
+        end = self.reload_exam().end_time + timedelta(hours=3)
+        response = self.save(end_time=end.isoformat())
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertGreater(self.reload_exam().end_time, self.exam.end_time)
 
     def test_other_changes_allowed(self):
         response = self.save(name='CS 101 Midterm (room 2)', problems=self.problems(*reversed(self.all_problems())))
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(self.reload_exam().name, 'CS 101 Midterm (room 2)')
 
-    def test_locked_until_the_delivery_window_is_over(self):
+    def test_key_stays_until_the_delivery_window_is_over(self):
         now = timezone.now()
         Contest.objects.filter(pk=self.exam.pk).update(start_time=now - timedelta(days=10),
                                                        end_time=now - timedelta(days=9))
         self.assertEqual(self.save(key='fpexam2').status_code, 400)
+        self.assertEqual(self.save(name='Renamed title').status_code, 200)
         Contest.objects.filter(pk=self.exam.pk).update(start_time=now - timedelta(days=16),
                                                        end_time=now - timedelta(days=15))
         self.assertEqual(self.save(key='fpexam2').status_code, 200)
@@ -324,6 +335,15 @@ class FairPlayCloneAndTabTestCase(FairPlayDataMixin, TestCase):
         clone = Contest.objects.get(key='fpclone')
         self.assertFalse(is_fairplay_exam(clone))
         self.assertTrue(is_fairplay_exam(self.reload_exam()))
+
+    def test_clone_does_not_inherit_had_fairplay(self):
+        grant(self.teacher, 'clone_contest')
+        Contest.objects.filter(pk=self.exam.pk).update(had_fairplay=True)
+        client = Client()
+        client.force_login(self.teacher)
+        client.post(reverse('contest_clone', args=['fpexam']), {'key': 'fpclone2'})
+        self.assertFalse(Contest.objects.get(key='fpclone2').had_fairplay)
+        self.assertTrue(self.reload_exam().had_fairplay)
 
 
 @FAIRPLAY_OFF
@@ -380,10 +400,7 @@ class FairPlayAdminTestCase(FairPlayDataMixin, TestCase):
         from django import forms
         form = self.form()
         fairplay_clean_admin_form(form, form.cleaned_data)       # course + class: fine
-        for data, text in (({'seb_required': True}, 'not both'),
-                           ({'is_organization_private': False, 'is_private': False}, 'student list'),
-                           ({'organizations': Contest.objects.none(), 'classes': Contest.objects.none()},
-                            'course or class')):
+        for data, text in (({'seb_required': True}, 'not both'),):
             with self.subTest(data=data):
                 form = self.form(**data)
                 with self.assertRaisesMessage(forms.ValidationError, text):
@@ -457,7 +474,7 @@ class FairPlayOpenExamTestCase(FairPlayEditorMixin, TestCase):
             'oj.dukekunshan.edu.cn', 'shib.oit.duke.edu', 'duke.app.box.com', 'duke.account.box.com',
             'sso.services.box.net', 'duke.box.com'])
         # the saved list stays what the instructor saved: the defaults are only offered, never forced
-        self.assertRegex(self.page(), r'data-initial=\'\{"box_link": "", "websites": \[\]\}\'')
+        self.assertRegex(self.page(), r'data-initial=\'\{"websites": \[\]\}\'')
 
     def test_create_page_has_a_hidden_empty_panel(self):
         html = self.page('contest_create', ())
@@ -561,3 +578,41 @@ class FairPlayOpenExamFailureCacheTestCase(FairPlayEditorMixin, TestCase):
         self.assertEqual(second, first)
         self.assertEqual(self.fp.exam.call_count, 1)
         cache.delete('fp-open-exam-failed:%s' % self.exam.key)
+
+    def test_switching_the_lock_off_releases_live_native_sessions(self):
+        from judge.models import FairPlayDeviceAudit, FairPlayDeviceSession, FairPlayDeviceSlot
+        from judge.utils.fairplay_device_session import claim_device
+        session = claim_device(user_id=self.student.pk, contest=self.exam, fingerprint='a' * 64,
+                               browser_digest='b' * 64)
+        self.assertEqual(session.state, 'active')
+        response = self.save(fairplay_required=False)
+        self.assertEqual(response.status_code, 200, response.content)
+        session = FairPlayDeviceSession.objects.get(pk=session.pk)
+        self.assertEqual(session.state, 'released')
+        self.assertIsNone(FairPlayDeviceSlot.objects.get(user_id=self.student.pk).session_id)
+        self.assertTrue(FairPlayDeviceAudit.objects.filter(session=session, actor=self.teacher,
+                                                           action='unlock-resumable').exists())
+
+    def test_saving_with_the_lock_still_on_keeps_native_sessions(self):
+        from judge.models import FairPlayDeviceSession
+        from judge.utils.fairplay_device_session import claim_device
+        session = claim_device(user_id=self.student.pk, contest=self.exam, fingerprint='a' * 64,
+                               browser_digest='b' * 64)
+        self.assertEqual(self.save().status_code, 200)
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=session.pk).state, 'active')
+
+    def test_an_old_key_is_reserved_against_reuse(self):
+        now = timezone.now()           # renamed after its hand-ins are over (until then the ID stays)
+        Contest.objects.filter(pk=self.exam.pk).update(start_time=now - timedelta(days=16),
+                                                       end_time=now - timedelta(days=15))
+        self.assertEqual(self.save(key='fpexam2').status_code, 200)
+        other = Contest.objects.create(key='otherexam', name='Other', start_time=timezone.now(),
+                                       end_time=timezone.now() + timedelta(hours=1))
+        other.authors.add(self.teacher.profile)
+        response = self.client.post(reverse('contest_edit', args=['otherexam']),
+                                    json.dumps(self.payload(key='fpexam', fairplay_required=False)),
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already exists', json.loads(response.content)['error'])
+        other.refresh_from_db()
+        self.assertEqual(other.key, 'otherexam')

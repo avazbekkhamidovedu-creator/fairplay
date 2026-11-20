@@ -119,6 +119,14 @@ class FairPlayAuthTestCase(FairPlayAPIMixin, TestCase):
 
 @FAIRPLAY_ON
 class FairPlayExamsTestCase(FairPlayAPIMixin, TestCase):
+    def test_listing_and_package_carry_a_derived_confirmed_audience(self):
+        listing = self.api('get', 'fairplay_api_exams').json()['exams'][0]
+        package = self.api('get', 'fairplay_api_package', 'fpexam').json()
+        expected = {'mode': 'classes', 'confirmed': True, 'class_ids': [self.klass.id],
+                    'organization_ids': [self.org.id], 'selected_only': False}
+        self.assertEqual(listing['audience'], expected)
+        self.assertEqual(package['audience'], expected)
+
     def test_lists_fairplay_exams_only(self):
         Contest.objects.create(key='plainexam', name='Plain', start_time=timezone.now(),
                                end_time=timezone.now() + timedelta(hours=1))
@@ -307,6 +315,19 @@ class FairPlayUploadTestCase(FairPlayAPIMixin, TestCase):
         again = self.answers_body(attempt='fp_att_2',
                                   answers=[{'question_id': qid(self.file), 'file_upload': {'upload_ids': [upload_id]}}])
         self.assertEqual(self.api('post', 'fairplay_api_submissions', 'fpexam', data=again).status_code, 422)
+
+    def test_a_file_question_removed_during_the_exam_does_not_block_the_hand_in(self):
+        from judge.models import ContestProblem
+        ContestProblem.objects.filter(contest=self.exam, problem=self.file).delete()
+        response = self.upload()
+        self.assertEqual(response.status_code, 200, response.content)
+        upload_id = response.json()['upload_id']
+        self.assertFalse(staged_uploads().exists())
+        body = self.answers_body(answers=[{'question_id': qid(self.file), 'file_upload': {'upload_ids': [upload_id]}}])
+        with self.captureOnCommitCallbacks(execute=True):
+            result = self.api('post', 'fairplay_api_submissions', 'fpexam', data=body)
+        self.assertEqual(result.status_code, 200, result.content)
+        self.assertTrue(any('no longer in this exam' in w for w in result.json()['warnings']))
 
     def test_checks(self):
         self.assertEqual(self.upload(filename='report.exe').status_code, 422)
@@ -612,6 +633,63 @@ class FairPlaySubmissionsTestCase(FairPlayAPIMixin, TestCase):
         self.assertEqual(self.post(self.answers_body(handed_in_evidence='trust me')).status_code, 422)
         self.assertEqual(self.post(self.answers_body(handed_in_at='soon')).status_code, 422)
         self.assertFalse(Submission.objects.filter(contest_object=self.exam).exists())
+
+    def test_public_exam_roster_is_the_students_who_joined(self):
+        # A public exam admits whoever DKU OJ lets join, so its roster is whoever joined; hand-ins from them work.
+        Contest.objects.filter(pk=self.exam.pk).update(is_organization_private=False, is_private=False)
+        self.exam.classes.clear()
+        from judge.utils.fairplay_package import build_exam_entry, exam_roster
+        from judge.models import ContestParticipation
+        self.assertEqual(list(exam_roster(self.reload_exam())), [])
+        self.assertEqual(self.post(self.answers_body(attempt='pub0')).status_code, 403)
+        for user in (self.student, self.teacher):
+            ContestParticipation.objects.create(contest=self.exam, user=user.profile, virtual=0)
+        ContestParticipation.objects.create(contest=self.exam, user=self.outsider.profile, virtual=-1)  # spectator
+        exam = self.reload_exam()
+        self.assertEqual([p.user.username for p in exam_roster(exam)], ['fp_student'])
+        self.assertEqual([r['username'] for r in build_exam_entry(exam)['roster']], ['fp_student'])
+        self.assertEqual(self.post(self.answers_body(attempt='pub1')).status_code, 200)
+        self.assertEqual(self.post(self.answers_body(attempt='pub2', username='fp_outsider')).status_code, 403)
+
+    def test_a_pending_hand_in_to_the_old_key_is_accepted_after_a_rename(self):
+        from judge.models import ContestKeyAlias
+        Contest.objects.filter(pk=self.exam.pk).update(key='fpexamrenamed')
+        ContestKeyAlias.objects.create(contest=self.exam, key='fpexam')
+        response = self.api('post', 'fairplay_api_submissions', 'fpexam', data=self.answers_body(attempt='old1'))
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(Submission.objects.filter(contest_object=self.exam).exists())
+
+    def test_a_hand_in_still_arrives_after_the_lock_was_switched_off(self):
+        from judge.models import FairPlayDeviceSession
+        from judge.views.tests.fairplay_base import set_fairplay
+        FairPlayDeviceSession.objects.create(user=self.student, contest=self.exam, fingerprint='a' * 64,
+                                             browser_digest='b' * 64, state='released',
+                                             lease_until=timezone.now())
+        set_fairplay(self.exam, False)
+        response = self.api('post', 'fairplay_api_submissions', 'fpexam', data=self.answers_body(attempt='off1'))
+        self.assertEqual(response.status_code, 200, response.content)
+        # Other endpoints still need the lock, and a contest that never had FairPlay stays closed to delivery.
+        self.assertEqual(self.api('get', 'fairplay_api_package', 'fpexam').status_code, 404)
+
+    def test_a_classic_hand_in_arrives_after_the_lock_was_switched_on_then_off(self):
+        from judge.models import Contest, ContestTag
+        from judge.utils.fairplay import FAIRPLAY_TAG, is_fairplay_exam
+        from judge.views.tests.fairplay_base import set_fairplay
+        set_fairplay(self.exam, False)
+        Contest.objects.filter(pk=self.exam.pk).update(had_fairplay=False)
+        self.assertEqual(self.api('post', 'fairplay_api_submissions', 'fpexam',
+                                  data=self.answers_body(attempt='c0')).status_code, 404)
+        set_fairplay(self.exam, True)           # lock on: remembered
+        self.assertTrue(self.reload_exam().had_fairplay)
+        set_fairplay(self.exam, False)          # lock off: no tag, no device sessions
+        self.assertFalse(is_fairplay_exam(self.reload_exam()))
+        response = self.api('post', 'fairplay_api_submissions', 'fpexam', data=self.answers_body(attempt='c1'))
+        self.assertEqual(response.status_code, 200, response.content)
+        # Past the 30-day window nothing is accepted any more.
+        Contest.objects.filter(pk=self.exam.pk).update(start_time=timezone.now() - timedelta(days=50),
+                                                       end_time=timezone.now() - timedelta(days=40))
+        self.assertEqual(self.api('post', 'fairplay_api_submissions', 'fpexam',
+                                  data=self.answers_body(attempt='c2')).status_code, 404)
 
     def test_roster_check(self):
         self.assertEqual(self.post(self.answers_body(username='fp_outsider')).status_code, 403)

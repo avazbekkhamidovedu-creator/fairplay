@@ -15,6 +15,8 @@ class FairPlayDeviceSession(models.Model):
         ('active', 'Active'), ('finishing', 'Finishing'), ('completed', 'Completed'), ('released', 'Instructor unlocked'),
     ])
     lease_until = models.DateTimeField()
+    # The exam id the app was given at claim. The signed states keep carrying it if the id is renamed later.
+    claimed_key = models.CharField(max_length=20, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
 

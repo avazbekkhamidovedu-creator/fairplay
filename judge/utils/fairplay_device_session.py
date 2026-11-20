@@ -367,15 +367,47 @@ def _note_came_back(session, user_id):
                                       reason='The student came back to a running exam on the same device')
 
 
+def claimed_contest_key(user_id, contest):
+    """The exam id this student's app was given (the newest session's), else the contest's current key."""
+    if getattr(contest, 'pk', None) is None:
+        return contest.key
+    stored = FairPlayDeviceSession.objects.filter(user_id=user_id, contest=contest).order_by(
+        '-created_at', '-pk').values_list('claimed_key', flat=True).first()
+    return stored or contest.key
+
+
+def _require_lock_on(contest):
+    """Under the contest row lock that ``release_contest_sessions`` also takes: a session is never created for an
+    exam whose lock was switched off after the caller validated it. The tag is read with a locking read so a
+    removal committed meanwhile is seen."""
+    from judge.utils.fairplay import FAIRPLAY_TAG
+    Contest.objects.select_for_update().filter(pk=contest.pk).first()
+    if not Contest.tags.through.objects.select_for_update().filter(
+            contest_id=contest.pk, contesttag__name=FAIRPLAY_TAG).exists():
+        raise DeviceSessionDenied('FairPlay is not on for this exam.')
+
+
+def _adopt_claimed_key(session, claimed_key):
+    """The key the app asked for is the one every signed state of its session echoes (the app compares it with the
+    key it claimed, and a renamed exam can be reached by an old key). A session the same device claims again by
+    another key of the exam takes the newly requested one, so the app that just asked is the one that is answered."""
+    if claimed_key and getattr(session, 'claimed_key', '') != claimed_key:
+        session.claimed_key = claimed_key
+        session.save(update_fields=['claimed_key'])
+    return session
+
+
 @transaction.atomic
-def claim_device(*, user_id, contest, fingerprint, browser_digest):
-    """Internal entry primitive, not an HTTP authentication endpoint."""
+def claim_device(*, user_id, contest, fingerprint, browser_digest, claimed_key=None):
+    """Internal entry primitive, not an HTTP authentication endpoint. ``claimed_key`` is the exam key the app
+    requested (an old key of a renamed exam included); it defaults to the contest's current key."""
     _identity(fingerprint, browser_digest)
     _locked_profile(user_id)
+    _require_lock_on(contest)
     slot, _ = FairPlayDeviceSlot.objects.get_or_create(user_id=user_id)
     current = None
     if slot.session_id:
-        current = FairPlayDeviceSession.objects.select_for_update().select_related('contest', 'participation').get(pk=slot.session_id)
+        current = FairPlayDeviceSession.objects.select_for_update().get(pk=slot.session_id)
         if _free_slot_of(slot, current, user_id, timezone.now(), contest):
             current = None
     if current is not None and slot.session_id and current.contest_id == contest.pk:
@@ -403,8 +435,8 @@ def claim_device(*, user_id, contest, fingerprint, browser_digest):
                 # The same device (same certificate and sign-in, as on Windows after a restart) is back after its
                 # lease ran out: noted for the instructor, never a hold.
                 _note_came_back(current, user_id)
-            return renew_device(session_id=current.pk, user_id=user_id,
-                                fingerprint=fingerprint, browser_digest=browser_digest)
+            return _adopt_claimed_key(renew_device(session_id=current.pk, user_id=user_id,
+                                fingerprint=fingerprint, browser_digest=browser_digest), claimed_key)
         if (current.state == 'active' and current.participation_id is not None and current.contest_id == contest.pk
                 and current.fingerprint == fingerprint):
             # Only a disqualified or spectating participation, or one past its deadline, still reaches here.
@@ -433,7 +465,7 @@ def claim_device(*, user_id, contest, fingerprint, browser_digest):
     if (previous and not deadline_reopen and not skip_window and (window is None or window <= now)
             and not (unlocked and window is None)):
         raise DeviceSessionDenied('The reopened exam window has ended. Ask your instructor to reopen it again.', 'handed_in')
-    session = FairPlayDeviceSession.objects.create(user_id=user_id, contest=contest,
+    session = FairPlayDeviceSession.objects.create(user_id=user_id, contest=contest, claimed_key=claimed_key or contest.key,
         fingerprint=fingerprint, browser_digest=browser_digest, lease_until=min(contest.end_time, now + timedelta(seconds=LEASE_SECONDS)))
     if previous and not deadline_reopen and window is not None and not skip_window:
         _write_window(session, user_id, window, reopen_used_seconds(previous))
@@ -657,6 +689,29 @@ def instructor_unlock(*, contest, username, actor, reason='', resumable=False):
 
 
 @transaction.atomic
+def release_contest_sessions(*, contest, actor, reason='FairPlay was switched off for this assignment'):
+    """FairPlay was switched off for the contest: end every live native session as released, so the apps unlock on
+    their next renewal, with one audit row each. Participations stay as they are (the contest goes on as plain DKU OJ)."""
+    released = 0
+    Contest.objects.select_for_update().filter(pk=contest.pk).first()
+    sessions = FairPlayDeviceSession.objects.select_for_update().filter(
+        contest=contest, state__in=('active', 'finishing'))
+    for session in sessions:
+        session.state = 'released'
+        session.ended_at = timezone.now()
+        session.lease_until = session.ended_at
+        session.save(update_fields=['state', 'ended_at', 'lease_until'])
+        FairPlayDeviceSlot.objects.filter(session_id=session.pk).update(session=None)
+        # Resumable, like "Unlock student device": nothing is handed in, and if the lock is switched on again an
+        # unfinished student can claim again.
+        FairPlayDeviceAudit.objects.create(session=session, actor=actor, action=RESUMABLE_UNLOCK_ACTION,
+                                          reason=reason[:300])
+        transaction.on_commit(lambda uid=session.user_id: clear_lock_hints(contest, uid))
+        released += 1
+    return released
+
+
+@transaction.atomic
 def instructor_unlock_end(*, contest, username, actor, reason=''):
     """Unlock the device and end the attempt: the student is also detached from the exam's participation."""
     session = instructor_unlock(contest=contest, username=username, actor=actor, reason=reason)
@@ -664,24 +719,8 @@ def instructor_unlock_end(*, contest, username, actor, reason=''):
     return session
 
 
-def reopen_minutes_from(left_seconds):
-    """The default reopen length for a student with this many seconds left: that or 30 minutes, whichever is longer."""
-    minutes = 30
-    if left_seconds is not None and left_seconds > 0:
-        minutes = max(minutes, int(-(-left_seconds // 60)))
-    return min(minutes, 1440)
-
-
-def default_reopen_minutes(contest, username):
-    """The student's remaining time or 30 minutes, whichever is longer (the reopen itself never shortens)."""
-    session = FairPlayDeviceSession.objects.select_related('contest', 'participation').filter(
-        user__username=username, contest=contest).order_by('-created_at', '-pk').first()
-    left = None if session is None else (personal_deadline(session) - timezone.now()).total_seconds()
-    return reopen_minutes_from(left)
-
-
 @transaction.atomic
-def instructor_unlock_and_reopen(*, contest, username, actor, minutes, reason=''):
+def instructor_unlock_and_reopen(*, contest, username, actor, reason=''):
     """Unlock the student's device for this exam, if one is active, and grant the new session in one step."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may unlock a device.')
@@ -689,7 +728,7 @@ def instructor_unlock_and_reopen(*, contest, username, actor, minutes, reason=''
                                              session__state__in=('active', 'finishing')).exists()
     if slot:
         instructor_unlock(contest=contest, username=username, actor=actor, reason=reason)
-    return instructor_reopen(contest=contest, username=username, actor=actor, minutes=minutes, reason=reason)
+    return instructor_reopen(contest=contest, username=username, actor=actor, reason=reason)
 
 
 @transaction.atomic
@@ -710,12 +749,16 @@ def abort_device(*, session_id, user_id, fingerprint, browser_digest):
 
 
 @transaction.atomic
-def instructor_reopen(*, contest, username, actor, minutes, reason=''):
-    """Grant one new native session without erasing the previous terminal receipt."""
+def instructor_reopen(*, contest, username, actor, reason=''):
+    """Let a student back into the exam under DKU OJ's own rules: no minutes and no limit are asked for.
+
+    The attempt continues until the deadline DKU OJ itself gives (the participation's end: the contest end, or the
+    personal time limit from the start). When that deadline has already passed while the contest is still open, the
+    participation is extended the DKU OJ way, by ``extend_participation``: ``real_start`` moves forward, exactly as
+    when the time limit of a running contest is raised, so the student gets a fresh personal time limit from now,
+    capped at the contest end. A contest that has itself ended cannot be reopened; change its end time first."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may reopen it.')
-    if type(minutes) is not int or not 1 <= minutes <= 1440:
-        raise DeviceSessionDenied('Provide a whole number of minutes from 1 to 1440.')
     reason = ((reason or '').strip() or 'Reopened by instructor %s' % actor.username)[:300]
     profile = Profile.objects.select_for_update().filter(user__username=username).first()
     if profile is None:
@@ -728,18 +771,18 @@ def instructor_reopen(*, contest, username, actor, minutes, reason=''):
         raise DeviceSessionDenied('No finished or released native attempt exists.')
     now = timezone.now()
     if not contest.start_time <= now < contest.end_time:
-        raise DeviceSessionDenied('Extend the assignment availability before reopening it.')
-    until = now + timedelta(minutes=minutes)
+        raise DeviceSessionDenied('The assignment is not open now. Change its start or end time in the assignment '
+                                  'editor, then reopen.')
+    until = contest.end_time
+    used = 0
     if previous.participation_id:
         participation = previous.participation
         if participation.spectate or participation.is_disqualified:
             raise DeviceSessionDenied('This participation cannot be reopened.')
-        until = max(until, normal_end(participation))
-    until = min(contest.end_time, until)
-    used = 0
-    if previous.participation_id:
         used = max(0, int((min(previous.ended_at or now, now) - participation.real_start).total_seconds()))
-        extend_participation(participation, until)
+        if participation.end_time <= now:
+            extend_participation(participation, contest.end_time)
+        until = participation.end_time
     _write_window(previous, actor.pk, until, used)
     FairPlayDeviceAudit.objects.create(session=previous, actor=actor, action='reopen', reason=reason.strip())
     transaction.on_commit(lambda: clear_lock_hints(contest, profile.user_id))
@@ -748,33 +791,46 @@ def instructor_reopen(*, contest, username, actor, minutes, reason=''):
 
 @transaction.atomic
 def instructor_extra_time(*, contest, username, actor, minutes, reason=''):
-    """Add minutes to the end of a student who is writing now, by moving real_start (timed exams only)."""
+    """Add minutes to a student's end by moving real_start, the way DKU OJ extends a participation. Any positive
+    number of minutes is accepted. extend_participation never moves the start past now, so the end can reach at most
+    one full time limit from now, and never past the contest end; beyond that, change the assignment's time limit or
+    end time in the editor. Timed exams only."""
     if not contest.is_editable_by(actor):
         raise DeviceSessionDenied('Only this exam’s instructor may give extra time.')
-    if type(minutes) is not int or not 1 <= minutes <= 1440:
-        raise DeviceSessionDenied('Provide a whole number of minutes from 1 to 1440.')
+    if type(minutes) is not int or minutes < 1:
+        raise DeviceSessionDenied('Provide a whole number of minutes, 1 or more.')
     if contest.time_limit is None:
         raise DeviceSessionDenied('This exam has no per-student time limit. Extend the exam end instead.')
     profile = Profile.objects.select_for_update().filter(user__username=username).first()
     session = FairPlayDeviceSession.objects.select_for_update().filter(
-        user__username=username, contest=contest, state__in=('active', 'finishing'),
-        participation__isnull=False).select_related('participation__contest').first() if profile else None
+        user__username=username, contest=contest, participation__isnull=False
+    ).order_by('-created_at', '-pk').select_related('participation__contest').first() if profile else None
     if session is None:
-        raise DeviceSessionDenied('This student is not writing the exam on a native device.')
+        raise DeviceSessionDenied('This student has not started the exam yet.')
     participation = session.participation
     now = timezone.now()
-    if participation.is_disqualified or participation.end_time <= now:
+    if participation.is_disqualified or participation.spectate:
         raise DeviceSessionDenied('This participation cannot get extra time.')
+    if not contest.start_time <= now < contest.end_time:
+        raise DeviceSessionDenied('The assignment is not open now. Change its start or end time in the assignment '
+                                  'editor, then give extra time.')
     if participation.end_time >= contest.end_time:
-        raise DeviceSessionDenied('This student already has time until the exam end.')
-    extend_participation(participation, participation.end_time + timedelta(minutes=minutes))
+        raise DeviceSessionDenied('This student already has time until the assignment end. Change the assignment '
+                                  'end time in the editor to give more.')
+    # Only what is left until the assignment end can be given; a huge number must not overflow the date arithmetic.
+    left = contest.end_time - max(participation.end_time, now)
+    minutes = min(minutes, int(left.total_seconds() // 60) + 1)
+    extend_participation(participation, max(participation.end_time, now) + timedelta(minutes=minutes))
+    if reopen_until(session) is not None:
+        # A reopened session is admitted by its reopen window, which must follow the deadline just moved.
+        _write_window(session, actor.pk, participation.end_time, reopen_used_seconds(session))
     FairPlayDeviceAudit.objects.create(session=session, actor=actor, action='extra-time',
                                       reason=('Extra time +%d min by %s' % (minutes, actor.username)))
     return session
 
 
 @transaction.atomic
-def recover_device(*, user_id, contest, fingerprint, browser_digest, unclean=False):
+def recover_device(*, user_id, contest, fingerprint, browser_digest, unclean=False, claimed_key=None):
     """Reauthenticated account + the same TLS private key may replace a lost cookie.
 
     This never moves ownership to another certificate and never creates a session.
@@ -785,7 +841,7 @@ def recover_device(*, user_id, contest, fingerprint, browser_digest, unclean=Fal
     slot = FairPlayDeviceSlot.objects.filter(user_id=user_id).first()
     session = None
     if slot and slot.session_id:
-        session = FairPlayDeviceSession.objects.select_for_update().select_related('contest', 'participation').get(pk=slot.session_id)
+        session = FairPlayDeviceSession.objects.select_for_update().get(pk=slot.session_id)
         if _free_slot_of(slot, session, user_id, timezone.now(), contest):
             slot = session = None
         elif session.contest_id != contest.pk or session.fingerprint != fingerprint:
@@ -814,7 +870,7 @@ def recover_device(*, user_id, contest, fingerprint, browser_digest, unclean=Fal
         if profile.current_contest_id not in (None, session.participation_id):
             raise DeviceSessionDenied('Another participation is already open.')
         Profile.objects.filter(pk=profile.pk).update(current_contest_id=session.participation_id)
-    return session
+    return _adopt_claimed_key(session, claimed_key)
 
 
 MAC_CODE_RE = re.compile(r'[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}')

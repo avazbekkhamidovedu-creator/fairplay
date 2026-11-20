@@ -39,7 +39,7 @@ answers 404 and teachers are not offered the FairPlay lock. No
 migration is needed either way.
 
 Turning the token off does not reveal FairPlay exams in their hiding window; switch those off in the
-editor before the editor lock (the option stays visible on them), or let them be released.
+editor (the option stays visible on them), or let them be released.
 
 ## What teachers see
 
@@ -49,9 +49,9 @@ editor before the editor lock (the option stays visible on them), or let them be
   name). Apart from the optional **Open exam** panel below, the radio is the only FairPlay control in
   the editor: it shows no explanation, status or warning, and DKU OJ does not read or send the exam's
   other settings from there (FairPlay keeps its own; a settings payload sent to the editor's save
-  endpoint is still accepted and forwarded). When a save is
-  refused because FairPlay holds the exam, the editor shows one short line at the lock choice ("The
-  lock can't be changed now."), only after Save.
+  endpoint is still accepted and forwarded). Nothing in the editor is frozen by FairPlay: the
+  assignment ID, the lock, the problem list, the times and every other setting can be changed at any
+  time, as in an ordinary DKU OJ contest.
 * With **FairPlay** chosen, an optional **Open exam** checkbox (off by default) reveals **Allowed
   websites** (one site or link per line) and **Duke Box shared folder link** (a `https://duke.box.com/s/<token>`
   or `https://duke.app.box.com/s/<token>` link). Student uploads (`open_book`) are not touched. On Save
@@ -61,26 +61,42 @@ editor before the editor lock (the option stays visible on them), or let them be
   other link before saving. If FairPlay answers `400` with a detail starting `box_link:` that detail is
   shown under the field; `409` shows "The Duke Box folder cannot be changed after students have started."
   The assignment itself is already saved in both cases. The link is never written to the logs.
-* A FairPlay assignment must be limited to a course, classes or selected students: that audience is the
-  exam roster. It leaves out the same people as a class roster: admins and instructors of its courses,
-  instructors of classes in them, authors, curators and testers of any FairPlay exam, site staff, and
-  the assignment's banned users. Safe Exam Browser and FairPlay can't both be on (the admin checks the
-  same when the tag is attached there). A hidden (not visible) assignment is a draft: FairPlay is not
-  given it until it is visible.
+* FairPlay needs no student list. Whoever DKU OJ lets join the assignment (its own public, course,
+  class or private-assignee rules, minus banned users) is who takes it; there is no audience
+  confirmation step. The class roster FairPlay's classic service reads still leaves out admins and
+  instructors of its courses, class admins, authors, curators and testers of any FairPlay exam, site staff and
+  the assignment's banned users. The one rule on the assignment is that Safe Exam Browser and FairPlay
+  can't both be on (the admin checks the same when the tag is attached there). A hidden (not visible)
+  assignment is a draft: FairPlay is not given it until it is visible.
 * **Hiding window.** From **24 hours before the start** (when FairPlay may download the package) until
   the exam is **released** (its results are finalized and it has closed for everyone, or **14 days
   after the end**, when hand-ins can no longer arrive, whichever comes first; "closed for everyone" is
   the end time plus the minutes added with Add time, or, if DKU OJ lost that count, the latest close
-  time FairPlay reported with a hand-in, else 8 hours after the end), students and anyone who is not its author,
-  curator, tester, course admin or instructor, or site staff cannot open it or any of its problems on
-  DKU OJ: not the pages, PDFs and Word exports, submission lists, the `/api/v2` API, user pages, test data
+  time FairPlay reported with a hand-in, else 8 hours after the end), students cannot open it or any of its problems on
+  DKU OJ outside FairPlay: not the pages, PDFs and Word exports, submission lists, the `/api/v2` API, user pages, test data
   or tester downloads, attachments (also those referenced from file-upload instructions, translations,
   options, editorials and clarifications), or practice submits. A problem the exam shares with another
   assignment, or a public one, is hidden there too during the window. Outside the window a FairPlay assignment and its problems behave like
   any other. Points are not affected: a user's points still count every public problem they solved.
-* **Editor lock.** From the start of the hiding window until 14 days after the end, the editor refuses
-  to change the assignment ID, to switch the lock away from FairPlay, and to add, remove or replace
-  problems (a one-line form error, e.g. "The lock can't be changed now."). Everything else (times, points, order, texts) can still change.
+* **Staff are never locked.** Only students are locked. Never hidden from, and never forced into
+  FairPlay: superusers, Django staff and members of the Instructors group; the assignment's authors,
+  curators, testers and spectators; and the course instructors, course admins and class admins (the
+  TAs) of the courses and classes the assignment belongs to. A class admin or course admin of an
+  unrelated course is an ordinary user for this assignment. Staff see the assignment and its problems
+  exactly as in any DKU OJ contest.
+* **Edits show at once.** The FairPlay app is a locked browser showing DKU OJ's own pages (native mode),
+  served `no-store`, so a change to the problems, texts, times or settings is what locked students see on
+  their next page load.
+* **Instructor actions** (Participation tab, native mode) carry no limits and ask for no reason. *Reopen
+  exam* lets the student back in under DKU OJ's rules: their participation runs to its normal end
+  (the contest end, or the personal time limit from their start). If that end has passed while the
+  assignment is still open, the participation is extended the DKU OJ way (`real_start` moves forward, as
+  when a running contest's time limit is raised): a fresh personal time limit from now, capped at the
+  contest end. An assignment whose end time has passed can't be reopened for one student; change its end
+  time in the editor first. *Give extra time* adds any number of minutes the same way; since the start never
+  moves past now, the end reaches at most one full time limit from now and never past the contest end, so beyond
+  that change the assignment's time limit or end time. *Unlock student device* and
+  *Move to another computer* can be used any number of times.
 * DKU OJ has no FAIRPLAY menu item, no FairPlay course pages and no FairPlay tab, box or report page:
   the exam is run from the FairPlay side. The only FairPlay controls in DKU OJ are the lock choice in
   the editor and the access codes button below.
@@ -218,7 +234,7 @@ redirect is https. No database change; the cache is the one DKU OJ already uses.
 
 * A clone of a FairPlay assignment is an ordinary assignment (the `fairplay` tag is not copied); turn
   FairPlay on in its editor.
-* Renaming an assignment's key in the editor (before the editor lock) takes its FairPlay settings along
+* Renaming an assignment's key in the editor takes its FairPlay settings along
   (DKU OJ reads them under the old key and saves them under the new one; values it does not know become
   FairPlay's defaults).
 * `GET exams/<key>/access-codes.pdf` is signed like the other calls (`X-FP-Acting-User` is the professor who
@@ -233,8 +249,8 @@ redirect is https. No database change; the cache is the one DKU OJ already uses.
   3 s are over; one transaction sends one. Failures (FairPlay down, `4xx`, timeout) are only logged at
   warning level on `judge.fairplay`; nothing is shown in the UI and the ping is not retried.
 * Everything the bridge logs goes to the `judge.fairplay` logger.
-* Changing an assignment while FairPlay runs it does not change the running exam; FairPlay picks up
-  edits until the first student starts.
+* In native mode a locked student sees DKU OJ's current pages, so edits apply at once. The classic
+  FairPlay service picks up edits only until the first student starts.
 
 ## Code
 
@@ -242,7 +258,7 @@ redirect is https. No database change; the cache is the one DKU OJ already uses.
 `judge/utils/fairplay_signals.py` (keeps the "any FairPlay exam" flag current), `judge/utils/fairplay_sync.py` (the sync ping), `judge/utils/fairplay_signing.py`,
 `judge/utils/fairplay_client.py` (calls to FairPlay), `judge/utils/fairplay_package.py` (exam list and
 package), `judge/utils/fairplay_delivery.py` (uploads, hand-ins, results), `judge/utils/fairplay_editor.py`
-(editor lock and the settings forwarded on save), `judge/utils/fairplay_teaching.py` (class
+(the settings forwarded on save), `judge/utils/fairplay_teaching.py` (class
 rosters), `judge/views/api/fairplay.py` (the API), `judge/views/fairplay.py` (the access codes download), `judge/views/fairplay_editor.py` (forwards settings after an editor save) and
 `judge/checks.py`; the rest of the code base only calls into these modules (`fairplay_hidden_for`,
 `fairplay_hidden_q`, `fairplay_visible_problems`, `fairplay_public_problems`, ...) at the places that serve

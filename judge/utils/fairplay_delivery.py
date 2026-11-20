@@ -177,6 +177,9 @@ def _sweep_uploads(now):
             logger.warning('Could not delete the unclaimed FairPlay upload %s', path, exc_info=True)
 
 
+REMOVED_QUESTION_UPLOAD = 'up_' + '0' * 24   # well formed, never stored, so never claimed
+
+
 def store_upload(contest, username, question_id, filename, sha256, data):
     """Store one file answer ahead of its submission; return its upload id."""
     from judge.models import ProblemFileConfig
@@ -189,6 +192,11 @@ def store_upload(contest, username, question_id, filename, sha256, data):
     if profile is None:
         raise DeliveryError(403, 'Student is not on the roster of this exam.')
     contest_problem = _contest_problems_by_question(contest).get(question_id)
+    if contest_problem is None and isinstance(question_id, str) and 0 < len(question_id) <= 128:
+        # The instructor removed this question during the exam. The bridge uploads files before it hands in the
+        # answers, so refusing here would block the whole hand-in; nothing is stored, and the hand-in skips the
+        # question with a warning (deliver_submission).
+        return REMOVED_QUESTION_UPLOAD
     if contest_problem is None or contest_problem.problem.submission_type != ProblemSubmissionType.FILE:
         raise DeliveryError(422, 'Not a file-upload question of this exam.', question_id)
     problem = contest_problem.problem

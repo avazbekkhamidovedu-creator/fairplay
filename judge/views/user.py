@@ -153,8 +153,14 @@ class CustomNetidRedirectView(LoginView):
     def get(self, request):
         from django.shortcuts import redirect
         from django.conf import settings
-        auth_host = settings.AUTH_HOSTS['Duke-netid']
-        return redirect(f'{auth_host}/auth/redirect')
+        from django.contrib import messages
+        auth_host = (getattr(settings, 'AUTH_HOSTS', None) or {}).get('Duke-netid')
+        if not auth_host:
+            # A server without Duke NetID sign-in set up (AUTH_HOSTS['Duke-netid']): say so instead of a server error.
+            messages.error(request, _('Duke NetID sign-in is not set up on this server. Sign in with your DKU OJ '
+                                      'username and password, or ask the site administrator.'))
+            return redirect('auth_login')
+        return redirect(f'{auth_host.rstrip("/")}/auth/redirect')
 
 
 class CustomNetidLoginView(LoginView):

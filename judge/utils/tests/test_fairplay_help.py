@@ -251,32 +251,21 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.confirm(self.teacher, action='approve', reason='')
         self.assertIn(self.teacher.username, self.fp.approve.call_args.args[2])
 
-    def test_extra_time_from_a_new_total_is_the_difference(self):
-        from datetime import timedelta
-        self.exam.time_limit = timedelta(minutes=60)
-        self.exam.save()
-        self.confirm(self.teacher, action='extra-time', total_minutes='75')
-        self.assertEqual(self.fp.extra_time.call_args.args[:3], ('fpexam', 'fp_student', 15))
+    def test_extra_time_has_no_upper_limit_here(self):
+        self.confirm(self.teacher, action='extra-time', minutes='5000')
+        self.assertEqual(self.fp.extra_time.call_args.args[:3], ('fpexam', 'fp_student', 5000))
         self.assertIn(self.teacher.username, self.fp.extra_time.call_args.args[3])
 
-    def test_a_total_not_larger_than_the_current_one_changes_nothing(self):
-        from datetime import timedelta
-        self.exam.time_limit = timedelta(minutes=60)
-        self.exam.save()
-        self.fp.extra_time.reset_mock()
-        for total in ('60', '30'):
-            response = self.post(self.teacher, {'action': 'extra-time', 'netid': 'fp_student', 'name': 'A',
-                                                'total_minutes': total, 'confirm': '1'})
-            self.assertEqual(response.status_code, 302)
-            self.assertIn('nothing was changed', ' '.join(str(m) for m in get_messages(response.wsgi_request)))
-        self.fp.extra_time.assert_not_called()
+    def test_reopen_asks_for_no_minutes(self):
+        from judge.views.fairplay import CLASSIC_REOPEN_MINUTES
+        self.confirm(self.teacher, action='reopen')
+        self.assertEqual(self.fp.reopen.call_args.args[:3], ('fpexam', 'fp_student', CLASSIC_REOPEN_MINUTES))
 
     def test_confirm_step_comes_first(self):
         response = self.post(self.teacher, {'action': 'release-device', 'netid': 'fp_student',
                                             'name': 'Avazbek Khamidov', 'reason': 'laptop died'})
         html = response.content.decode()
         self.assertEqual(response.status_code, 200)
-        self.assertIn('laptop died', html)
         self.assertIn('name="confirm" value="1"', html)
         self.fp.release_device.assert_not_called()
 
@@ -285,8 +274,9 @@ class StudentHelpTestCase(PagesMixin, TestCase):
         self.fp.approve.assert_called_once_with('fpexam', 'fp_student', 'back after crash')
         self.confirm(self.teacher, action='release-device', reason='laptop died')
         self.fp.release_device.assert_called_once_with('fpexam', 'fp_student', 'laptop died')
-        self.confirm(self.teacher, action='reopen', reason='pressed submit by mistake', minutes='15')
-        self.fp.reopen.assert_called_once_with('fpexam', 'fp_student', 15, 'pressed submit by mistake')
+        from judge.views.fairplay import CLASSIC_REOPEN_MINUTES
+        self.confirm(self.teacher, action='reopen', reason='pressed submit by mistake')
+        self.fp.reopen.assert_called_once_with('fpexam', 'fp_student', CLASSIC_REOPEN_MINUTES, 'pressed submit by mistake')
         self.confirm(self.teacher, action='extra-time', reason='power cut', minutes='5')
         self.fp.extra_time.assert_called_once_with('fpexam', 'fp_student', 5, 'power cut')
         self.fp.native_exit.return_value = {'code': '445566'}
@@ -303,7 +293,7 @@ class StudentHelpTestCase(PagesMixin, TestCase):
                          ['Done: Move to another computer for Avazbek Khamidov.'])
 
     def test_minutes_are_checked(self):
-        for minutes in ('', '0', '-5', 'x', '481', '1.5'):
+        for minutes in ('', '0', '-5', 'x', '1.5'):
             with self.subTest(minutes=minutes):
                 response = self.post(self.teacher, {'action': 'extra-time', 'netid': 'fp_student',
                                                     'reason': 'r', 'minutes': minutes, 'confirm': '1'})

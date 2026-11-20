@@ -354,6 +354,46 @@ class ContestEditViewTestCase(CommonDataMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.key, 'renamedkey')
+        from judge.models import ContestKeyAlias
+        self.assertEqual(ContestKeyAlias.resolve('editablecontest'), self.contest)
+
+    def test_an_old_key_is_reserved_in_every_path(self):
+        from django.core.exceptions import ValidationError
+        from judge.forms import ContestCloneForm
+        from judge.models import Contest, ContestKeyAlias
+        ContestKeyAlias.objects.create(contest=self.contest, key='oldreservedkey')
+        self.assertTrue(Contest.key_reserved('oldreservedkey'))
+        self.assertFalse(Contest.key_reserved('oldreservedkey', exclude=self.contest))
+        other = Contest(key='oldreservedkey', name='X', start_time=self.contest.start_time,
+                        end_time=self.contest.end_time)
+        with self.assertRaises(ValidationError) as caught:
+            other.full_clean(exclude=['format_config'])
+        self.assertIn('key', caught.exception.message_dict)
+        form = ContestCloneForm({'key': 'oldreservedkey'})
+        self.assertFalse(form.is_valid())
+        self.assertIn('key', form.errors)
+        from django.contrib import admin
+        from django.test import RequestFactory
+        request = RequestFactory().get('/')
+        request.user = self.editor
+        request.user.is_superuser = True
+        request.profile = self.editor.profile
+        admin_form = admin.site._registry[Contest].get_form(request)({'key': 'oldreservedkey'})
+        self.assertFalse(admin_form.is_valid())
+        self.assertIn('key', admin_form.errors)
+        ContestKeyAlias.objects.create(contest=self.contest, key='c000000')
+        self.assertNotEqual(Contest.generate_unique_key(), 'c000000')
+
+    def test_renaming_back_drops_the_alias(self):
+        from judge.models import ContestKeyAlias
+        self.client.force_login(self.editor)
+        for key in ('renamedkey', 'editablecontest'):
+            response = self.client.post(
+                reverse('contest_edit', args=['editablecontest' if key == 'renamedkey' else 'renamedkey']),
+                data=json.dumps(self._full_payload(key=key)), content_type='application/json')
+            self.assertEqual(response.status_code, 200)
+        self.assertIsNone(ContestKeyAlias.resolve('editablecontest'))
+        self.assertEqual(ContestKeyAlias.resolve('renamedkey'), self.contest)
 
     def test_post_rename_key_conflict_returns_400(self):
         self.client.force_login(self.editor)

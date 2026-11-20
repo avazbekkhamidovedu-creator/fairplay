@@ -197,7 +197,7 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         from judge.utils.fairplay_device_session import instructor_reopen
         old, participation, arguments = self.bind()
         instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Recovery')
-        instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher, minutes=15, reason='Resume safely')
+        instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Resume safely')
         new = self.claim('c' * 64, 'd' * 64)
         self.assertNotEqual(old.pk, new.pk)
         self.assertEqual(new.participation_id, participation.pk)
@@ -216,7 +216,7 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         from judge.utils.fairplay_device_session import reopen_until
         return reopen_until(session)
 
-    def reopen_case(self, time_limit_minutes, started_minutes_ago, contest_end_minutes, minutes=30):
+    def reopen_case(self, time_limit_minutes, started_minutes_ago, contest_end_minutes):
         from judge.models import Contest
         from judge.utils.fairplay_device_session import instructor_reopen
         now = timezone.now()
@@ -230,7 +230,7 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
                              fingerprint='a' * 64, browser_digest='b' * 64)
         instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Recovery')
         previous = instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher,
-                                     minutes=minutes, reason='Resume safely')
+                                     reason='Resume safely')
         participation = ContestParticipation.objects.get(pk=participation.pk)
         return now, previous, participation
 
@@ -244,10 +244,12 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         previous.contest = self.exam
         self.assertAlmostEqual(personal_deadline(previous).timestamp(), normal.timestamp(), delta=5)
 
-    def test_reopen_after_the_normal_end_gives_the_requested_minutes(self):
+    def test_reopen_after_the_normal_end_extends_the_participation_the_dku_oj_way(self):
+        # No minutes are asked: real_start moves (as when a running contest's time limit is raised), so the student
+        # gets a fresh personal time limit (60 minutes) from now, capped at the contest end.
         now, previous, participation = self.reopen_case(60, 120, 600)
-        self.assertAlmostEqual(participation.real_start.timestamp(), (now - timedelta(minutes=30)).timestamp(), delta=5)
-        self.assertAlmostEqual(self.window_of(previous).timestamp(), (now + timedelta(minutes=30)).timestamp(), delta=5)
+        self.assertAlmostEqual(participation.real_start.timestamp(), now.timestamp(), delta=5)
+        self.assertAlmostEqual(self.window_of(previous).timestamp(), (now + timedelta(minutes=60)).timestamp(), delta=5)
         self.assertAlmostEqual(participation.end_time.timestamp(), self.window_of(previous).timestamp(), delta=5)
 
     def test_reopen_records_the_time_already_used(self):
@@ -272,9 +274,76 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         after = ContestParticipation.objects.get(pk=participation.pk).end_time
         self.assertAlmostEqual((after - before).total_seconds(), 15 * 60, delta=2)
 
+    def test_extra_time_on_an_expired_reopen_window_lets_the_student_back_in(self):
+        from judge.utils.fairplay_device_session import _write_window, instructor_extra_time, reopen_until
+        now, previous, participation = self.reopen_case(60, 10, 600)
+        # The reopen window and the participation both ran out while the exam itself is still open.
+        _write_window(previous, self.teacher.pk, now - timedelta(minutes=1), 0)
+        ContestParticipation.objects.filter(pk=participation.pk).update(real_start=now - timedelta(hours=3))
+        with self.assertRaises(DeviceSessionDenied):
+            self.claim('c' * 64, 'd' * 64)
+        instructor_extra_time(contest=self.exam, username=self.student.username, actor=self.teacher, minutes=30)
+        participation = ContestParticipation.objects.get(pk=participation.pk)
+        self.assertGreater(participation.end_time, timezone.now())
+        self.assertAlmostEqual(reopen_until(previous).timestamp(), participation.end_time.timestamp(), delta=2)
+        self.assertEqual(self.claim('c' * 64, 'd' * 64).participation_id, participation.pk)
+
+    def test_switching_the_lock_off_and_on_lets_an_unfinished_student_claim_again(self):
+        from judge.utils.fairplay_device_session import release_contest_sessions
+        from judge.views.tests.fairplay_base import set_fairplay
+        now, previous, participation = self.reopen_case(60, 10, 600)
+        new = self.claim('c' * 64, 'd' * 64)
+        release_contest_sessions(contest=self.exam, actor=self.teacher)
+        set_fairplay(self.exam, False)
+        set_fairplay(self.exam, True)
+        again = self.claim('c' * 64, 'd' * 64)
+        self.assertEqual(again.participation_id, participation.pk)
+        self.assertNotEqual(again.pk, new.pk)
+
+    def test_a_huge_extra_time_is_clamped_to_the_assignment_end(self):
+        from judge.models import Contest
+        from judge.utils.fairplay_device_session import instructor_extra_time
+        now = timezone.now()
+        Contest.objects.filter(pk=self.exam.pk).update(time_limit=timedelta(minutes=60), end_time=now + timedelta(hours=10))
+        self.exam.refresh_from_db()
+        session = self.claim()
+        participation = ContestParticipation.objects.create(contest=self.exam, user=self.student.profile,
+            real_start=now - timedelta(minutes=40), virtual=0)
+        attach_participation(participation=participation, session_id=session.pk, user_id=self.student.pk,
+                             fingerprint='a' * 64, browser_digest='b' * 64)
+        instructor_extra_time(contest=self.exam, username=self.student.username, actor=self.teacher,
+                              minutes=9999999999)
+        self.assertLessEqual(ContestParticipation.objects.get(pk=participation.pk).end_time, self.exam.end_time)
+
+    def test_a_claim_that_passed_validation_before_the_lock_was_switched_off_creates_no_session(self):
+        from judge.views.tests.fairplay_base import set_fairplay
+        stale = self.exam                       # validated while the lock was still on
+        set_fairplay(self.exam, False)
+        with self.assertRaises(DeviceSessionDenied):
+            claim_device(user_id=self.student.pk, contest=stale, fingerprint='a' * 64, browser_digest='b' * 64)
+        self.assertFalse(FairPlayDeviceSession.objects.filter(contest=self.exam).exists())
+
+    def test_extra_time_is_refused_once_the_assignment_has_ended(self):
+        from judge.models import Contest
+        from judge.utils.fairplay_device_session import instructor_extra_time
+        now = timezone.now()
+        Contest.objects.filter(pk=self.exam.pk).update(time_limit=timedelta(minutes=60), end_time=now + timedelta(hours=1))
+        self.exam.refresh_from_db()
+        session = self.claim()
+        participation = ContestParticipation.objects.create(contest=self.exam, user=self.student.profile,
+            real_start=now - timedelta(minutes=10), virtual=0)
+        attach_participation(participation=participation, session_id=session.pk, user_id=self.student.pk,
+                             fingerprint='a' * 64, browser_digest='b' * 64)
+        Contest.objects.filter(pk=self.exam.pk).update(end_time=now - timedelta(minutes=1))
+        self.exam.refresh_from_db()
+        before = ContestParticipation.objects.get(pk=participation.pk).real_start
+        with self.assertRaisesMessage(DeviceSessionDenied, 'assignment editor'):
+            instructor_extra_time(contest=self.exam, username=self.student.username, actor=self.teacher, minutes=15)
+        self.assertEqual(ContestParticipation.objects.get(pk=participation.pk).real_start, before)
+
     def test_extension_larger_than_the_time_used_never_starts_in_the_future_and_recomputes(self):
         from unittest.mock import patch
-        now, previous, participation = self.reopen_case(60, 10, 600, minutes=1)
+        now, previous, participation = self.reopen_case(60, 10, 600)
         from judge.utils.fairplay_device_session import extend_participation
         participation = ContestParticipation.objects.get(pk=participation.pk)
         with patch.object(ContestParticipation, 'recompute_results') as recompute:
@@ -295,14 +364,51 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         self.assertAlmostEqual(self.window_of(previous).timestamp(), (now + timedelta(minutes=10)).timestamp(), delta=5)
         self.assertEqual(self.window_of(previous), self.exam.end_time)
 
-    def test_reopen_message_shows_the_real_end_and_the_cap(self):
+    def test_reopen_message_shows_the_real_end(self):
         from judge.views.fairplay import _reopen_note
         now, previous, participation = self.reopen_case(60, 120, 10)
-        capped = _reopen_note(self.exam, previous, 30)
-        self.assertIn('Reopened until ', capped)
-        self.assertIn(self.exam.end_time.strftime('%Y-%m-%d %H:%M'), capped)
-        self.assertIn('capped at the exam end', capped)
-        self.assertNotIn('capped', _reopen_note(self.exam, previous, 5))
+        note = _reopen_note(self.exam, previous)
+        self.assertIn('Reopened until ', note)
+        self.assertIn(self.exam.end_time.strftime('%Y-%m-%d %H:%M'), note)
+        self.assertNotIn('capped', note)
+
+    def test_reopen_is_refused_only_when_the_contest_itself_is_closed(self):
+        from judge.models import Contest
+        from judge.utils.fairplay_device_session import instructor_reopen
+        self.claim()
+        instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Recovery')
+        Contest.objects.filter(pk=self.exam.pk).update(end_time=timezone.now() - timedelta(minutes=1))
+        self.exam.refresh_from_db()
+        with self.assertRaises(DeviceSessionDenied) as raised:
+            instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher)
+        self.assertIn('editor', str(raised.exception))
+
+    def test_reopen_can_be_repeated_without_any_count_limit(self):
+        from judge.utils.fairplay_device_session import instructor_reopen
+        self.claim()
+        for round_number in range(4):
+            instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Again')
+            instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher)
+            self.claim(chr(ord('c') + round_number) * 64, 'd' * 64)
+        self.assertEqual(FairPlayDeviceAudit.objects.filter(action='reopen').count(), 4)
+
+    def test_extra_time_accepts_any_number_of_minutes(self):
+        from judge.models import Contest
+        from judge.utils.fairplay_device_session import instructor_extra_time
+        now = timezone.now()
+        Contest.objects.filter(pk=self.exam.pk).update(time_limit=timedelta(minutes=60), end_time=now + timedelta(hours=10))
+        self.exam.refresh_from_db()
+        session = self.claim()
+        participation = ContestParticipation.objects.create(contest=self.exam, user=self.student.profile,
+            real_start=now - timedelta(minutes=40), virtual=0)
+        attach_participation(participation=participation, session_id=session.pk, user_id=self.student.pk,
+                             fingerprint='a' * 64, browser_digest='b' * 64)
+        instructor_extra_time(contest=self.exam, username=self.student.username, actor=self.teacher,
+                              minutes=5000, reason='')
+        # Accepted, no cap on the minutes. DKU OJ's mechanism never moves real_start past now, so the end is at most a
+        # fresh personal time limit (60 minutes) from now.
+        self.assertAlmostEqual(ContestParticipation.objects.get(pk=participation.pk).end_time.timestamp(),
+                               (now + timedelta(minutes=60)).timestamp(), delta=10)
 
     def test_reopen_before_join_ends_with_the_normal_end_everywhere(self):
         from judge.models import Contest
@@ -313,8 +419,8 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         self.claim()
         instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Recovery')
         reopened = instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher,
-                                     minutes=30, reason='Resume safely')
-        self.assertAlmostEqual(self.window_of(reopened).timestamp(), (now + timedelta(minutes=30)).timestamp(), delta=5)
+                                     reason='Resume safely')
+        self.assertEqual(self.window_of(reopened), self.exam.end_time)
         second = self.claim()
         self.assertAlmostEqual(personal_deadline(second).timestamp(), self.window_of(reopened).timestamp(), delta=5)
         participation = ContestParticipation.objects.create(contest=self.exam, user=self.student.profile,
@@ -331,7 +437,7 @@ class DeviceSessionTests(FairPlayDataMixin, TestCase):
         self.claim()
         for actor in (self.teacher, self.student):
             with self.assertRaises(DeviceSessionDenied):
-                instructor_reopen(contest=self.exam, username=self.student.username, actor=actor, minutes=15, reason='Invalid')
+                instructor_reopen(contest=self.exam, username=self.student.username, actor=actor, reason='Invalid')
         self.assertFalse(FairPlayDeviceAudit.objects.filter(action='reopen').exists())
 
     def test_recovery_rebinds_only_same_device_and_revokes_old_cookie(self):

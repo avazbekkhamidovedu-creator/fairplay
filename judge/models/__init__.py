@@ -4,7 +4,8 @@ from judge.models.ai_hints import AIHintLog
 from judge.models.assignment_draft import AssignmentDraft, AssignmentDraftFile
 from judge.models.choices import ACE_THEMES, EFFECTIVE_MATH_ENGINES, MATH_ENGINES_CHOICES, TIMEZONE
 from judge.models.comment import Comment, CommentLock, CommentVote
-from judge.models.contest import Contest, ContestMoss, ContestParticipation, ContestProblem, ContestSubmission, \
+from judge.models.contest import Contest, ContestKeyAlias, ContestMoss, ContestParticipation, \
+    ContestProblem, ContestSubmission, \
     ContestTag, Rating, contest_problem_display_name
 from judge.models.editor_attachment import EditorAttachment
 from judge.models.interface import BlogPost, MiscConfig, NavigationBar, validate_regex

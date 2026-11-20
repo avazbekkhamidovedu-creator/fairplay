@@ -187,6 +187,21 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(response.status_code, 403)
 
     @override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
+    def test_open_native_workspace_keeps_saving_after_the_key_is_renamed(self):
+        from judge.models import AssignmentDraft, Contest, ContestKeyAlias
+        self.client.force_login(self.student)
+        payload = self.decode(self.client_request('POST', '/api/fairplay/native/claim/fpexam',
+                                                  {'nonce': uuid.uuid4().hex}))
+        self.assertEqual(self.client_request('POST', '/contest/fpexam/join').status_code, 302)
+        session = FairPlayDeviceSession.objects.get(pk=payload['session'])
+        Contest.objects.filter(pk=self.exam.pk).update(key='fpexamrenamed')
+        ContestKeyAlias.objects.create(contest=self.exam, key='fpexam')
+        response = self.client_request('POST', '/contest/fpexam/draft/fpshort',
+                                       {'content': '{"text":"Saved through the old key"}'})
+        self.assertEqual(response.status_code, 200, response.content[:500])
+        self.assertTrue(AssignmentDraft.objects.filter(participation=session.participation).exists())
+
+    @override_settings(ASSIGNMENT_HARVEST_ENABLED=True)
     def test_existing_dku_leave_completes_native_exam_and_poll_confirms_unlock(self):
         from judge.models import AssignmentDraft, ContestSubmission
         self.client.force_login(self.student)
@@ -1261,18 +1276,6 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(self.quick(csrf=True).status_code, 403)
         self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'active')
 
-    def test_default_reopen_minutes_never_shorten_the_remaining_time(self):
-        from django.utils import timezone
-        from judge.models import Contest
-        from judge.utils.fairplay_device_session import default_reopen_minutes
-        self.decode(self.claim())
-        Contest.objects.filter(pk=self.exam.pk).update(end_time=timezone.now() + timezone.timedelta(minutes=100))
-        self.exam.refresh_from_db()
-        self.assertGreaterEqual(default_reopen_minutes(self.exam, self.student.username), 99)
-        Contest.objects.filter(pk=self.exam.pk).update(end_time=timezone.now() + timezone.timedelta(minutes=10))
-        self.exam.refresh_from_db()
-        self.assertEqual(default_reopen_minutes(self.exam, self.student.username), 30)
-
     def test_typed_code_post_still_issues_a_code_for_the_lock_this_student_set(self):
         from unittest.mock import Mock, patch
         self.bind_exit_lock()
@@ -1290,7 +1293,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         from judge.models import FairPlayDeviceAudit
         self.decode(self.claim())
         self.client.force_login(self.teacher)
-        data = dict(action='unlock-reopen', netid=self.student.username, reason='Computer failed', minutes='30')
+        data = dict(action='unlock-reopen', netid=self.student.username, reason='Computer failed')
         self.assertEqual(self.client.post('/contest/fpexam/fairplay-help', data).status_code, 200)
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'active')
         self.assertEqual(self.client.post('/contest/fpexam/fairplay-help', dict(data, confirm='1')).status_code, 302)
@@ -1300,11 +1303,15 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(payload['state'], 'active')
 
     def test_unlock_and_reopen_failure_rolls_back_the_unlock(self):
+        from django.utils import timezone
+        from judge.models import Contest
         self.decode(self.claim())
+        Contest.objects.filter(pk=self.exam.pk).update(end_time=timezone.now() - timezone.timedelta(minutes=1))
+        self.exam.refresh_from_db()
         from judge.utils.fairplay_device_session import instructor_unlock_and_reopen, DeviceSessionDenied
         with self.assertRaises(DeviceSessionDenied):
             instructor_unlock_and_reopen(contest=self.exam, username=self.student.username, actor=self.teacher,
-                                         minutes=0, reason='x')
+                                         reason='x')
         self.assertEqual(FairPlayDeviceSession.objects.get().state, 'active')
 
     def test_help_rows_say_what_to_do_next(self):
@@ -1840,6 +1847,100 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(result['state'], 'released')
         self.assertEqual(self.decode(native_recover(self.request('POST', path, fingerprint='b' * 64), self.exam.key))['state'], 'rejected')
 
+    def test_recovery_and_claim_work_through_the_old_key_after_a_rename(self):
+        from judge.models import Contest, ContestKeyAlias
+        payload = self.decode(self.claim())
+        Contest.objects.filter(pk=self.exam.pk).update(key='fpexamrenamed')
+        ContestKeyAlias.objects.create(contest=self.exam, key='fpexam')
+        path = '/api/fairplay/native/recover/fpexam'
+        result = self.decode(native_recover(self.request('POST', path, cookie='new-login'), 'fpexam'))
+        self.assertEqual(result['session'], payload['session'])
+
+    def test_a_student_can_fetch_a_signed_unlock_after_fairplay_was_switched_off(self):
+        from judge.utils.fairplay_device_session import release_contest_sessions
+        from judge.views.tests.fairplay_base import set_fairplay
+        payload = self.decode(self.claim())
+        release_contest_sessions(contest=self.exam, actor=self.teacher)
+        set_fairplay(self.exam, False)
+        path = '/api/fairplay/native/recover/fpexam'
+        # Fresh login (new cookie) after the release: the old browser digest no longer matches.
+        result = self.decode(native_recover(self.request('POST', path, cookie='fresh-login'), self.exam.key))
+        self.assertEqual(result['state'], 'released')
+        # No new session on an untagged contest, and nothing for a stranger.
+        with self.assertRaises(Http404):
+            native_claim(self.request('POST', '/api/fairplay/native/claim/fpexam', cookie='fresh-login'),
+                         self.exam.key)
+        self.assertEqual(FairPlayDeviceSession.objects.filter(contest=self.exam).count(), 1)
+        self.assertEqual(payload['session'], str(FairPlayDeviceSession.objects.get(contest=self.exam).pk))
+
+    def test_a_public_exam_with_join_organizations_admits_only_those_members(self):
+        from judge.models import Contest
+        from judge.models.tests.util import create_organization
+        other = create_organization(name='fpjoinorg')
+        Contest.objects.filter(pk=self.exam.pk).update(is_organization_private=False, is_private=False,
+                                                       limit_join_organizations=True)
+        exam = Contest.objects.get(pk=self.exam.pk)
+        exam.join_organizations.add(other)
+        self.assertFalse(exam.audience_allows(self.student.profile))
+        with self.assertRaises(Http404):
+            native_claim(self.request('POST', '/api/fairplay/native/claim/fpexam'), 'fpexam')
+        self.student.profile.organizations.add(other)
+        self.assertTrue(Contest.objects.get(pk=self.exam.pk).audience_allows(self.student.profile))
+        self.assertEqual(self.decode(self.claim())['state'], 'active')
+
+    def test_a_renamed_exam_keeps_the_claimed_key_in_signed_states_of_the_open_session(self):
+        from judge.models import Contest, ContestKeyAlias
+        payload = self.decode(self.claim())
+        self.assertEqual(payload['contest'], 'fpexam')
+        Contest.objects.filter(pk=self.exam.pk).update(key='fpexamrenamed')
+        ContestKeyAlias.objects.create(contest=self.exam, key='fpexam')
+        renewed = self.decode(native_renew(self.request('POST', '/api/fairplay/native/session/%s/renew' % payload['session']),
+                                           payload['session']))
+        self.assertEqual(renewed['contest'], 'fpexam')
+        self.assertEqual(renewed['session'], payload['session'])
+
+    def rename_exam(self):
+        from judge.models import Contest, ContestKeyAlias
+        Contest.objects.filter(pk=self.exam.pk).update(key='fpexamnew')
+        ContestKeyAlias.objects.create(contest=self.exam, key='fpexam')
+        self.exam.refresh_from_db()
+
+    def test_claim_through_an_old_key_echoes_that_key_in_every_signed_state(self):
+        self.rename_exam()
+        payload = self.decode(native_claim(self.request('POST', '/api/fairplay/native/claim/fpexam'), 'fpexam'))
+        self.assertEqual(payload['contest'], 'fpexam')
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).claimed_key, 'fpexam')
+        base = '/api/fairplay/native/session/%s/' % payload['session']
+        renewed = self.decode(native_renew(self.request('POST', base + 'renew'), payload['session']))
+        self.assertEqual(renewed['contest'], 'fpexam')
+        state = self.decode(native_state(self.request('GET', base + 'state'), payload['session']))
+        self.assertEqual(state['contest'], 'fpexam')
+        released = self.decode(native_abort(self.post_state(base + 'abort'), payload['session']))
+        self.assertEqual((released['state'], released['contest']), ('released', 'fpexam'))
+
+    def test_claim_through_the_current_key_stores_it(self):
+        self.rename_exam()
+        payload = self.decode(native_claim(self.request('POST', '/api/fairplay/native/claim/fpexamnew'), 'fpexamnew'))
+        self.assertEqual(payload['contest'], 'fpexamnew')
+
+    def test_reclaim_through_another_key_answers_with_the_key_just_requested(self):
+        self.rename_exam()
+        first = self.decode(native_claim(self.request('POST', '/api/fairplay/native/claim/fpexamnew'), 'fpexamnew'))
+        again = self.decode(native_claim(self.request('POST', '/api/fairplay/native/claim/fpexam'), 'fpexam'))
+        self.assertEqual(again['session'], first['session'])
+        self.assertEqual(again['contest'], 'fpexam')
+        base = '/api/fairplay/native/session/%s/' % first['session']
+        self.assertEqual(self.decode(native_renew(self.request('POST', base + 'renew'), first['session']))['contest'],
+                         'fpexam')
+        recovered = self.decode(native_recover(self.request('POST', '/api/fairplay/native/recover/fpexamnew'),
+                                               'fpexamnew'))
+        self.assertEqual(recovered['contest'], 'fpexamnew')
+
+    def test_rejected_recover_through_an_old_key_echoes_that_key(self):
+        self.rename_exam()
+        rejected = self.decode(native_recover(self.request('POST', '/api/fairplay/native/recover/fpexam'), 'fpexam'))
+        self.assertEqual((rejected['state'], rejected['contest']), ('rejected', 'fpexam'))
+
     def post_with(self, path, extra, **kwargs):
         request = self.request('POST', path, **kwargs)
         request.POST = request.POST.copy()
@@ -2113,7 +2214,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         payload = self.decode(self.claim())
         self.decode(native_recover(self.post_with('/api/fairplay/native/recover/fpexam', {'unclean': '1'}), self.exam.key))
         instructor_unlock(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Restarted')
-        instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher, minutes=15, reason='Continue')
+        instructor_reopen(contest=self.exam, username=self.student.username, actor=self.teacher, reason='Continue')
         fresh = self.decode(self.claim())
         self.assertEqual(fresh['state'], 'active')
         self.assertNotIn('hold', fresh)
@@ -2256,6 +2357,18 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertEqual(response.status_code, 404)
         client.native_exit.assert_called_once()
 
+    def test_participation_still_offers_the_exit_code_after_fairplay_is_switched_off(self):
+        from judge.utils.fairplay import set_fairplay_exam
+        from datetime import timedelta
+        from django.utils import timezone
+        from judge.views.fairplay import is_fairplay_instructor
+        self.bind_exit_lock()
+        set_fairplay_exam(self.exam, False)
+        self.assertTrue(is_fairplay_instructor(SimpleNamespace(user=self.teacher), self.exam))
+        FairPlayDeviceSession.objects.filter(contest=self.exam).update(
+            lease_until=timezone.now() - timedelta(days=2))
+        self.assertFalse(is_fairplay_instructor(SimpleNamespace(user=self.teacher), self.exam))
+
     def test_reopen_http_uses_native_attempt_without_legacy_service(self):
         from unittest.mock import patch
         self.decode(self.claim())
@@ -2341,29 +2454,19 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertIn('downOnBackdrop = e.target === dlg', html)  # a drag that ends on the backdrop is not a cancel
         self.assertIn("setAttribute('open', '')", html)  # no showModal: the dialog still opens
         self.assertIn('#fp-part-dialog-form { padding', html)
-        for text in ('id="fp-part-minutes"', 'id="fp-part-reason"', 'id="fp-part-other"', 'maxlength="200"',
-                     'id="fp-part-confirm"', 'id="fp-part-cancel"'):
+        for text in ('id="fp-part-minutes"', 'id="fp-part-confirm"', 'id="fp-part-cancel"'):
             self.assertIn(text, html)
-        for text in ('Other...', 'Choose a reason...', 'Approved accommodation',
-                     'Technical problem during the exam', 'Student could not reach the server',
-                     'Student was stopped by mistake', 'Student switched to a lab computer'):
-            self.assertIn(text, html)
-        for gone in ('id="fp-part-reasons-unlock-reopen"', 'id="fp-part-reasons-unlock-device"',
-                     'id="fp-part-reasons-reopen"', 'Device is stuck', 'Submitted by mistake'):
+        for gone in ('id="fp-part-reason"', 'id="fp-part-other"', 'Choose a reason...', 'Device is stuck',
+                     'Submitted by mistake', 'data-reasons'):
             self.assertNotIn(gone, html)
         menu = html.split('id="fp-part-menu"')[1].split('</div>')[0]
-        self.assertNotIn('data-reasons="unlock-reopen"', menu)
-        self.assertNotIn('data-reasons="unlock-device"', menu)
-        self.assertIn('data-reasons="extra-time"', menu)
-        self.assertIn('data-reasons="offline-exit" data-reason-optional="1"', menu)
         reopen = menu.split('data-direct="1"')[1].split('</button>')[0]
         self.assertIn('>Reopen exam', reopen)
-        for leftover in ('data-question', 'data-reasons', 'data-minutes="1"', 'data-reason="1"'):
+        for leftover in ('data-question', 'data-minutes="1"'):
             self.assertNotIn(leftover, reopen)
         self.assertEqual(menu.count('data-direct="1"'), 1)
         unlock = menu.split('data-mode="only"')[1].split('</button>')[0]
         self.assertIn('data-question=', unlock)  # a single OK/Cancel question, no reason field
-        self.assertNotIn('data-reasons', unlock)
         self.assertEqual(menu.count('data-question="'), menu.count('role="menuitem"') - 1)
 
     def test_old_help_page_url_redirects_editors_to_participation(self):
@@ -2410,7 +2513,6 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         from judge.models import FairPlayDeviceAudit
         html = self.participation_html()
         self.assertNotIn('Reopen the exam for {who}', html)
-        self.assertIn('Reopened from Participation', html)
         self.assertIn('function submitDirect(item)', html)
         payload = self.decode(self.claim())
         self.client.force_login(self.teacher)
@@ -2438,6 +2540,25 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertContains(response, '123456')
         client.native_exit.assert_called_once_with(
             'fpexam', self.student.username, 'ABCD2345', 'Exit code requested by instructor fp_teacher')
+
+    def test_offline_exit_still_works_after_fairplay_is_switched_off(self):
+        from unittest.mock import Mock, patch
+        from judge.utils.fairplay import set_fairplay_exam
+        self.bind_exit_lock()
+        set_fairplay_exam(self.exam, False)
+        client = Mock()
+        client.native_exit.return_value = {'code': '123456'}
+        self.client.force_login(self.teacher)
+        with patch('judge.views.fairplay._client', return_value=client):
+            response = self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.student.username,
+                                                    'name': 'Avazbek', 'confirm': '1', 'mac_code': 'ABCD2345'})
+            self.assertContains(response, '123456')
+            other = self.client.post(self.HELP, {'action': 'offline-exit-on-record', 'netid': self.classmate.username,
+                                                 'name': 'Other', 'confirm': '1', 'mac_code': 'ABCD2345'})
+            self.assertNotContains(other, '123456', status_code=other.status_code)
+            self.assertEqual(self.client.post(self.HELP, {'action': 'reopen', 'netid': self.student.username})
+                             .status_code, 404)
+        client.native_exit.assert_called_once()
 
     def test_offline_exit_without_a_lock_on_record_explains_and_issues_nothing(self):
         from unittest.mock import Mock, patch
@@ -3002,15 +3123,16 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertContains(response, '123456')
         self.assertEqual(self.exit_audit(), [('ZZZZ2345|typed', 'fp_teacher')])
 
-    def test_the_audience_unconfirmed_branch_stores_a_hint_only_for_a_roster_student(self):
+    def test_the_refused_claim_branch_stores_a_hint_only_for_a_student_dku_oj_lets_in(self):
         from unittest.mock import patch
-        with patch('judge.utils.fairplay_audience.audience_descriptor', return_value={'confirmed': False}), \
-                patch('judge.views.fairplay_launch.student_can_launch', return_value=False):
+        outsider_id = self.outsider.profile.pk
+        with patch('judge.views.fairplay_launch.student_can_launch', return_value=False), \
+                patch('judge.models.Contest.audience_allows', lambda contest, profile: profile.pk != outsider_id):
             self.refused_claim('BBBB2345', user=self.classmate)
             self.assertEqual(self.hints(self.classmate), ['BBBB2345'])
             self.refused_claim('CCCC2345', user=self.student)
-            with patch('judge.utils.fairplay_package.exam_roster') as roster:
-                roster.return_value.filter.return_value.exists.return_value = False
+            from django.http import Http404
+            with self.assertRaises(Http404):
                 self.refused_claim('DDDD2345', user=self.outsider)
         self.assertEqual(self.hints(self.outsider), [])
 
@@ -3213,8 +3335,8 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
 
     def test_give_extra_time_is_in_the_native_menu_for_running_sessions(self):
         menu = self.participation_html().split('id="fp-part-menu"')[1].split('<form')[0]
-        self.assertIn('data-action="extra-time" data-mode="" data-states="in_progress" data-minutes="1" '
-                      'data-reason="1"', menu)
+        self.assertIn('data-action="extra-time" data-mode="" data-states="in_progress completed unlocked reopened '
+                      'not_locked" data-minutes="1"', menu)
         payload = self.decode(self.claim())
         from judge.models import ContestParticipation
         participation = ContestParticipation.objects.create(
@@ -3286,7 +3408,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertNotIn('Emergency exit', menu)
         self.assertIn('data-mode="only" data-states="in_progress completed unlocked reopened not_locked"', menu)
         self.assertIn('data-mode="continue" data-states="completed unlocked not_locked"', menu)  # Reopen after a hand-in, an unlock, or an expired unjoined reopen
-        self.assertIn('data-action="extra-time" data-mode="" data-states="in_progress"', menu)
+        self.assertIn('data-action="extra-time" data-mode="" data-states="in_progress completed unlocked reopened not_locked"', menu)
 
     def test_the_bulk_audit_summary_agrees_with_the_per_session_readers(self):
         from django.utils import timezone
@@ -3353,34 +3475,33 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertFalse(FairPlayDeviceAudit.objects.filter(action='claim-again').exists())
         cache.clear()
 
-    def test_a_reopen_can_carry_chosen_minutes_and_a_reason(self):
+    def test_a_reopen_asks_for_no_minutes_and_runs_to_the_dku_oj_deadline(self):
         from judge.models import FairPlayDeviceAudit
         from judge.utils.fairplay_device_session import parse_window
         self.decode(self.claim())
         self.client.force_login(self.teacher)
         response = self.client.post(self.HELP, {
             'action': 'quick-unlock', 'mode': 'continue', 'netid': self.student.username, 'name': 'A',
-            'minutes': '45', 'reason': 'Slow laptop', 'confirm': '1'})
+            'reason': 'Slow laptop', 'confirm': '1'})
         self.assertEqual(response.status_code, 302)
         reopen = FairPlayDeviceAudit.objects.filter(action='reopen').latest('pk')
         self.assertEqual(reopen.reason, 'Slow laptop')
         until = parse_window(FairPlayDeviceAudit.objects.filter(action='reopen-window').latest('pk').reason)[0]
-        left = (until - __import__('django').utils.timezone.now()).total_seconds() / 60
-        self.assertTrue(40 < left <= 45, left)
+        self.assertEqual(until, self.exam.end_time)
         self.assertEqual(self.decode(self.claim(fingerprint='b' * 64, cookie='new'))['state'], 'active')
 
-    def test_a_reopen_with_bad_minutes_changes_nothing_and_the_menu_prefills_the_default(self):
+    def test_a_reopen_ignores_any_minutes_that_are_posted_and_the_menu_has_no_minutes_for_it(self):
         payload = self.decode(self.claim())
         self.client.force_login(self.teacher)
-        for minutes in ('0', '9999', 'abc'):
-            response = self.client.post(self.HELP, {
-                'action': 'quick-unlock', 'mode': 'continue', 'netid': self.student.username, 'name': 'A',
-                'minutes': minutes, 'confirm': '1'})
-            self.assertEqual(response.status_code, 302)
-            self.assertTrue(any('Minutes must be' in m for m in self.exit_messages(response)), minutes)
-            self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'active')
+        response = self.client.post(self.HELP, {
+            'action': 'quick-unlock', 'mode': 'continue', 'netid': self.student.username, 'name': 'A',
+            'minutes': '99999', 'confirm': '1'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(any('Minutes must be' in m for m in self.exit_messages(response)))
+        self.assertEqual(FairPlayDeviceSession.objects.get(pk=payload['session']).state, 'released')
         html = self.participation_html()
-        self.assertRegex(html, r'data-reopen-minutes="\d+"')
+        self.assertNotIn('data-reopen-minutes', html)
+        self.assertNotIn('total-minutes', html)
 
     def test_a_site_administrators_tag_is_added_once_even_after_a_stale_lock_re_render(self):
         from unittest.mock import Mock, patch
@@ -3399,8 +3520,7 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         with patch('judge.views.fairplay.FairPlayClient', return_value=client), \
                 patch('judge.views.fairplay._client', return_value=client):
             page = self.client.post(self.HELP, data).content.decode()
-        self.assertNotIn('released by site administrator', page)  # the form carries the untagged reason
-        self.assertIn('Locked overnight', page)
+        self.assertNotIn('released by site administrator', page)  # the re-rendered form carries no tag
         sent = client.native_exit.call_args[0][3]
         self.assertEqual(sent.count('released by site administrator'), 1)
 
@@ -3449,17 +3569,15 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertIsNotNone(self.launch_mark())  # nothing is held: the app took the exam over again
         cache.clear()
 
-    def test_a_reopen_may_last_up_to_1440_minutes_and_no_more(self):
-        self.decode(self.claim())
+    def test_release_and_unlock_can_be_repeated_any_number_of_times(self):
         self.client.force_login(self.teacher)
-        base = {'action': 'quick-unlock', 'mode': 'continue', 'netid': self.student.username, 'name': 'A',
-                'confirm': '1'}
-        refused = self.client.post(self.HELP, dict(base, minutes='1441'))
-        self.assertTrue(any('1 to 1440' in m for m in self.exit_messages(refused)))
-        self.assertEqual(FairPlayDeviceSession.objects.get().state, 'active')
-        accepted = self.client.post(self.HELP, dict(base, minutes='1440'))
-        self.assertTrue(any('can start again' in m for m in self.exit_messages(accepted)), self.exit_messages(accepted))
-        self.assertEqual(FairPlayDeviceSession.objects.get().state, 'released')
+        for round_number in range(5):
+            self.decode(self.claim(fingerprint=chr(ord('a') + round_number) * 64, cookie='c%d' % round_number))
+            response = self.client.post(self.HELP, {
+                'action': 'quick-unlock', 'mode': 'only', 'netid': self.student.username, 'name': 'A',
+                'confirm': '1'})
+            self.assertEqual(response.status_code, 302)
+            self.assertFalse(FairPlayDeviceSession.objects.filter(state='active').exists(), round_number)
 
     def test_the_participation_page_with_the_fairplay_block_is_never_stored(self):
         self.client.force_login(self.teacher)
@@ -3467,14 +3585,25 @@ class NativeSessionAPITests(FairPlayDataMixin, TestCase):
         self.assertIn('no-store', cache_control)
         self.assertIn('private', cache_control)
 
-    def test_the_min_prompt_limits_match_what_the_server_accepts(self):
+    def test_extra_time_has_no_minutes_cap_in_the_prompt_or_on_the_server(self):
         html = self.participation_html()
-        self.assertIn("maxMinutes = rowDefault ? 1440 : 1440", html)  # native: reopen, extra time
-        base = {'action': 'extra-time', 'netid': self.student.username, 'name': 'A', 'reason': 'x', 'confirm': '1'}
-        self.decode(self.claim())
+        self.assertNotIn('maxMinutes', html)
+        self.assertNotIn('fp-part-minutes" inputmode="numeric" min="1" step="1" max', html)
+        payload = self.decode(self.claim())
+        from judge.models import Contest, ContestParticipation, FairPlayDeviceAudit
+        from django.utils import timezone
+        now = timezone.now()
+        Contest.objects.filter(pk=self.exam.pk).update(time_limit=timezone.timedelta(minutes=60),
+                                                       end_time=now + timezone.timedelta(days=30))
+        participation = ContestParticipation.objects.create(
+            contest=self.exam, user=self.student.profile, real_start=now - timezone.timedelta(minutes=10), virtual=0)
+        FairPlayDeviceSession.objects.filter(pk=payload['session']).update(participation=participation)
         self.client.force_login(self.teacher)
-        refused = self.client.post(self.HELP, dict(base, minutes='1441'))
-        self.assertTrue(any('1 to 1440' in m for m in self.exit_messages(refused)))
+        response = self.client.post(self.HELP, {
+            'action': 'extra-time', 'netid': self.student.username, 'name': 'A', 'minutes': '5000', 'confirm': '1'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(any('Minutes must be' in m for m in self.exit_messages(response)))
+        self.assertTrue(FairPlayDeviceAudit.objects.filter(session_id=payload['session'], action='extra-time').exists())
 
     def test_native_browser_enabled_means_exactly_true(self):
         from judge.utils.fairplay import native_browser_enabled

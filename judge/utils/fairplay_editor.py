@@ -6,20 +6,19 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
 
 from judge.utils.fairplay import FAIRPLAY_CALCULATOR_CHOICES, FAIRPLAY_REVIEW_CHOICES, fairplay_check_contest, \
-    fairplay_edit_locked, fairplay_enabled, is_fairplay_exam, set_fairplay_exam
-from judge.utils.fairplay_audience import audience_descriptor, confirm_audience
+    fairplay_enabled, is_fairplay_exam, set_fairplay_exam
 
 __all__ = [
-    'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditLock', 'FairPlayEditorPlan', 'FairPlaySaveResult',
+    'DEFAULT_SETTINGS', 'FAIRPLAY_EDITOR_FIELDS', 'FairPlayEditorPlan', 'FairPlaySaveResult',
     'OPEN_BOOK_DEFAULT_WEBSITES', 'apply_fairplay_editor', 'clean_settings', 'editor_settings',
-    'fairplay_check_edit', 'fairplay_edit_lock', 'fairplay_editor_context', 'fairplay_save_settings',
+    'fairplay_editor_context', 'fairplay_save_settings',
     'parse_fairplay_payload', 'push_settings', 'websites_text',
 ]
 
 logger = logging.getLogger('judge.fairplay')
 
 # Editor fields gated by the same permission as the Safe Exam Browser option (contest_seb_requirement).
-FAIRPLAY_EDITOR_FIELDS = ('fairplay_required', 'fairplay_settings', 'fairplay_audience_confirm', 'fairplay_audience_mode')
+FAIRPLAY_EDITOR_FIELDS = ('fairplay_required', 'fairplay_settings')
 # What FairPlay uses until settings are saved.
 DEFAULT_SETTINGS = {
     'calculator': 'off', 'open_book': False, 'websites': [], 'strong_lock': False,
@@ -35,7 +34,6 @@ OPEN_BOOK_DEFAULT_WEBSITES = (
 MAX_WEBSITE_LINES = 100
 MAX_WEBSITE_LENGTH = 2100
 MAX_UPLOAD_DAYS = 7
-_AUDIENCE_FIELDS = {'classes', 'organizations', 'private_contestants', 'is_private', 'is_organization_private'}
 
 
 def _bool(value):
@@ -167,8 +165,6 @@ class FairPlayEditorPlan:
 
     def __init__(self, want=None, settings=None, was_on=False):
         self.want, self.settings, self.was_on = want, settings, was_on
-        self.audience_mode = None
-        self.audience_from_scope = False
 
 
 def parse_fairplay_payload(contest, payload, restricted):
@@ -183,61 +179,18 @@ def parse_fairplay_payload(contest, payload, restricted):
             plan.want = None
     if payload.get('fairplay_settings') is not None and fairplay_enabled():
         plan.settings = clean_settings(payload['fairplay_settings'], partial=True)
-    can_reconcile = not (_AUDIENCE_FIELDS & set(restricted))
-    plan.audience_from_scope = bool((_AUDIENCE_FIELDS | {'vis_mode'}) & payload.keys()) and can_reconcile
-    if payload.get('fairplay_audience_confirm') is True:
-        if 'fairplay_audience_confirm' in restricted or not can_reconcile:
-            raise ValidationError('You cannot confirm this FairPlay audience.')
-        mode = payload.get('fairplay_audience_mode')
-        if mode not in ('classes', 'organizations', 'selected'):
-            raise ValidationError('Choose the intended FairPlay audience before confirming it.')
-        plan.audience_mode = mode
     return plan
 
 
-def apply_fairplay_editor(contest, plan):
-    """Runs after the many-to-many save, since the tag picker leaves the FairPlay tag out."""
+def apply_fairplay_editor(contest, plan, actor=None):
+    """Runs after the many-to-many save, since the tag picker leaves the FairPlay tag out. Switching the lock off
+    releases the exam's live native sessions, because recovery and unlock stop working without the tag."""
     on = plan.was_on if plan.want is None else plan.want
     set_fairplay_exam(contest, on)
+    if plan.was_on and not on and actor is not None:
+        from judge.utils.fairplay_device_session import release_contest_sessions
+        release_contest_sessions(contest=contest, actor=actor)
     fairplay_check_contest(contest)
-    if on and plan.audience_from_scope:
-        mode = ('classes' if contest.is_organization_private and contest.classes.exists() else
-                'organizations' if contest.is_organization_private else 'selected')
-        confirm_audience(contest, mode)
-    elif on and plan.audience_mode is not None:
-        confirm_audience(contest, plan.audience_mode)
-
-
-def fairplay_edit_lock(contest):
-    """Taken before an edit; None when nothing is locked."""
-    return FairPlayEditLock.take(contest)
-
-
-def fairplay_check_edit(lock, contest, plan):
-    if lock is not None:
-        lock.check(contest, plan)
-
-
-class FairPlayEditLock:
-    """Refuses a change of the exam's key, lock or problems while ``fairplay_edit_locked``."""
-
-    def __init__(self, contest):
-        self.key = contest.key
-        self.problem_ids = set(contest.contest_problems.values_list('problem_id', flat=True))
-
-    @classmethod
-    def take(cls, contest, now=None):
-        if contest is None or contest.pk is None or not fairplay_edit_locked(contest, now):
-            return None
-        return cls(contest)
-
-    def check(self, contest, plan):
-        if contest.key != self.key:
-            raise ValidationError(_("The assignment ID can't be changed now."))
-        if plan is not None and plan.want is False:
-            raise ValidationError(_("The lock can't be changed now."), code='fairplay_lock')
-        if set(contest.contest_problems.values_list('problem_id', flat=True)) != self.problem_ids:
-            raise ValidationError(_("The problems can't be changed now."))
 
 
 def acting_editor_username(contest):
@@ -536,7 +489,6 @@ def fairplay_editor_context(request, contest, restricted):
     on = is_fairplay_exam(contest) if contest is not None else False
     context = {'fairplay_offered': fairplay_enabled() or on, 'fairplay_on': on, 'fairplay_open_exam': None,
                'fairplay_default_websites': list(OPEN_BOOK_DEFAULT_WEBSITES)}
-    context['fairplay_audience'] = audience_descriptor(contest) if contest is not None else None
     if fairplay_enabled() and 'fairplay_settings' not in restricted:
         context['fairplay_open_exam'] = (open_exam_values(contest, request.user.username) if on
                                          else {'websites': []})

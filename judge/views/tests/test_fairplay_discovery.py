@@ -71,14 +71,13 @@ class FairPlayDiscoveryTestCase(FairPlayDataMixin, TestCase):
         self.assertEqual(self.rows(), [])
         self.assertEqual(self.client.get(reverse('contest_fairplay_launch', args=[self.exam.key])).status_code, 404)
 
-    def test_invisible_or_unconfirmed_audience_is_not_listed(self):
+    def test_invisible_exam_is_not_listed_and_no_confirmation_is_needed(self):
         self.exam.is_visible = False
         self.exam.save(update_fields=['is_visible'])
         self.assertEqual(self.rows(), [])
         self.exam.is_visible = True
         self.exam.save(update_fields=['is_visible'])
-        self.exam.tags.remove(*self.exam.tags.filter(name__startswith='fp-aud-'))
-        self.assertEqual(self.rows(), [])
+        self.assertEqual(len(self.rows()), 1)
 
     def test_metadata_filters_and_student_author_privacy(self):
         row = self.rows()[0]

@@ -16,6 +16,13 @@ def contest_tags_changed(sender, instance, action, reverse, pk_set, **kwargs):
         involved = action == 'post_clear' or ContestTag.objects.filter(pk__in=pk_set or (), name=FAIRPLAY_TAG).exists()
     if involved:
         fairplay_tags_changed(added=action == 'post_add')
+    if action == 'post_add' and involved:
+        # Remember that this contest had the lock, so hand-ins already in a student's outbox still arrive after it
+        # is switched off.
+        if reverse:
+            Contest.objects.filter(pk__in=pk_set or ()).update(had_fairplay=True)
+        else:
+            Contest.objects.filter(pk=instance.pk).update(had_fairplay=True)
 
 
 @receiver(post_save, sender=ContestTag, dispatch_uid='fairplay_contest_tag_saved')

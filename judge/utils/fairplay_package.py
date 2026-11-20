@@ -14,7 +14,7 @@ from django.core.files.storage import default_storage
 from django.db.models import Q
 from django.utils import timezone
 
-from judge.models import Class, Contest, EditorAttachment, ProblemSubmissionType, ProblemTemplate, Profile, \
+from judge.models import Class, Contest, ContestParticipation, EditorAttachment, ProblemSubmissionType, ProblemTemplate, Profile, \
     contest_problem_display_name
 from judge.utils.fairplay import fairplay_exams
 from judge.utils.fairplay_teaching import students_only
@@ -331,9 +331,8 @@ def build_package(contest):
     collector = _AssetCollector()
     contest_problems = list(contest.contest_problems.select_related('problem').order_by('order', 'id'))
     questions = [_question(contest, cp, index, collector) for index, cp in enumerate(contest_problems)]
-    from judge.utils.fairplay_audience import audience_descriptor
     body = {
-        'audience': audience_descriptor(contest),
+        'audience': _audience(contest),
         'total_points': sum(cp.points for cp in contest_problems),
         'description_md': collector.rewrite(contest.description or ''),
         'questions': questions,
@@ -342,6 +341,16 @@ def build_package(contest):
     # Any change to what students receive changes the version.
     package_version = _sha256_hex(canonical_json(dict(body, key=contest.key)).encode('utf-8'))[:16]
     return {'key': contest.key, 'package_version': package_version, **body}, collector.assets
+
+
+def _audience(contest):
+    """The audience block the classic FairPlay service reads, derived from the contest itself (always confirmed:
+    whoever DKU OJ lets join is who takes the exam)."""
+    class_ids = sorted(contest.classes.values_list('id', flat=True))
+    organization_ids = sorted(contest.organizations.values_list('id', flat=True))
+    mode = 'classes' if class_ids else 'organizations' if contest.is_organization_private else 'selected'
+    return {'mode': mode, 'confirmed': True, 'class_ids': class_ids, 'organization_ids': organization_ids,
+            'selected_only': bool(contest.is_private)}
 
 
 def _person(profile):
@@ -362,7 +371,9 @@ def exam_roster(contest):
     elif contest.is_private:
         queryset = Profile.objects.filter(id__in=contest.private_contestants.values('id'))
     else:
-        queryset = Profile.objects.none()
+        # A public exam admits whoever DKU OJ lets join, so its roster is the students who have joined it.
+        queryset = Profile.objects.filter(
+            id__in=contest.users.exclude(virtual=ContestParticipation.SPECTATE).values('user_id'))
     org_ids = set(contest.organizations.values_list('id', flat=True)) | \
         set(contest.classes.values_list('organization_id', flat=True))
     class_ids = set(Class.objects.filter(organization_id__in=org_ids).values_list('id', flat=True))
