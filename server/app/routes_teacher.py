@@ -129,11 +129,12 @@ def _box_value(raw) -> str | None:
 
 
 async def _box_changes(session: AsyncSession, e: Exam, new: str | None) -> bool:
-    """True when `new` differs from the exam's link; 409 for a change once any attempt exists."""
+    """True when `new` differs from the exam's link; 409 for a change once any attempt exists
+    (a DKU OJ exam may change it any time: 2026-11, FairPlay adds no freeze of its own there)."""
     from .box_profiles import checked_link
     if new == checked_link(e.box_link)[0]:
         return False
-    if (await session.execute(select(Attempt.id).where(Attempt.exam_id == e.id).limit(1))).first() is not None:
+    if e.source != "dkuoj" and (await session.execute(select(Attempt.id).where(Attempt.exam_id == e.id).limit(1))).first() is not None:
         raise HTTPException(409, BOX_FIXED)
     return True
 
@@ -253,7 +254,7 @@ async def update_tool_settings(exam_id: str, body: dict = Body(...), p: Principa
     {"websites": [...]}. A DKU OJ exam keeps them in its FairPlay settings, the same place the
     bridge's settings call writes (the last write per field wins)."""
     from .box_profiles import checked_link
-    from .integrations.dkuoj.routes_v2 import SETTINGS_FIXED, _settings_body
+    from .integrations.dkuoj.routes_v2 import _settings_body
     from .integrations.dkuoj.sync import FAIRPLAY_SETTINGS, apply_fairplay_settings
     e = await _own_exam(session, exam_id, p)
     fields = {f: body[f] for f in ("box_link", "websites") if f in body}
@@ -275,9 +276,6 @@ async def update_tool_settings(exam_id: str, body: dict = Body(...), p: Principa
         if "websites" in sent:
             if ov.get("websites") is None:
                 raise HTTPException(400, "websites must be a list of site names or links")
-            if (e.external_frozen_version or e.status == "closed") and \
-                    (ov["websites"], ov["website_links"]) != (list(e.websites or []), list(e.website_links or [])):
-                raise HTTPException(409, SETTINGS_FIXED)
             for k in ("websites", "website_links", "websites_blocked", "websites_input"):
                 have[k] = ov[k]
         if box_changed:
@@ -757,6 +755,8 @@ async def results(exam_id: str, p: Principal = Depends(require_teacher),
 async def extend_exam(exam_id: str, body: ExtendIn, p: Principal = Depends(require_teacher),
                       session: AsyncSession = Depends(get_session)):
     e = await _own_exam(session, exam_id, p)
+    if integration_for(e) is None and body.minutes > 120:     # FairPlay's own exams keep the 120 minute step
+        raise HTTPException(422, "minutes must be 120 or less")
     await control.extend_exam(session, e, body.minutes)
     return await exam_out_full(session, e)
 

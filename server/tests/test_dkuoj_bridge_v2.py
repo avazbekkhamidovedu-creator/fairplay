@@ -583,7 +583,7 @@ def test_exam_endpoints(oj, fake):
     assert v["counts"]["writing"] == 1 and v["counts"]["not_started"] == 3
 
     # add time
-    for bad in ({"minutes": 0}, {"minutes": 121}, {"minutes": "10"}, {}):
+    for bad in ({"minutes": 0}, {"minutes": -1}, {"minutes": "10"}, {"minutes": True}, {}):
         assert call(oj, "POST", f"{V1}/exams/{KEY}/add-time", bad).status_code == 400
     v2 = call(oj, "POST", f"{V1}/exams/{KEY}/add-time", {"minutes": 10}).json()
     row2 = next(s for s in v2["students"] if s["netid"] == "alice")

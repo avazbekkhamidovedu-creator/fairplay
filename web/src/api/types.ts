@@ -629,6 +629,8 @@ export interface HeartbeatResponse {
   deadline_at: string;
   /** S3 */
   approval?: Approval;
+  /** 2026-11: fingerprint of the exam's questions and tools; a change means fetch the attempt again. */
+  content_rev?: string;
 }
 
 export interface EventsResponse {
@@ -1375,6 +1377,8 @@ export interface Exam {
   external?: ExternalInfo | null;
 }
 export interface AttemptView {
+  /** 2026-11: fingerprint of the questions and tools this view holds (see HeartbeatResponse). */
+  content_rev?: string;
   source?: ExamSource;
   external_name?: string;
   /** files handed in so far for file_upload questions */

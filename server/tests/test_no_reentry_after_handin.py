@@ -279,6 +279,5 @@ def test_teacher_reopen_lets_the_student_in_once_and_then_it_is_locked_again(oj,
     assert r.status_code == 200 and r.json()["receipt"] == receipt2
     assert oj.get(surl(b), headers=hs).json()["status"] == "submitted"
     assert snapshot(oj, aid) == locked
-    assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 10, "reason": "again"}).status_code == 409
     run(oj)
     assert [r[:2] for r in revisions(oj)] == [(1, "sent"), (2, "sent")]

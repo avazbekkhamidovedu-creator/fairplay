@@ -23,7 +23,8 @@ from .services import (attempt_key, exam_closes_at, exam_delivery, invalidate_ex
 from .store import get_store
 from .timeutil import iso, utcnow
 
-# S3: the wait for the teacher's OK is given back, up to this much.
+# S3: the wait for the teacher's OK is given back. A FairPlay exam gives back at most this much;
+# an exam from an external system (DKU OJ) all of it: its source decides about time (2026-11).
 MAX_RESUME_EXTENSION = timedelta(minutes=15)
 PAPER_NOT_OPENED = "Paper exams are printed, not opened in the app"
 
@@ -110,15 +111,37 @@ async def rotate_start_code(session: AsyncSession, e: Exam) -> None:
     await invalidate_exam(get_store(), e.id)
 
 
-async def extend_exam(session: AsyncSession, e: Exam, minutes: int) -> None:
+async def _back_to_live(session: AsyncSession, e: Exam, now: datetime) -> None:
+    """An exam the clock closed (auto_closed) is live again: new codes, the same students.
+    The end-time check of open_exam is skipped: the caller adds the time that makes it valid."""
+    e.status = "live"
+    e.start_code = new_start_code()
+    e.invigilator_code = await unique_invigilator_code(session, e.id)
+    e.closed_at = None
+    e.auto_closed = False
+    e.updated_at = now
+
+
+async def extend_exam(session: AsyncSession, e: Exam, minutes: int, claim=None) -> bool:
     """More time for everyone: the duration, every attempt still writing and, for an
-    external exam with a close time, that close time."""
+    external exam with a close time, that close time. Any positive number of minutes.
+    An exam of an external source that its clock closed (auto_closed) is opened again by it."""
+    reopen = False
+    reopened: list[str] = []
     if e.status != "live":
-        raise HTTPException(409, "Exam is not live")
+        if not (e.status == "closed" and e.auto_closed and integration_for(e) is not None):
+            raise HTTPException(409, "Exam is not live")
+        reopen = True
+    # `claim` records the caller's idempotency id in THIS transaction (committed with the time below).
+    # False: that id was applied already, nothing changes (True = go on).
+    if claim is not None and not await claim():
+        return False
     delta = timedelta(minutes=minutes)
     e.duration_min += minutes
     e.updated_at = utcnow()
-    if integration_for(e) is not None and exam_closes_at(e) is not None:
+    if integration_for(e) is not None:
+        # Also without a close time: the source's sync recomputes the duration from its own
+        # value plus these minutes, so they are never lost on the next listing.
         # External exams close at the source's end time (e.g. DKU OJ's): the added minutes
         # move that close time too (integration closes_at adds external_meta
         # extra_close_minutes), so students starting now get the time and the countdown
@@ -130,30 +153,107 @@ async def extend_exam(session: AsyncSession, e: Exam, minutes: int) -> None:
             before = 0
         meta["extra_close_minutes"] = before + minutes
         e.external_meta = meta
+    if reopen:
+        closes = exam_closes_at(e)
+        if closes is not None and utcnow() >= closes + await max_extra(session, e):
+            await session.rollback()
+            raise HTTPException(409, "The exam is still past its end after adding this time; add more")
+        closed_at = e.closed_at
+        await _back_to_live(session, e, utcnow())
+        reopened = await _reopen_closed_out(session, e, closed_at, utcnow() + delta)
+        # The reopen events decide the delivery revision (outbox.enqueue counts them), so they are
+        # written in this transaction, not after the commit.
+        from .integrations.outbox import REOPENED
+        from .models import IntegrityEvent
+        for aid in reopened:
+            session.add(IntegrityEvent(
+                attempt_id=aid, exam_id=e.id, type=REOPENED, server_time=utcnow(),
+                detail=f"handed in when the exam closed by itself; given back with {minutes} more minutes"))
     rows = (await session.execute(
         select(Attempt.id, Attempt.deadline_at)
-        .where(Attempt.exam_id == e.id, Attempt.status == "in_progress"))).all()
+        .where(Attempt.exam_id == e.id, Attempt.status == "in_progress",
+               Attempt.id.not_in(reopened) if reopened else True))).all()
     if rows:
         # Bulk UPDATE by primary key (dialect-neutral; no interval arithmetic in SQL).
         await session.execute(update(Attempt), [{"id": aid, "deadline_at": dl + delta}
                                                 for aid, dl in rows])
     await session.commit()
+    # Committed (the reopen events with it): the time is added. What follows is cache and live-room
+    # bookkeeping only; a failure must not fail the request, or a caller that retries (same request
+    # id) would be let through to add the time again. The entries expire on their own.
+    import logging
+    log = logging.getLogger("proctora")
     store = get_store()
-    await invalidate_exam(store, e.id)  # new starts get the longer duration
+
+    async def best_effort(what: str, step) -> None:
+        try:
+            await step()
+        except Exception:  # noqa: BLE001
+            log.exception("extend_exam: %s failed for exam %s", what, e.id)
+
+    for aid in reopened:
+        async def live_room(aid=aid):
+            await store.hincrby(f"evc:{e.id}", aid, 1, ac.LIVE_TTL)
+            await store.hset(f"evl:{e.id}", aid, f"{REOPENED} handed in when the exam closed by itself;"
+                             f" given back with {minutes} more minutes", ac.LIVE_TTL)
+
+        async def forget(aid=aid):
+            await store.delete(attempt_key(aid), f"abt:{aid}", f"entry:{aid}")
+            await store.hdel(f"ab:{e.id}", aid)
+        await best_effort("the live-room note", live_room)
+        await best_effort("the cache of a reopened attempt", forget)
+    await best_effort("the exam cache", lambda: invalidate_exam(store, e.id))   # new starts get the longer duration
     if rows:  # heartbeats re-read the new deadline from the DB on their next call
-        await store.delete(*[attempt_key(aid) for aid, _ in rows])
+        await best_effort("the deadline cache", lambda: store.delete(*[attempt_key(aid) for aid, _ in rows]))
+    return True
+
+
+async def _reopen_closed_out(session: AsyncSession, e: Exam, closed_at: datetime | None,
+                             deadline: datetime) -> list[str]:
+    """The attempts the automatic close handed in (not graded or released) go back to writing until
+    `deadline`, with their answers: "Add time" after an automatic close gives the time to the students
+    who were writing, not only to new starters. Their extension below is skipped (deadline is final)."""
+    from .integrations.outbox import freeze_unsent
+    if closed_at is None or e.grades_released:
+        return []
+    rows = (await session.execute(select(Attempt).where(
+        Attempt.exam_id == e.id, Attempt.status == "submitted", Attempt.auto_submitted.is_(True),
+        Attempt.submitted_at >= closed_at, Attempt.external_result.is_(None), Attempt.score.is_(None)))).scalars().all()
+    out = []
+    for a in rows:
+        if a.grades:
+            continue
+        await freeze_unsent(session, a)
+        a.status, a.submitted_at, a.receipt = "in_progress", None, None
+        a.auto_submitted, a.late = False, False
+        a.needs_grading = 0
+        a.deadline_at = deadline
+        a.deadline_fixed = True                   # set by hand: DKU OJ time changes leave it alone
+        a.deadline_swept = False
+        a.device_id, a.device_pub, a.session_id = None, None, new_session_id()
+        a.exited_at = None
+        a.pending_resume = False
+        a.updated_at = utcnow()
+        out.append(a.id)
+    await session.flush()
+    return out
 
 
 async def approve_resume(session: AsyncSession, a: Attempt) -> dict:
     """S3: let a student who came back after FairPlay closed continue. The time spent
-    waiting is given back (at most 15 minutes)."""
+    waiting is given back (at most 15 minutes for a FairPlay exam, all of it for an exam from DKU OJ)."""
     if a.status != "in_progress":
         raise HTTPException(409, "Attempt already submitted")
     if not a.pending_resume:
         raise HTTPException(409, "This student is not waiting for approval")
     now = utcnow()
-    added = min(max(now - (a.pending_since or now), timedelta(0)), MAX_RESUME_EXTENSION)
+    added = max(now - (a.pending_since or now), timedelta(0))
+    exam = await session.get(Exam, a.exam_id)
+    if exam is None or integration_for(exam) is None:       # a FairPlay exam keeps the 15 minute ceiling
+        added = min(added, MAX_RESUME_EXTENSION)
+    added = timedelta(seconds=int(added.total_seconds()))     # whole seconds: exactly what the formula adds
     a.deadline_at = a.deadline_at + added
+    a.deadline_extra_s = int(a.deadline_extra_s or 0) + int(added.total_seconds())   # part of the formula
     a.pending_resume = False                  # pending_since stays: approval = "approved"
     a.updated_at = now
     await session.commit()
@@ -192,34 +292,48 @@ async def release_attempt_device(session: AsyncSession, a: Attempt, swap: bool =
     return moved, target
 
 
-async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: int,
-                         cap: datetime | None) -> datetime:
-    """Put a handed-in attempt back to in_progress for `minutes` (at most until `cap`), with
-    its answers. The device is freed. The caller has checked who may do it and writes the
-    event; this refuses what must never be reopened: not handed in, exam not live, graded or
-    released, or reopened before. Returns the new deadline."""
+async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: int | None,
+                         cap: datetime | None, once_only: bool = False) -> datetime:
+    """Put a handed-in attempt back to in_progress with its answers, for `minutes` (at most
+    until `cap` when one is given); without `minutes` until `cap` (the exam's close + extra time).
+    The device is freed. The caller has checked who may do it and writes the event; this refuses
+    what must never be reopened: not handed in, graded or released, a closed exam (unless the
+    clock closed an exam from an external source: it opens again), and, with `once_only` (the
+    FairPlay teacher's rule; DKU OJ has none), one reopened before. Returns the new deadline."""
     from .integrations.outbox import REOPENED, freeze_unsent
     from .models import IntegrityEvent
     if a.status != "submitted":
         raise HTTPException(409, "This student has not handed in")
+    back = False
     if e.status != "live":
-        raise HTTPException(409, "Exam is not live")
+        if not (e.status == "closed" and e.auto_closed and integration_for(e) is not None):
+            raise HTTPException(409, "Exam is not live")
+        back = True
     if a.external_result is not None or e.grades_released or a.grades or a.score is not None:
         raise HTTPException(409, "This hand-in is already graded or released and cannot be reopened")
-    if (await session.execute(select(IntegrityEvent.id).where(
+    if once_only and (await session.execute(select(IntegrityEvent.id).where(
             IntegrityEvent.attempt_id == a.id, IntegrityEvent.type == REOPENED).limit(1))).first() is not None:
         raise HTTPException(409, "This attempt was reopened once already")
     now = utcnow()
-    deadline = now + timedelta(minutes=minutes)
-    if cap is not None:
-        deadline = min(deadline, cap)
+    if minutes is not None:
+        deadline = now + timedelta(minutes=minutes)
+        if cap is not None:
+            deadline = min(deadline, cap)
+    elif cap is not None:
+        deadline = cap
+    else:
+        raise HTTPException(400, "This exam has no end time: send how many minutes")
     if deadline <= now:
-        raise HTTPException(409, "This exam has ended")
+        raise HTTPException(409, "This exam has ended: send how many minutes to reopen it for")
+    if back:
+        await _back_to_live(session, e, now)
     await freeze_unsent(session, a)
     a.status, a.submitted_at, a.receipt = "in_progress", None, None
     a.auto_submitted, a.late, a.sealed_proof = False, False, None
     a.score, a.needs_grading = None, 0
     a.deadline_at = deadline
+    a.deadline_fixed = True                       # set by hand: DKU OJ time changes leave it alone
+    a.deadline_swept = False
     a.device_id, a.device_pub, a.session_id = None, None, new_session_id()
     a.exited_at = None
     a.pending_resume = False
@@ -229,6 +343,8 @@ async def reopen_attempt(session: AsyncSession, e: Exam, a: Attempt, minutes: in
     store = get_store()
     await store.delete(attempt_key(a.id), f"abt:{a.id}", f"entry:{a.id}")
     await store.hdel(f"ab:{a.exam_id}", a.id)
+    if back:
+        await invalidate_exam(store, e.id)     # start reads the exam cache: not the closed one
     return deadline
 
 

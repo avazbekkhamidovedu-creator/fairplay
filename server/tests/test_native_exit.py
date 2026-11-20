@@ -226,20 +226,21 @@ def test_first_issue_binds_student(synced, server_key):
     assert (r.netid, r.issued_count, r.exam_key) == ("alice", 2, KEY) and r.last_issue_at is not None
 
 
-def test_per_lock_cap(synced, server_key):
+def test_instructor_issued_codes_have_no_count_limits(synced, server_key):
+    """2026-11: no 3 per lock, no per student / per exam hourly cap (DKU OJ decides, every code is audited)."""
     reg(synced, server_key)
-    assert [issue(synced).status_code for _ in range(4)] == [200, 200, 200, 429]
+    assert [issue(synced).status_code for _ in range(12)] == [200] * 12
+
+    async def row(s):
+        return (await s.execute(select(ne.NativeExitLock))).scalar_one().issued_count
+    assert db(synced, row) == 12
+    assert not any(hasattr(ne, n) for n in ("ISSUES_PER_LOCK", "ISSUES_PER_STUDENT_HOUR", "ISSUES_PER_EXAM_HOUR"))
 
 
-def test_student_and_exam_rate_limits(synced, server_key, monkeypatch):
-    for i in ("AAAAAAA2", "AAAAAAA3", "AAAAAAA4"):
-        reg(synced, server_key, lock_id=i)
-    monkeypatch.setattr(ne, "ISSUES_PER_STUDENT_HOUR", 2)
-    assert [issue(synced, lock="AAAAAAA2", netid="alice").status_code for _ in range(3)] == [200, 200, 429]
-    monkeypatch.setattr(ne, "ISSUES_PER_STUDENT_HOUR", 20)
-    monkeypatch.setattr(ne, "ISSUES_PER_EXAM_HOUR", 3)
-    assert issue(synced, lock="AAAAAAA3", netid="bl642").status_code == 200
-    assert issue(synced, lock="AAAAAAA4", netid="ep530").status_code == 429
+def test_many_students_in_one_exam_get_codes_without_an_exam_cap(synced, server_key):
+    for i in range(12):
+        reg(synced, server_key, lock_id=lid("D", i), device=f"dev-exam-{i:04d}")
+    assert [issue(synced, lock=lid("D", i), netid="alice").status_code for i in range(12)] == [200] * 12
 
 
 def test_missing_private_key_is_503(oj, server_key, monkeypatch):
@@ -304,9 +305,8 @@ def lid(prefix, i):
     return prefix + out
 
 
-def test_default_caps_fit_a_class_behind_one_ip():
-    assert (ne.ISSUES_PER_LOCK, ne.LOCKS_PER_DEVICE_HOUR, ne.ISSUES_PER_STUDENT_HOUR) == (3, 20, 20)
-    assert (ne.LOCKS_PER_IP_HOUR, ne.ISSUES_PER_EXAM_HOUR) == (2000, 300)
+def test_default_registration_caps_fit_a_class_behind_one_ip():
+    assert ne.LOCKS_PER_DEVICE_HOUR == 20 and ne.LOCKS_PER_IP_HOUR == 2000     # abuse caps of lock registration stay
 
 
 def test_env_caps_override_and_fall_back(monkeypatch):
@@ -336,15 +336,6 @@ def test_device_cap_is_twenty(synced, server_key):
     assert [reg(synced, server_key, lock_id=i).status_code for i in ids] == [201] * 20 + [429]
 
 
-def test_exam_cap_allows_all_then_refuses_next(synced, server_key, monkeypatch):
-    monkeypatch.setattr(ne, "ISSUES_PER_EXAM_HOUR", 6)
-    monkeypatch.setattr(ne, "ISSUES_PER_STUDENT_HOUR", 1000)
-    for i in range(7):
-        reg(synced, server_key, lock_id=lid("D", i), device=f"dev-exam-{i:04d}")
-    got = [issue(synced, lock=lid("D", i), netid=f"s{i}").status_code for i in range(7)]
-    assert got == [200] * 6 + [429]
-
-
 def test_school_net_has_a_higher_ip_cap_and_the_device_cap_still_applies(synced, server_key, monkeypatch):
     synced.app.state.settings.login_school_nets = ["10.1.0.0/16"]
     monkeypatch.setattr(ne, "client_ip", lambda request: "10.1.2.3")
@@ -363,37 +354,6 @@ def test_ip_outside_school_nets_is_still_capped(synced, server_key, monkeypatch)
     asyncio.run(get_store().incrby("nexit:ip:10.9.2.3", ne.LOCKS_PER_IP_HOUR, ne.HOUR_S))
     r = reg(synced, server_key, lock_id=lid("E", 1), device="dev-school-0002")
     assert r.status_code == 429
-
-
-def test_exam_cap_grows_with_roster(synced, server_key, monkeypatch):
-    from sqlalchemy import func
-    from app.db import get_database
-    from app.integrations.dkuoj.models import OjRosterEntry
-
-    async def roster():
-        async with get_database().sessionmaker() as s:
-            return (await s.execute(select(func.count()).select_from(OjRosterEntry).where(
-                OjRosterEntry.revoked_at.is_(None)))).scalar_one()
-
-    n = asyncio.run(roster())
-    assert n >= 2
-    monkeypatch.setattr(ne, "ISSUES_PER_EXAM_HOUR", 1)
-    monkeypatch.setattr(ne, "ISSUES_PER_STUDENT_HOUR", 1000)
-    for i in range(n + 1):
-        reg(synced, server_key, lock_id=lid("G", i), device=f"dev-roster-{i:04d}")
-    got = [issue(synced, lock=lid("G", i), netid=f"s{i}").status_code for i in range(n + 1)]
-    assert got == [200] * n + [429]
-
-
-def test_student_and_lock_caps_hold_with_large_roster(synced, server_key, monkeypatch):
-    monkeypatch.setattr(ne, "ISSUES_PER_EXAM_HOUR", 1000)
-    monkeypatch.setattr(ne, "ISSUES_PER_STUDENT_HOUR", 2)
-    reg(synced, server_key, lock_id=lid("H", 0))
-    reg(synced, server_key, lock_id=lid("H", 1), device="dev-roster-9999")
-    assert [issue(synced, lock=lid("H", 0)).status_code for _ in range(3)] == [200, 200, 429]
-    monkeypatch.setattr(ne, "ISSUES_PER_STUDENT_HOUR", 20)
-    reg(synced, server_key, lock_id=lid("H", 2), device="dev-roster-9998")
-    assert [issue(synced, lock=lid("H", 2), netid="bl642").status_code for _ in range(4)] == [200, 200, 200, 429]
 
 
 SIGN_SEED = bytes(range(50, 82))

@@ -839,7 +839,7 @@ use is built into the FairPlay exam page.
   `websites` lines may be full links (`https://duke.app.box.com/folder/0`, optionally after a
   title: `Course folder https://...`). The server stores the HOST in `websites` (unchanged format
   for the apps: lowercase hosts, `*.x.com`, at most 20) and the link in
-  `website_links: [{host, url, title}]` (≤ 20, `url` always https; anything sent in
+  `website_links: [{host, url, title}]` (≤ 20; a DKU OJ exam takes up to 64 hosts and links, 2026-11, past that they are listed in `websites_blocked`; `url` always https; anything sent in
   `website_links` is ignored: it comes from `websites`). Exam out adds `website_links`,
   `companions: [{for, name, sites}]` (`app/site_companions.py`) and `upload_opens_days`.
   Website exams: 0 / `[]`. `GET /api/tools/site-check?host=` takes a link too and adds
@@ -859,7 +859,7 @@ use is built into the FairPlay exam page.
   (Home / Exams / course), `/student/exams/<id>/upload` has only the upload area (time left, file
   list with Remove). The websites tab lists each start page (title + link) and opens it first.
 - **Site policy (external exams):** `FAIRPLAY_SITE_POLICY_EXCEPTIONS` (exact hosts; unset =
-  `duke.app.box.com,duke.box.com`, empty = none) are not refused by the deny-list. See
+  `duke.app.box.com,duke.box.com,duke.account.box.com`, empty = none) are not refused by the deny-list. See
   `docs/dkuoj-bridge-v2.md` §10 for DKU OJ's side (`POST /exams/<key>/settings`), and §11: DKU OJ
   keeps no FairPlay settings (no schema change there); all of them are set through that endpoint,
   also before the first sync (pending), and its exam list carries `active_keys` instead of `removed` rows.
@@ -870,7 +870,7 @@ source-agnostic). Code: `server/app/integrations/` (`base.py` = `ExternalSource`
 `registry.py` = `integration_for(exam)`, None for FairPlay exams; `dkuoj/` = the DKU OJ source),
 `server/app/question_types.py` (the extended question types), `server/app/answer_files.py`.
 DKU OJ settings are read only by `integrations/dkuoj/config.py`: `DKUOJ_URL`, `DKUOJ_TOKEN` (both
-set = connected; the token may be `new,old` while rotating), `DKUOJ_SYNC_SECONDS` (120),
+set = connected; the token may be `new,old` while rotating), `DKUOJ_SYNC_SECONDS` (30),
 `DKUOJ_DELIVERY_RPS` (10), `DKUOJ_ALLOW_INSECURE` (plain http to another machine; refused
 otherwise). `FAIRPLAY_EXTERNAL_SITE_ALLOWLIST` limits the websites an external exam may open
 (`integrations/site_policy.py`). `FAIRPLAY_PUBLIC_URL`
@@ -903,7 +903,7 @@ ids of external exams are opaque (`q_` + 16 hex).
 ### API fields
 - **Teacher exam**: `"external": null` for FairPlay exams, else `{"source", "name", "url",
   "read_only", "graded_externally", "package_ready", "start_time", "end_time", "key", "version",
-  "frozen_version", "synced_at", "removed", "connected"}`. The external system's editors see the
+  "synced_at", "removed", "connected"}` (`frozen_version` is gone since 2026-11: nothing is frozen). The external system's editors see the
   exam (list, live room, open/close/extend/codes) like its owner. Read-only exams: `PUT` → 409
   `"This exam comes from <name>. Edit this exam in <name>."`; delete → 409 until the source removed
   it; grades / comment / release / unrelease → 409 `"This exam is graded in <name>. …"`; `open` →
@@ -940,12 +940,11 @@ ids of external exams are opaque (`q_` + 16 hex).
   false, source, name}` when not connected).
 
 ### Professor rescue actions (2026-10-30)
-Five endpoints let a professor help a student in an emergency without restarting them. Each is called with the student's exam key and NetID, requires an editor of the exam, answers `Cache-Control: no-store`, and audits the acting user (and the reason, when one is sent: `reason` is optional since 2026-11 and may be missing, null or empty; a sent one is at most 200 characters).
-- **Release device** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/release-device`) body `{"reason": "..."}` → frees the device, unbinds the access code, and keeps answers and timer. Rate limit: 3 per student per exam, counted over 30 days.
-- **Reissue code** (POST `/api/integrations/dkuoj/v1/exams/<key>/access-codes/reissue`) body `{"netid": "...", "reason": "..."}` → issues a new code, returned once in the response. Rate limits: 3 per student per exam (counted over 30 days), 30 per exam per hour.
-- **Reopen** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/reopen`) body `{"minutes": 5..60, "reason": "..."}` → restores submitted answers, frees device, sets a new deadline. Allowed once per attempt, while live and not graded.
-- **Extra time** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/extra-time`) body `{"minutes": 1..120, "reason": "..."}` → adds time, capped at 240 total per student per exam.
-- **Offline exit code** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/offline-exit`) body `{"mac_code": "...", "reason": "..." | null}` → unlocks a locked Mac. Rate limit: 20 per student per hour.
+Four endpoints let a professor help a student in an emergency without restarting them (the access-code reissue endpoint was removed in 2026-11 and answers 404). Since 2026-11 FairPlay adds no limits of its own to them (`docs/dkuoj-bridge-v2.md` §14). Each is called with the student's exam key and NetID, requires an editor of the exam, answers `Cache-Control: no-store`, and audits the acting user (and the reason, when one is sent: `reason` is optional since 2026-11 and may be missing, null or empty; a sent one is at most 200 characters).
+- **Release device** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/release-device`) body `{"reason": "..."}` → frees the device and keeps answers and timer. No rate limit.
+- **Reopen** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/reopen`) body `{"minutes": <optional>, "reason": "..."}` → restores submitted answers, frees device, sets a new deadline: for `minutes`, or until the exam's close + extra time without it. Any number of times; also after the clock closed the exam; not once a result is graded or released.
+- **Extra time** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/extra-time`) body `{"minutes": <positive>, "request_id": "<optional>", "reason": "..."}` → adds time, any amount; a repeated `request_id` adds nothing. The same optional `request_id` works on `POST .../exams/<key>/add-time`. It must be in the signed body: the `X-FP-Request-Id` header is not signed and is ignored.
+- **Offline exit code** (POST `/api/integrations/dkuoj/v1/exams/<key>/students/<netid>/offline-exit`) body `{"mac_code": "...", "reason": "..." | null}` → unlocks a locked Mac. No rate limit. The target student must be on the exam's current list or already have an attempt in that exam (404 otherwise).
 See `docs/dkuoj-bridge-v2.md` §3 for full details.
 
 ### DKU OJ client behaviour (aligned with the DKU OJ patch)
@@ -1277,10 +1276,10 @@ One FairPlay database binds to one explicitly provisioned DKU OJ installation. N
 - Before synchronization or an incoming bridge operation, FairPlay verifies signed `GET /api/fairplay/v1/installation?installation_id=<UUID>`. JSON is `{ "protocol": 1, "installation_id": "<UUID>", "request_nonce": "<original request nonce>" }`. FairPlay persists the verified UUID and canonical DKU OJ URL in `oj_state.installation_binding`. A different UUID or an unapproved origin change fails closed.
 - DKU OJ authenticates JSON/empty responses, including errors, 404 and 304, with the existing OJ-to-FairPlay directional key. The canonical method field is `RESPONSE <original HTTP method> <numeric status>`, the path includes the exact query, the body is the exact uncompressed response bytes, and the acting-user field is the original request nonce. Response timestamp and nonce are fresh. FairPlay derives the expected method/status/path/request nonce and verifies all of them. A response signature cannot be replayed as a request or for another request/status/body.
 - Binary exam assets are the narrow exception: their bytes must match the SHA-256 declared in an authenticated package. Other authority responses have no unsigned fallback, including on the beta HTTP network.
-- Exam lists and packages carry `audience: { "mode": "classes" | "organizations" | "selected", "confirmed": true, "class_ids": [<positive IDs>], "organization_ids": [<positive IDs>], "selected_only": false }`. Missing/unconfirmed metadata blocks membership expansion and new admissions. Class mode with zero classes is revoked, even if organizations remain. `selected_only` intersects the explicit student list with class/organization scope; standalone selected mode uses the explicit list. The package audience must agree with the verified listing.
+- Exam lists and packages may carry `audience: { "mode": ..., "confirmed": true, ... }`. Since 2026-11 FairPlay stores it but no longer requires it: the roster as DKU OJ sends it is used, and nothing blocks admission for a missing or unconfirmed audience.
 - Lifecycle notifications use signed `POST /api/integrations/dkuoj/v1/sync` with `event: "changed" | "removed" | "audience_revoked"` and `exam_keys`, `class_ids`, `organization_ids`. Existing `exam_key` and `class_id` remain accepted. Notifications trigger authoritative reconciliation; the notification itself does not grant membership or delete history. Missing targets are reconciled only after a complete authenticated read. Authentication, network and parse failures are not deletion evidence.
 - Current `oj_editors` rows grant authority for external exams. An old `teacher_id`, a historical role or a class mirror does not. Integration class mirrors are internal/read-only and never accumulate the roster of a selected exam as class-wide membership. Generic class/member/join APIs cannot operate on them.
-- Whole-exam removal removes current authority and new-start eligibility while retaining questions, assets, answers, attempts, receipts and deliveries. Only an in-progress student whose last authoritative roster entry remains eligible may continue under the existing device/session proof rules. Explicit individual roster removal instead persists `oj_roster.revoked_at`, revokes their access code, exits their active session and invalidates its live caches. Existing account JWTs and cached app sessions cannot resume, read the active attempt, save new live answers or send app beats; a later whole-exam removal never clears that individual revocation. An explicit authoritative re-add clears the roster tombstone. Existing answers, submitted review and sealed/history uploads retain their existing proof policy; the original session identifier is preserved for previously sealed work. Freezing one student's package never authorizes another student's first start.
+- Whole-exam removal removes new-start eligibility while retaining questions, assets, answers, attempts, receipts, deliveries and (since 2026-11) the editors, so instructors still see the exam and can issue exit codes. An in-progress student continues under the existing device/session proof rules. Removing one student from the roster persists `oj_roster.revoked_at` and blocks only a NEW start; a student already writing finishes (2026-11), their attempt is not ended. An explicit authoritative re-add clears the roster tombstone. Existing answers, submitted review and sealed/history uploads retain their existing proof policy; the original session identifier is preserved for previously sealed work. Freezing one student's package never authorizes another student's first start.
 
 ### Operator binding steps
 

@@ -4,8 +4,11 @@ import IOKit.ps
 /// Plan M5 (2026-10-20): the server's clock, carried forward with the monotonic clock.
 ///
 /// Every server response has `X-Server-Time`. We keep the last one together with
-/// `systemUptime` at that moment, so "now" for deadlines and sealing is
+/// the monotonic clock at that moment, so "now" for deadlines and sealing is
 /// last server time + time elapsed since -- changing the Mac's clock changes nothing.
+/// 0.8.9 fix: the monotonic clock is CLOCK_MONOTONIC_RAW (mach_continuous_time), which keeps
+/// counting while the Mac sleeps. `systemUptime` stops during sleep, so a Mac that slept offline
+/// would seal with a time earlier than the real one.
 final class ServerClock {
     static let shared = ServerClock()
     static let maxSkew: TimeInterval = 120
@@ -20,7 +23,7 @@ final class ServerClock {
         guard let t = ServerClock.parse(text) else { return }
         lock.lock(); defer { lock.unlock() }
         server = t
-        uptimeAt = ProcessInfo.processInfo.systemUptime
+        uptimeAt = ServerClock.monotonic()
         offset = t.timeIntervalSince(Date())
     }
 
@@ -28,7 +31,12 @@ final class ServerClock {
     func now() -> Date {
         lock.lock(); defer { lock.unlock() }
         guard let server else { return Date() }
-        return server.addingTimeInterval(ProcessInfo.processInfo.systemUptime - uptimeAt)
+        return server.addingTimeInterval(ServerClock.monotonic() - uptimeAt)
+    }
+
+    /// Seconds on a clock that never jumps with the Mac's date and keeps running in sleep.
+    static func monotonic() -> TimeInterval {
+        TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
     }
 
     var known: Bool { lock.lock(); defer { lock.unlock() }; return server != nil }

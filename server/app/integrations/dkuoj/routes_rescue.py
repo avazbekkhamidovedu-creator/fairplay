@@ -2,6 +2,10 @@
 student's device, reopen a handed-in attempt, add time for one
 student, give a locked Mac its offline exit code. Prefix /api/integrations/dkuoj/v1.
 
+2026-11 (owner decision "FairPlay just shows DKU OJ"): FairPlay adds no limits of its own here: no
+count or time limits on releasing a device, reopening, extra time or offline exit codes. DKU OJ
+decides; every action is still audited (class event + integrity event).
+
 Every call needs an editor of the exam as acting user, answers `Cache-Control: no-store`
 and leaves a class event plus, when the student has an attempt, an integrity event naming
 the acting user and, when one was sent, the reason. Only exams of source "dkuoj" can be
@@ -27,7 +31,8 @@ from ...services import attempt_key, exam_closes_at
 from ...store import get_store
 from ...timeutil import iso, utcnow
 from .models import OjRosterEntry, OjStudentGrant
-from .routes_v2 import PREFIX, BridgeCall, _attempt_of, _editor_exam, _event_class, signed_call
+from .routes_v2 import (PREFIX, BridgeCall, _attempt_of, _editor_exam, _event_class, claim_request, request_used,
+                        positive_minutes, request_id_of, signed_call)
 from .setup import add_event
 
 log = logging.getLogger("proctora.dkuoj")
@@ -35,15 +40,7 @@ log = logging.getLogger("proctora.dkuoj")
 router = APIRouter(prefix=PREFIX, tags=["dkuoj-bridge"])
 
 REASON_MAX = 200
-MONTH_S = 30 * 24 * 3600
-HOUR_S = 3600
-RELEASES_PER_STUDENT = 3
-OFFLINE_EXITS_PER_STUDENT_HOUR = 20
-REOPEN_MINUTES = (5, 60)
-EXTRA_MINUTES = (1, 120)
-EXTRA_CAP_MIN = 240
 NO_STORE = {"Cache-Control": "no-store"}
-TOO_OFTEN = "This was done too often for this student. Ask FairPlay support if it is really needed."
 
 
 def _out(body: dict) -> JSONResponse:
@@ -63,18 +60,6 @@ def _reason(data: dict, required: bool = False) -> str:
     if len(v) > REASON_MAX:
         raise HTTPException(400, "reason is at most 200 characters")
     return v
-
-
-def _minutes(data: dict, lo: int, hi: int) -> int:
-    m = data.get("minutes")
-    if not isinstance(m, int) or isinstance(m, bool) or not lo <= m <= hi:
-        raise HTTPException(400, f"minutes must be a whole number from {lo} to {hi}")
-    return m
-
-
-async def _limit(key: str, limit: int, window_s: int) -> None:
-    if await get_store().incr(key, window_s) > limit:
-        raise HTTPException(429, TOO_OFTEN, headers={"Retry-After": "3600"})
 
 
 async def _on_list(session: AsyncSession, e: Exam, netid: str) -> tuple[User, Attempt | None]:
@@ -110,7 +95,6 @@ async def release_device(key: str, netid: str, call: BridgeCall = Depends(signed
     u, a = await _on_list(session, e, netid)
     if a is not None and a.status == "submitted":
         raise HTTPException(409, "This student has already handed in")
-    await _limit(f"oj:release:{e.id}:{u.id}", RELEASES_PER_STUDENT, MONTH_S)
     moved = target = None
     if a is not None:
         moved, target = await control.release_attempt_device(session, a, swap=True, clear_pending=True)
@@ -130,18 +114,21 @@ async def reopen(key: str, netid: str, call: BridgeCall = Depends(signed_call),
     from ..outbox import ensure_revision_schema
     await ensure_revision_schema(session)
     e = await _editor_exam(session, key, call)
-    minutes = _minutes(call.data, *REOPEN_MINUTES)
+    minutes = positive_minutes(call.data, required=False)
     reason = _reason(call.data)
     u, a = await _on_list(session, e, netid)
     if a is None:
         raise HTTPException(409, "This student has not handed in")
+    # No minutes: until the exam's close (+ the largest extra time). With minutes: exactly that
+    # long, whatever the end time is (DKU OJ decides).
     closes = exam_closes_at(e)
-    cap = closes + await max_extra(session, e) if closes is not None else None
+    cap = closes + await max_extra(session, e) if closes is not None and minutes is None else None
     receipt, handed_in = a.receipt, a.submitted_at
     deadline = await control.reopen_attempt(session, e, a, minutes, cap)
     await session.commit()
+    how = f"{minutes} min" if minutes is not None else "the rest of the exam"
     await _record(session, e, call, "attempt_reopened", u, a,
-                  f"reopened for {minutes} min until {iso(deadline)}; first hand-in receipt {receipt or '-'} "
+                  f"reopened for {how} until {iso(deadline)}; first hand-in receipt {receipt or '-'} "
                   f"at {iso(handed_in)} stays on file", reason)
     log.info("DKU OJ exam %s: attempt reopened by %s", key, call.acting_user)
     return _out({"ok": True, "deadline_at": iso(deadline)})
@@ -150,45 +137,103 @@ async def reopen(key: str, netid: str, call: BridgeCall = Depends(signed_call),
 @router.post("/exams/{key}/students/{netid}/extra-time")
 async def extra_time(key: str, netid: str, call: BridgeCall = Depends(signed_call),
                      session: AsyncSession = Depends(get_session)):
+    """Extra time for one student, any positive number of minutes, no total cap. An optional
+    "request_id" makes it idempotent (a repeat of the same id adds nothing)."""
     e = await _editor_exam(session, key, call)
-    minutes = _minutes(call.data, *EXTRA_MINUTES)
+    minutes = positive_minutes(call.data)
+    rid = request_id_of(call)
     reason = _reason(call.data)
     u, a = await _on_list(session, e, netid)
-    if e.status == "closed":
+    scope = f"extratime:{e.id}:{u.id}"
+    repeated = {"ok": True, "repeated": True,
+                "deadline_at": iso(a.deadline_at) if a is not None and a.status == "in_progress" else None}
+    # A repeat of a grant that was applied (its answer lost) is answered as a repeat, even if the
+    # student handed in or the exam closed since.
+    if await request_used(session, scope, rid):
+        log.info("DKU OJ exam %s: repeated extra-time %s ignored", key, rid)
+        return _out(repeated)
+    if e.status == "closed" and not e.auto_closed:      # closed by its clock: extra time still counts (like add-time)
         raise HTTPException(409, "Exam is closed")
     if a is not None and a.status == "submitted":
         raise HTTPException(409, "This student has already handed in")
-    for attempt in (0, 1):
-        grant = (await session.execute(select(OjStudentGrant).where(
-            OjStudentGrant.exam_id == e.id, OjStudentGrant.user_id == u.id))).scalar_one_or_none()
-        total = int(grant.extra_seconds if grant else 0) // 60 + minutes
-        if total > EXTRA_CAP_MIN:
-            left = max(0, EXTRA_CAP_MIN - total + minutes)
-            raise HTTPException(409, f"A student can get at most {EXTRA_CAP_MIN} extra minutes; {left} left")
-        if grant is None:
-            grant = OjStudentGrant(exam_id=e.id, user_id=u.id)
-            session.add(grant)
-        grant.extra_seconds, grant.by, grant.at = total * 60, call.acting_user[:150], utcnow()
-        deadline = None
+    back = False
+    if e.status == "closed":
+        # Closed by its clock (checked above). The grant only helps this student when their own end
+        # (the close + their extra time, DKU OJ's and the professors') is still ahead: then the exam
+        # comes back live the way "Add time" brings it back; otherwise there is nothing to give.
+        roster = (await session.execute(select(OjRosterEntry.extra_time_seconds).where(
+            OjRosterEntry.exam_id == e.id, OjRosterEntry.user_id == u.id,
+            OjRosterEntry.revoked_at.is_(None)))).scalar() or 0
+        granted = (await session.execute(select(OjStudentGrant.extra_seconds).where(
+            OjStudentGrant.exam_id == e.id, OjStudentGrant.user_id == u.id))).scalar() or 0
+        closes = exam_closes_at(e)
+        end = closes + timedelta(seconds=int(roster) + int(granted) + minutes * 60) if closes is not None else None
+        if end is None or end <= utcnow():
+            raise HTTPException(409, "The exam has ended; add time for everyone or reopen")
+        back = True
+    # The request id is stored in the grant's own transaction (_grant_once): applied once.
+    if back:
+        await control._back_to_live(session, e, utcnow())     # committed together with the grant
+    granted_now = await _grant(session, e, u, a, minutes, call, scope, rid)
+    if granted_now is None:                                   # a concurrent twin with this id won
+        await session.refresh(e)
+        if a is not None:
+            await session.refresh(a)
+        log.info("DKU OJ exam %s: repeated extra-time %s ignored", key, rid)
+        return _out({"ok": True, "repeated": True,
+                     "deadline_at": iso(a.deadline_at) if a is not None and a.status == "in_progress" else None})
+    total, deadline = granted_now
+    if back and e.status != "live":                           # the grant's retry rolled it back
+        await control._back_to_live(session, e, utcnow())
+        await session.commit()
+    # Committed: a failure below must not make a retry (same request id) add the time again
+    try:
+        if back:
+            from ...services import invalidate_exam
+            await invalidate_exam(get_store(), e.id)           # start reads the exam cache: not the closed one
         if a is not None and a.status == "in_progress":
-            a.deadline_at = a.deadline_at + timedelta(minutes=minutes)
-            a.updated_at = utcnow()
-            deadline = a.deadline_at
-        try:
-            await session.commit()
-            break
-        except IntegrityError:          # two grants for a first time at once: add to the winner's row
-            await session.rollback()
-            if attempt:
-                raise
-            if a is not None:
-                await session.refresh(a)
-    if a is not None and a.status == "in_progress":
-        await get_store().delete(attempt_key(a.id))
-    await _record(session, e, call, "extra_time_granted", u, a,
-                  f"{minutes} extra minutes (now {total} in all)", reason)
+            await get_store().delete(attempt_key(a.id))
+        await _record(session, e, call, "extra_time_granted", u, a,
+                      f"{minutes} extra minutes (now {total} in all)", reason)
+    except Exception:  # noqa: BLE001
+        log.exception("DKU OJ exam %s: extra time of %s granted, but the cache / event step failed", key, netid)
     log.info("DKU OJ exam %s: %d extra minutes by %s", key, minutes, call.acting_user)
     return _out({"ok": True, "deadline_at": iso(deadline)})
+
+
+async def _grant(session: AsyncSession, e: Exam, u: User, a: Attempt | None, minutes: int,
+                 call: BridgeCall, scope: str | None = None, rid: str | None = None) -> tuple[int, object] | None:
+    """Add `minutes` to the student's grant (and running deadline). Two first grants at once: the
+    loser rolls back and adds to the winner's row (one retry)."""
+    try:
+        return await _grant_once(session, e, u, a, minutes, call, scope, rid)
+    except IntegrityError:
+        await session.rollback()
+        if a is not None:
+            await session.refresh(a)
+        return await _grant_once(session, e, u, a, minutes, call, scope, rid)
+
+
+async def _grant_once(session: AsyncSession, e: Exam, u: User, a: Attempt | None, minutes: int,
+                      call: BridgeCall, scope: str | None = None, rid: str | None = None
+                      ) -> tuple[int, object] | None:
+    """None = the request id was applied already (nothing changed)."""
+    if scope is not None and not await claim_request(session, scope, rid):
+        return None
+    grant = (await session.execute(select(OjStudentGrant).where(
+        OjStudentGrant.exam_id == e.id, OjStudentGrant.user_id == u.id))).scalar_one_or_none()
+    total = int(grant.extra_seconds if grant else 0) // 60 + minutes
+    if grant is None:
+        grant = OjStudentGrant(exam_id=e.id, user_id=u.id)
+        session.add(grant)
+    grant.extra_seconds, grant.by, grant.at = total * 60, call.acting_user[:150], utcnow()
+    deadline = None
+    if a is not None and a.status == "in_progress":
+        a.deadline_at = a.deadline_at + timedelta(minutes=minutes)
+        a.updated_at = utcnow()
+        deadline = a.deadline_at
+    await session.commit()
+    return total, deadline
 
 
 @router.post("/exams/{key}/students/{netid}/offline-exit")
@@ -203,7 +248,6 @@ async def offline_exit(key: str, netid: str, request: Request, call: BridgeCall 
     if a is None:
         raise HTTPException(404, "This student has not started the exam")
     code, mac = control.offline_exit_code(ac.settings_of(request), a, mac_code)
-    await _limit(f"oj:offexit:{e.id}:{u.id}", OFFLINE_EXITS_PER_STUDENT_HOUR, HOUR_S)
     await _record(session, e, call, "offline_exit_code_issued", u, a,
                   f"offline exit code given for Mac code {mac[:4]}-{mac[4:]}", reason)
     return _out({"code": code})

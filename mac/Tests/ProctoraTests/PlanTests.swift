@@ -25,6 +25,13 @@ import Foundation
         #expect(ServerClock.parse("yesterday") == nil)
     }
 
+    /// 0.8.9: the server clock runs on a clock that counts sleep (never behind uptime-without-sleep).
+    @Test func serverClockCountsSleep() {
+        #expect(ServerClock.monotonic() >= ProcessInfo.processInfo.systemUptime)
+        let a = ServerClock.monotonic()
+        #expect(ServerClock.monotonic() >= a)
+    }
+
     @Test func clockSkewLimitIsTwoMinutes() {
         #expect(ServerClock.skewOK(0))
         #expect(ServerClock.skewOK(-120))

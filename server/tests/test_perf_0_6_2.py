@@ -146,7 +146,8 @@ def test_exam_hot_facts_follow_the_exam_cache():
         gone = await st.get(exam_hot_key("e1")), await st.get(exam_key("e1"))
         return hot, cached, ttl, gone
     hot, cached, ttl, gone = run(go())
-    assert hot == {"question_ids": ["q1", "q2"], "questions": [], "require_strong_lock": True}
+    assert hot == {"question_ids": ["q1", "q2"], "questions": [], "require_strong_lock": True,
+                   "rev": ""}
     assert cached is not None and 0 < ttl <= 120
     assert gone == (None, None)
 

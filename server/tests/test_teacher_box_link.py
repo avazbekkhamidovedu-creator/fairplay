@@ -194,7 +194,7 @@ def test_dkuoj_patch_round_trips_with_the_bridge(oj, fake):
     assert exam_row(oj).box_link is None and exam_row(oj).websites == ["docs.python.org"]
 
 
-def test_dkuoj_freeze_rules(oj, fake):
+def test_dkuoj_has_no_freeze_rules(oj, fake):
     run(oj)
     t = login(oj, "teacher")
     eid = exam_row(oj).id
@@ -206,4 +206,5 @@ def test_dkuoj_freeze_rules(oj, fake):
         await s.commit()
     db(oj, freeze)
     assert patch(oj, t, eid, {"box_link": GIVEN, "websites": ["docs.python.org"]}).status_code == 200
-    assert patch(oj, t, eid, {"websites": ["en.cppreference.com"]}).status_code == 409
+    assert patch(oj, t, eid, {"websites": ["en.cppreference.com"]}).status_code == 200
+    assert exam_row(oj).websites == ["en.cppreference.com"]

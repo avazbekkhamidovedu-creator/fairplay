@@ -25,11 +25,13 @@ def test_pending_settings_from_an_editor_are_kept(oj):
     assert call(oj, "GET", f"{V1}/exams/{KEY}").json()["settings"]["open_book"] is True
 
 
-def test_login_made_by_a_stranger_does_not_make_them_class_staff(oj):
+def test_any_non_student_dkuoj_signs_for_a_class_is_class_staff(oj):
+    """2026-11: DKU OJ vouches for the acting user of a class (instructor / TA / course staff); a student is refused."""
     body = {"class_name": "CS 101 Section A", "course_name": "CS 101"}
     assert call(oj, "POST", f"{V1}/classes/{CLASS_ID}/login", body, acting="mallory").status_code == 200
     run(oj)
-    assert call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status", acting="mallory").status_code == 403
+    assert call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status", acting="mallory").status_code == 200
+    assert call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status", acting="alice").status_code == 403
     assert call(oj, "GET", f"{V1}/classes/{CLASS_ID}/status", acting="teacher").status_code == 200
 
 

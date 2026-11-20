@@ -62,14 +62,6 @@ export function useDukeBox(box: ExamBox | undefined): DukeBoxState {
     [],
   );
 
-  // Box gone from the attempt (handed in, time up) or the page leaves: close the window.
-  useEffect(() => {
-    if (!box) return;
-    return () => {
-      bridge.closeBox();
-    };
-  }, [!!box]);
-
   const open = useCallback(() => {
     const b = boxRef.current;
     if (!b || !bridge.boxSupported()) return;
@@ -78,6 +70,28 @@ export function useDukeBox(box: ExamBox | undefined): DukeBoxState {
     setError(null);
     bridge.openBox(b);
   }, []);
+
+  // Box gone from the attempt (handed in, time up), its link or policy changed (DKU OJ / the teacher
+  // changed it while the pane was open) or the page leaves: close the window. A window that was open
+  // is opened again with the new link; one that was not stays closed.
+  const boxKey = box ? JSON.stringify(box) : "";
+  const reopenRef = useRef(false);
+  useEffect(() => {
+    if (!box) return;
+    if (reopenRef.current) {
+      reopenRef.current = false;
+      setStatus("idle");
+      statusRef.current = "idle";
+      setError(null);
+      open();
+    }
+    return () => {
+      reopenRef.current = statusRef.current === "open" || statusRef.current === "opening";
+      bridge.closeBox();
+      setStatus("idle");
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxKey]);
 
   return { supported, status, error, open };
 }

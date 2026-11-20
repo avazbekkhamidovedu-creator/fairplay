@@ -135,8 +135,9 @@ class Exam(Base):
                                                   server_default="python")
     # Integrations (app.integrations): "fairplay" (made here) or the id of the external
     # system the exam comes from (e.g. "dkuoj"), which then owns its content and grades.
-    # external_frozen_version is set by the first student start (later versions never change
-    # a running exam); external_meta is the integration's own data about the exam.
+    # external_frozen_version is set by the first student start (a later question package never
+    # changes a running exam; its tools, settings and time still follow DKU OJ);
+    # external_meta is the integration's own data about the exam.
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="fairplay",
                                         server_default="fairplay")
     external_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
@@ -219,6 +220,16 @@ class Attempt(Base):
     pending_resume: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
                                                  server_default=false())
     pending_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 2026-11 (DKU OJ time follows the source): seconds the teacher gave back for the wait at a
+    # resume (approve_resume), part of this attempt's deadline formula; and a deadline set by hand
+    # (a reopen), which a later change of DKU OJ's duration or end leaves alone.
+    deadline_extra_s: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    deadline_fixed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                 server_default=false())
+    # handed in by the DEADLINE sweep (closing.sweep_expired_attempts), not by a teacher or the exam's
+    # automatic close: only such a hand-in may be replaced by a student's in-time seal
+    deadline_swept: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                 server_default=false())
     # S4: the student asked to continue on another computer (swap_device_id); once the
     # teacher approves, the old session may still send one final save for 120 s.
     swap_device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

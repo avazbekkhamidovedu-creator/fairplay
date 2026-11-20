@@ -5,11 +5,11 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.integrations.dkuoj import client as ojclient, signing, sync
-from app.integrations.dkuoj.isolation import BINDING, audience_valid
-from app.integrations.dkuoj.models import OjState
+from app.integrations.dkuoj.isolation import BINDING
+from app.integrations.dkuoj.models import OjEditor, OjRosterEntry, OjState
 from app.integrations.dkuoj.source import SOURCE
 from app.models import Attempt, ClassMember, Exam, SchoolClass, User
 from app import app_client as ac
@@ -59,18 +59,24 @@ def test_external_mirrors_are_internal_and_do_not_expand_teacher_scope(oj):
 @pytest.mark.parametrize('audience', [None, {'mode': 'classes', 'confirmed': False, 'class_ids': [31],
     'organization_ids': [], 'selected_only': False}, {'mode': 'classes', 'confirmed': True, 'class_ids': [],
     'organization_ids': [12], 'selected_only': False}])
-def test_missing_unconfirmed_or_empty_class_audience_does_not_expand_membership(oj, fake, audience):
+def test_audience_confirmation_is_not_required_the_roster_as_sent_is_used(oj, fake, audience):
+    """2026-11: FairPlay no longer asks for a confirmed audience; the DKU OJ roster is used as sent."""
     fake.audience = audience
     run(oj)
     teacher = login(oj, 'teacher')
     e = oj_exam(oj, teacher)
+    assert db(oj, lambda s: s.scalar(select(func.count(OjRosterEntry.id)).where(OjRosterEntry.exam_id == e['id']))) > 0
+    opened = oj.post(f"/api/exams/{e['id']}/open", headers=teacher)
+    assert opened.status_code == 200, opened.text
     student = login(oj, 'alice')
-    response = oj.post(f"/api/student/exams/{e['id']}/start", json={'start_code': '1234'}, headers=student)
-    assert response.status_code in (403, 409)
-    assert not audience_valid({'audience': audience})
+    assert eid_listed(oj, student, e['id'])
 
 
-def test_removed_frozen_exam_allows_only_the_existing_students_resume(oj, fake):
+def eid_listed(oj, student, eid):
+    return eid in [x['id'] for x in oj.get('/api/student/exams', headers=student).json()]
+
+
+def test_removed_exam_allows_only_the_existing_students_resume(oj, fake):
     run(oj)
     teacher = login(oj, 'teacher')
     e = oj_exam(oj, teacher)
@@ -161,7 +167,7 @@ def test_authority_response_signature_binds_status_body_and_request_nonce(oj, fa
     assert 'error' in run(oj)['exams']
 
 
-def test_authoritative_missing_target_revokes_authority_but_preserves_history(oj, fake, monkeypatch):
+def test_authoritative_missing_target_marks_removed_keeps_editors_and_history(oj, fake, monkeypatch):
     run(oj)
     teacher = login(oj, 'teacher')
     eid = oj_exam(oj, teacher)['id']
@@ -177,7 +183,9 @@ def test_authoritative_missing_target_revokes_authority_but_preserves_history(oj
             return await sync.sync_exams(get_database().sessionmaker, client, SOURCE.config,
                                          utcnow(), full=True, targets={KEY})
     oj.portal.call(reconcile)
-    assert oj.get(f'/api/exams/{eid}', headers=teacher).status_code == 404
+    # 2026-11: a removed exam keeps its editors, so instructors still see it (native exit codes)
+    assert oj.get(f'/api/exams/{eid}', headers=teacher).status_code == 200
+    assert db(oj, lambda s: s.scalar(select(func.count(OjEditor.id)).where(OjEditor.exam_id == eid))) > 0
     assert db(oj, lambda s: s.scalar(select(Exam.external_removed).where(Exam.id == eid))) is True
 
 
@@ -224,7 +232,7 @@ def test_targeted_reconcile_keeps_other_exams_and_the_global_cursor_unchanged(oj
 
 
 @pytest.mark.parametrize('remove_exam_afterward', [False, True])
-def test_individually_revoked_active_student_cannot_resume_cached_session(oj, fake, remove_exam_afterward):
+def test_student_taken_off_the_roster_mid_exam_finishes_their_attempt(oj, fake, remove_exam_afterward):
     run(oj)
     teacher, alice = login(oj, 'teacher'), login(oj, 'alice')
     eid = oj_exam(oj, teacher)['id']
@@ -255,17 +263,29 @@ def test_individually_revoked_active_student_cannot_resume_cached_session(oj, fa
     if remove_exam_afterward:
         fake.removed = True
         run(oj)
-    denied = oj.post(f'/api/student/exams/{eid}/start',
-                    json={'start_code': opened['start_code'], 'client': resume_proof}, headers=alice)
-    assert denied.status_code in (403, 404, 409), denied.text
-    assert oj.get(f'/api/student/exams/{eid}/challenge', headers=alice).status_code in (403, 404)
-    assert eid not in [e['id'] for e in oj.get('/api/student/exams', headers=alice).json()]
-    assert oj.get(f'/api/student/attempts/{aid}', headers=headers).status_code in (403, 404, 409)
+    # 2026-11: only a NEW start is blocked; a student already writing finishes
+    resumed = oj.post(f'/api/student/exams/{eid}/start',
+                      json={'start_code': opened['start_code'], 'client': resume_proof}, headers=alice)
+    assert resumed.status_code == 200, resumed.text
+    assert eid in [e['id'] for e in oj.get('/api/student/exams', headers=alice).json()]
+    assert oj.get(f'/api/student/attempts/{aid}', headers=headers).status_code == 200
     assert oj.put(f'/api/student/attempts/{aid}/answers', json={'answers': {}, 'client_seq': 2},
-                  headers=headers).status_code in (403, 404, 409)
+                  headers=headers).status_code == 200
     assert oj.post(f'/api/student/attempts/{aid}/app-beat', json=beat(stamp + 1),
-                   headers=alice).status_code in (403, 404, 409)
+                   headers=alice).status_code == 200
     async def saved(s):
         row = await s.get(Attempt, aid)
-        return row.status, row.answers, row.session_id
-    assert db(oj, saved) == ('in_progress', answer, session)
+        return row.status, row.exited_at
+    assert db(oj, saved) == ('in_progress', None)
+
+
+def test_student_taken_off_the_roster_before_starting_cannot_start(oj, fake):
+    run(oj)
+    teacher, alice = login(oj, 'teacher'), login(oj, 'alice')
+    eid = oj_exam(oj, teacher)['id']
+    opened = oj.post(f'/api/exams/{eid}/open', headers=teacher).json()
+    fake.roster = [p for p in fake.roster if p['username'] != 'alice']
+    run(oj)
+    denied = oj.post(f'/api/student/exams/{eid}/start', json={'start_code': opened['start_code']}, headers=alice)
+    assert denied.status_code in (403, 404, 409), denied.text
+    assert eid not in [e['id'] for e in oj.get('/api/student/exams', headers=alice).json()]

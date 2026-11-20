@@ -211,6 +211,15 @@ def exam_default_language(e) -> str:
     return lang if lang in CODE_LANGUAGES else "python"
 
 
+def site_limit(e) -> int | None:
+    """How many start pages / sites an exam may carry: DKU OJ exams the 32 the shipped Macs
+    accept (sync.MAX_DKUOJ_SITES), every other exam the default (schemas.MAX_WEBSITE_LINKS)."""
+    if (getattr(e, "source", None) or "fairplay") == "dkuoj":
+        from .integrations.dkuoj.sync import MAX_DKUOJ_SITES
+        return MAX_DKUOJ_SITES
+    return None
+
+
 def tool_settings(e: Exam) -> dict:
     """2026-10-23: the exam tools as stored (teacher view and the student exam cache).
     Rows from before have the column defaults; website exams never have tools.
@@ -234,7 +243,8 @@ def tool_settings(e: Exam) -> dict:
         websites = without_box_hosts(websites)     # the Box page has its own pane (tools.box)
     return {"calculator": calc, "open_book": bool(e.open_book), "websites": websites,
             "box_link": box_link,
-            "website_links": clean_website_links(getattr(e, "website_links", None) or [], websites),
+            "website_links": clean_website_links(getattr(e, "website_links", None) or [], websites,
+                                                 site_limit(e)),
             "companions": companions(websites),
             "upload_opens_days": upload_days(e)}
 
@@ -366,7 +376,18 @@ def _hot_of(data: dict) -> dict:
     # DKU OJ) are checked on every save, so they ride along; plain exams stay tiny.
     return {"question_ids": list(data.get("question_ids") or []),
             "questions": [q for q in data.get("questions") or [] if is_extended(q)],
-            "require_strong_lock": bool(data.get("require_strong_lock"))}
+            "require_strong_lock": bool(data.get("require_strong_lock")),
+            # 2026-11: what the running page needs to know changed (heartbeat)
+            "rev": data.get("rev") or ""}
+
+
+def content_rev(data: dict) -> str:
+    """2026-11: a short fingerprint of what a student's open page shows: the questions and the
+    exam tools (calculator, websites and start pages, Box link, open book). Heartbeats carry it;
+    when it differs from the page's own, the page fetches the attempt again."""
+    basis = {"q": data.get("questions"), "t": student_tools(data), "box": data.get("box_link"),
+             "title": data.get("title"), "points": data.get("total_points"), "course": data.get("course")}
+    return hashlib.sha256(json.dumps(basis, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 async def get_exam_hot(store: Store, session: AsyncSession, exam_id: str) -> dict | None:
@@ -417,6 +438,7 @@ async def get_exam_cached(store: Store, session: AsyncSession, exam_id: str) -> 
     }
     if data["mode"] == "external":
         data["allowed_domains"] = student_allowed_domains(e)
+    data["rev"] = content_rev(data)
     await store.set(exam_key(exam_id), json.dumps(data), EXAM_CACHE_TTL)
     return data
 
@@ -504,6 +526,7 @@ def attempt_view(a: Attempt, exam: dict, now: datetime, app_version: str | None 
         "deadline_at": iso(a.deadline_at), "server_time": iso(now),
         "questions": [] if external else questions,
         "answers": {} if external else (a.answers or {}), "status": a.status,
+        "content_rev": exam.get("rev") or "",
         "mode": mode,
         "external_url": exam.get("external_url") if external else None,
         "allowed_domains": list(exam.get("allowed_domains") or []) if external else [],

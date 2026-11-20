@@ -162,7 +162,7 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
 
 - **`POST /classes/<class_id>/login`** body `{"class_name": "...", "course_name": "..."}` →
   `{"username": "cs101a-m4tz", "password": "river-cotton-pine-moss-583", "expires_at": "<iso>"}`.
-  The acting DKU OJ user must be tied to the class (a teacher of it, an editor of an exam synced for it, or an earlier handler). A new class FairPlay has never seen is open to any non-student acting user; that user is then recorded on it. An unknown class or a student acting user → 403 `{"detail": "You are not linked to this class in FairPlay."}` Creates a new class login, replacing (and immediately disabling) any previous one for that
+  Since 2026-11 any acting user DKU OJ signs for the class who is not a student account may act (instructor, TA, course staff): DKU OJ has already checked that the user manages the class, and FairPlay no longer asks for its own link to the class. An empty acting user or a student account → 403 `{"detail": "You are not linked to this class in FairPlay."}` Creates a new class login, replacing (and immediately disabling) any previous one for that
   class. Username: lower-case course-ish prefix (from class_name, ascii letters/digits, ≤ 8) +
   `-` + 4 random [a-z0-9]; unique. Password: four short random words + 3 digits (≥ 20 chars, about 10^11 choices),
   from a built-in list. Stored as a password hash (sign-in) AND encrypted (2026-10-24, see §1
@@ -171,8 +171,8 @@ class/assignment; FairPlay re-checks exam endpoints against the editors from its
   info `"fairplay class-login password v1"`), 96-bit random nonce, the login's username as
   associated data. Changing the server secret makes the stored copies unreadable (status then
   says `password: null`); sign-in keeps working. Valid 14 days.
-- **`DELETE /classes/<class_id>/login`** → `{"ok": true}` (idempotent). The acting user must be tied to the class (same check as POST).
-- **`GET /classes/<class_id>/status`** The acting user must be tied to the class (same check as POST). → (`Cache-Control: no-store`: it carries a password)
+- **`DELETE /classes/<class_id>/login`** → `{"ok": true}` (idempotent). Same acting-user check as POST.
+- **`GET /classes/<class_id>/status`** Same acting-user check as POST. → (`Cache-Control: no-store`: it carries a password)
   ```json
   {"login": {"username": "cs101a-m4tz", "password": "river-cotton-pine-moss-583" | null,
              "created_at": "...", "expires_at": "...", "used": 28, "created_by": "prof_dong" | null} | null,
@@ -280,16 +280,16 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
   has not synced yet requires a named non-student acting user (same check as above). §11: settings KEPT for that key (pending, applied at its first sync;
   answer: the not-synced shape whose `settings` are FairPlay's defaults with the pending ones;
   key longer than 56 characters → 400; more than 2000 keys pending → 429; pending settings older
-  than 180 days are dropped). After the first student started (or closed): `review` still
-  changes; any other field that DIFFERS from the exam's → 409 (equal values are no change, so
-  DKU OJ may send its whole form). No field → 400; a field of the wrong type → 400;
+  than 180 days are dropped). Every field may change at any time (2026-11: the
+  "fixed after the first start" 409 is gone; equal values are no change, so DKU OJ may send its
+  whole form). No field → 400; a field of the wrong type → 400;
   `upload_opens_days` not a whole number 0–7 → 400; `websites` not a list of strings /
   `{url, title?}` (≤ 100) → 400; `review` null → 400.
 - **`POST /exams/<key>/open`** body `{"open_to": "all" | ["netid", ...]}` → same shape as GET.
   Idempotent (already live: updates `open_to`).
 - **`POST /exams/<key>/close`** → GET shape. Same effect as the FairPlay teacher Close (writers
   handed in with what is saved, delivered to DKU OJ through the outbox).
-- **`POST /exams/<key>/add-time`** body `{"minutes": 10}` (1–120) → GET shape. Adds the
+- **`POST /exams/<key>/add-time`** body `{"minutes": 10, "request_id": "<optional>"}` (any positive whole number; no limit of FairPlay's own, 2026-11) → GET shape. An optional `request_id` (in the signed body only; the unsigned `X-FP-Request-Id` header is ignored; 1–100 of `A-Za-z0-9._:-`) makes the call idempotent: a repeat of the same id (a double click, a retry after a timeout) adds nothing more and answers the current GET shape. An exam the clock closed (`auto_closed`) is opened again when the added time puts its close time in the future; one the instructor closed stays closed (409). Adds the
   minutes to the time limit, to every attempt still writing AND to the close time: FairPlay
   keeps them (`extra_close_minutes`, kept across syncs) and closes at DKU OJ's end time + the
   added minutes, so `closes_at` in the answer moves; students starting after it get the time,
@@ -311,17 +311,17 @@ For exams FairPlay has not synced yet, an empty `acting_user` or a student accou
 
 Five endpoints let a professor fix student emergencies without restarting them. All answers and timer stay when appropriate. Every call writes an audit event with the acting user (and the reason when one is sent: since 2026-11 `reason` is optional, may be missing, null or empty, and a given one is a string of at most 200 characters), and replies `Cache-Control: no-store`.
 
-- **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"none"}` (200 if not handed in; 409 if submitted; `"none"` = the student had no attempt, older servers said `"code"`). Frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device after signing in again. Rate limit: 3 per student per exam, counted over 30 days.
+- **`POST /exams/<key>/students/<netid>/release-device`** body `{"reason": "..."}` → `{"ok": true, "released": "attempt"|"none"}` (200 if not handed in; 409 if submitted; `"none"` = the student had no attempt, older servers said `"code"`). Frees the student's device (sets `device_id = None`, new session). If they have an in-progress attempt with a pending swap request, the swap is approved (moved to the device they asked from). The student can resume from any device after signing in again. No rate limit (the 3 per 30 days limit is gone, 2026-11).
 
 - *(Removed 2026-11)* `POST /exams/<key>/access-codes/reissue`: the per-student access code is gone; the route answers 404.
 
-- **`POST /exams/<key>/students/<netid>/reopen`** body `{"minutes": 5..60, "reason": "..."}` → `{"ok": true, "deadline_at": "..."}` (200; 409 if not handed in, exam not live, graded, or already reopened once). The first hand-in receipt is kept on file; answers are restored, device freed, and a new deadline is set. Rate limit: once per attempt, while live and not graded.
+- **`POST /exams/<key>/students/<netid>/reopen`** body `{"minutes": <optional positive whole number>, "reason": "..."}` → `{"ok": true, "deadline_at": "..."}` (200; 409 if not handed in, graded or released, or the exam was closed by the instructor). The first hand-in receipt is kept on file; answers are restored, device freed, and a new deadline is set. Since 2026-11: no once-only rule, no 5–60 range. Without `minutes` the attempt runs until the exam's close (DKU OJ's end time + added minutes + the largest extra time); with `minutes` for exactly that long, whatever the end time (DKU OJ decides). An exam the clock closed (auto-closed) is opened again by it. No end time and no `minutes` → 400.
 
-- **`POST /exams/<key>/students/<netid>/extra-time`** body `{"minutes": 1..120, "reason": "..."}` → `{"ok": true, "deadline_at": "..."|null}` (200; 409 if exam closed or already handed in). Adds extra time for one student, capped at 240 total. If they are writing, their deadline moves out. Rate limit: none per student, but cap is hard per student per exam.
+- **`POST /exams/<key>/students/<netid>/extra-time`** body `{"minutes": <positive whole number>, "request_id": "<optional>", "reason": "..."}` → `{"ok": true, "deadline_at": "..."|null}` (200; 409 if exam closed or already handed in). Adds extra time for one student; since 2026-11 any positive amount, no 120 range and no 240 total. If they are writing, their deadline moves out. A repeated `request_id` adds nothing and answers `{"ok": true, "repeated": true, "deadline_at": ...}`.
 
-- **`POST /exams/<key>/students/<netid>/offline-exit`** body `{"mac_code": "K7QM-3XPA", "reason": "..."} | {"mac_code": "...", "reason": null}` → `{"code": "..."}` (200; 404 if not started). Gives a Mac that is locked and cannot reach the server an offline exit code. `reason` is optional. Rate limit: 20 per student per hour.
+- **`POST /exams/<key>/students/<netid>/offline-exit`** body `{"mac_code": "K7QM-3XPA", "reason": "..."} | {"mac_code": "...", "reason": null}` → `{"code": "..."}` (200; 404 if not started). Gives a Mac that is locked and cannot reach the server an offline exit code. `reason` is optional. No rate limit (2026-11). The native-exit endpoint (`POST .../native-exit`) has none either: no per-lock, per-student or per-exam count; only the registration of locks by Macs keeps its abuse caps.
 
-All five use the exam editors from the bridge's last sync (403 if the acting user is not an editor). FairPlay checks the student is on the roster or has an in-progress attempt in that exam (404 otherwise). Authorization, rate-limit and recovery errors are `400/403/404/409/429` with `{"detail": "..."}`.
+All five use the exam editors from the bridge's last sync (403 if the acting user is not an editor); a removed exam keeps its editors. The student is targeted by NetID and must be on the exam's current list or already have an attempt in THIS exam (404 otherwise); a key that is not a DKU OJ exam is 409. Authorization and recovery errors are `400/403/404/409` with `{"detail": "..."}`.
 
 Errors: `{"detail": "..."}` with 400/403/404/409; DKU OJ shows the detail text.
 
@@ -489,7 +489,7 @@ FairPlay:
 - Stores it per exam (`Exam.review_after_handin`; `external_meta.review_updated_at`). The newer
   DKU OJ value wins: a value (from the list or the direct call) whose `updated_at` is older than
   the stored one is ignored, so a list fetched just before the professor's change can't undo it.
-  Applied also to running (frozen) and closed exams. Missing/unknown → `nothing`.
+  Applied also to running and closed exams. Missing/unknown → `nothing`.
 - Enforced in the student API (`app/review.py`):
   - `GET /api/student/grades/{exam_id}`:
     - `nothing` → 403 `{"detail": "Your teacher has not opened the review for this exam."}`;
@@ -572,8 +572,7 @@ A later step moves all FairPlay settings of DKU OJ assignments into FairPlay thi
 exam list (`settings.upload_opens_days`, `settings.websites` / `settings.website_links`): every
 later sync keeps the FairPlay value. Sending the field as `null` hands it back to DKU OJ (the
 value from the last exam list applies at once). Fields not sent are left as they are.
-`settings.set_in_fairplay` in the GET shape says which fields are FairPlay's. Like all exam
-settings, they are fixed once the first student started (409).
+`settings.set_in_fairplay` in the GET shape says which fields are FairPlay's. Since 2026-11 FairPlay fixes nothing at the first start: every setting may change at any time, also while students write or after the close, and the change reaches the locked devices live (their next heartbeat). Removed: the 409 "The exam has started: its settings can't change any more."
 
 **Upload window** (`upload_opens_days`, 0 = off, 1–7). Only for open-book exams with a start
 time (DKU OJ `start_time`). From `start_time − N days` until `start_time` (or until the exam is
@@ -588,13 +587,13 @@ carry `settings.upload_opens_days` (DKU OJ does not send it today).
 **Websites as links.** A website may be a full link (`https://duke.app.box.com/folder/0`,
 optionally after a title). Its host goes into `settings.websites` (every path of that host is
 allowed: `.../folder/0/somewherenew/123` opens too) and the link into `settings.website_links`
-(`[{host, url, title}]`, at most 20): the student's websites tab opens it first. `websites`
-keeps its format for the apps (lowercase hosts, `*.x.com`; at most 20). The exam list may send
+(`[{host, url, title}]`, at most 64): the student's websites tab opens it first. `websites`
+keeps its format for the apps (lowercase hosts, `*.x.com`; at most 64 for a DKU OJ exam, 2026-11: what the lock can carry, the Windows app reads 64 entries of `allowed_sites`, companions included). Hosts past the limit are never dropped silently: they are listed in `settings.websites_blocked` with a reason. `settings.lock_sites` (pages + resources) is capped at 64 too. The exam list may send
 links in `settings.websites` or `settings.website_links: [{url, title}]` too.
 
 **Duke Box.** FairPlay's site policy for external exams (§3) refuses file sharing, `box.com`
 among it. Exceptions (`FAIRPLAY_SITE_POLICY_EXCEPTIONS`, exact hosts; default
-`duke.app.box.com,duke.box.com`) are allowed: Duke Box is the university's own storage. Box in
+`duke.app.box.com,duke.box.com,duke.account.box.com`; the last one is the Box sign-in host, never a page of its own) are allowed: Duke Box is the university's own storage. Box in
 general (`app.box.com`, `*.box.com`, other organisations' Box) stays refused as a site of its
 own. Trade-off: Box shows the student their OWN Box (all their files, files shared with them,
 Box Notes they can open): allowing it is the professor's choice, like open book.
@@ -703,7 +702,7 @@ pass of the periodic sync (now every 30 s by default; `DKUOJ_SYNC_SECONDS` still
   `class_id` that is not a positive integer: 422. Answer within about 3 seconds:
   `{"ok": true, "queued": false}`.
 - The work runs in the background: fetch the exam from DKU OJ (create or update it, editors and
-  roster included), fetch the package when the start is inside the 24 h lead window, run the
+  roster included), fetch the package (from the moment DKU OJ offers it: no lead window of FairPlay's own; a 425 is retried quietly after `Retry-After`, default 60 s), run the
   auto-open check. With no `exam_key` (or only a `class_id`) every exam changed since the last
   sync is refreshed.
 - One run per exam at a time, also against the periodic loop (a short-lived guard per key in the
@@ -713,3 +712,37 @@ pass of the periodic sync (now every 30 s by default; `DKUOJ_SYNC_SECONDS` still
 - Rate limit: 30 pings per minute in total and 6 per minute per `exam_key`; beyond that 429 with
   `Retry-After: 60`. 401 unsigned or badly signed, 404 while the bridge is off.
 - No new signing vectors; the periodic sync stays as the safety net if a ping is lost.
+
+## 14. FairPlay adds no limits of its own for DKU OJ exams (2026-11)
+
+Product decision: "FairPlay just shows DKU OJ". DKU OJ controls the questions, the time, extra time,
+reopen, unlock and grading (grading stays in DKU OJ). FairPlay locks the student device, controls the
+allowed websites (the deny-list of AI, search and messaging sites stays: that is the purpose of the lock)
+and lets instructors release devices without limits. Only students are locked; an instructor, TA or other
+staff account never needs the FairPlay lock or app. SEB is off.
+
+- **Nothing is frozen.** The first start no longer freezes the package version: every question, title,
+  duration and time change DKU OJ makes (package or exam list) applies at once, also to students already
+  writing. Their answers are kept by question id; answers of questions DKU OJ removed stay stored (the
+  instructor sees them) but are not sent in the hand-in. A changed duration moves every running deadline by
+  the difference; an end time moved earlier lowers the cap (end + added minutes + the student's own extra
+  time), moved later raises it. Settings (§10) change at any time and reach locked students live.
+- **Packages** are fetched as soon as DKU OJ offers them (no 24 h lead). A 425 is retried quietly.
+- **The roster as DKU OJ sends it is used.** No audience confirmation is required (the `audience` field is
+  still stored, not checked). A student taken off the list while writing finishes (only a new start is
+  refused). A removed exam keeps its editors, so instructors still see it and can free a device or issue a
+  native exit code.
+- **Time.** `add-time`, per-student `extra-time` and `reopen` take any positive number of minutes; reopen has
+  no once-only rule and `minutes` is optional (default: until the exam's close + extra time). Approve-resume gives
+  back all the waiting time. `request_id` (§3) makes add-time and extra-time idempotent.
+- **Rescue.** Release device and the exit codes (offline and native) have no count limits; each action is still
+  an audit event naming the acting user. What stays: the signature checks and the abuse caps on the
+  REGISTRATION of Mac locks (not instructor-facing), the NetID/exam binding of a Mac code, the 7-day life of a
+  lock, and refusing to reopen an attempt whose grade DKU OJ already released.
+- **Staff.** Any non-student acting user DKU OJ signs for a class may use the class login routes.
+- **Auto-open (kept).** Every pass of the sync (and a `POST /sync` ping) opens a DKU OJ exam on its own when
+  its package is here and its scheduled `start_time` has come: draft exams only (a closed exam is never
+  reopened by it; one whose start moved into the future waits). It opens to everyone on the roster, a
+  `auto_opened` class event is written, and a failure is kept in `external_meta.auto_open_error`. The manual
+  `POST /exams/<key>/open` keeps working.
+- **Sync interval:** every 30 s by default (`DKUOJ_SYNC_SECONDS`); a ping makes it immediate (§13).

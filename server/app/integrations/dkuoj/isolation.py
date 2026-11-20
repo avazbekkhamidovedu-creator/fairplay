@@ -25,21 +25,6 @@ def canonical_url(value):
     return urlunsplit((parts.scheme, host, parts.path.rstrip('/'), '', ''))
 
 
-def audience_valid(meta):
-    audience = (meta or {}).get('audience')
-    if not isinstance(audience, dict) or audience.get('confirmed') is not True:
-        return False
-    mode = audience.get('mode')
-    if mode not in ('classes', 'organizations', 'selected') or type(audience.get('selected_only')) is not bool:
-        return False
-    for field in ('class_ids', 'organization_ids'):
-        values = audience.get(field)
-        if not isinstance(values, list) or any(type(i) is not int or i <= 0 for i in values):
-            return False
-    return bool(audience['class_ids']) if mode == 'classes' else (
-        bool(audience['organization_ids']) if mode == 'organizations' else True)
-
-
 async def require_binding(session, cfg):
     import json
     row = await session.get(OjState, BINDING)

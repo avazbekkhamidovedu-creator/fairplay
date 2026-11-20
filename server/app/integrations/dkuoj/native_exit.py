@@ -38,7 +38,7 @@ from ...store import get_store
 from ...timeutil import utcnow
 from tools.native_exit_vector import ALPHABET, derive_code, open_blob, seal
 from .models import BigIntPK, OjRosterEntry
-from .routes_rescue import HOUR_S, NO_STORE, _limit, _out, _reason
+from .routes_rescue import NO_STORE, _out, _reason
 from .routes_v2 import PREFIX, BridgeCall, _editor_exam, _event_class, signed_call
 from .setup import add_event
 
@@ -63,7 +63,9 @@ def env_cap(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-ISSUES_PER_LOCK = 3
+HOUR_S = 3600
+# 2026-11: no count limits on the exit codes an instructor asks for (ISSUES_PER_LOCK / per student / per exam are
+# gone: DKU OJ decides, every code is audited). The caps below are on lock REGISTRATION by Macs (abuse protection).
 LOCKS_PER_DEVICE_HOUR = 20
 LOCKS_PER_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_IP_HOUR", 2000)
 LOCKS_PER_HOUR_ALL = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_HOUR_ALL", 20000)
@@ -78,8 +80,6 @@ LOCKS_PER_HOUR_ALL_KEYED = env_cap("FAIRPLAY_NATIVE_EXIT_LOCKS_PER_HOUR_ALL_KEYE
 # New (never seen this hour) device keys one IP may bring in, far below the per-IP lock cap: a script cannot mint keys.
 NEW_KEYS_PER_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_NEW_KEYS_PER_IP_HOUR", 300)
 NEW_KEYS_PER_SCHOOL_IP_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_NEW_KEYS_PER_SCHOOL_IP_HOUR", 1500)
-ISSUES_PER_STUDENT_HOUR = 20
-ISSUES_PER_EXAM_HOUR = env_cap("FAIRPLAY_NATIVE_EXIT_ISSUES_PER_EXAM_HOUR", 300)
 MAX_BODY = 4096
 NOT_CONFIGURED = "Code-only exit is not set up on this server."
 LOCK_ID_RE = re.compile("^[" + ALPHABET + "]{8}$")
@@ -351,12 +351,6 @@ async def native_exit(key: str, netid: str, call: BridgeCall = Depends(signed_ca
         raise HTTPException(404, "Unknown or expired Mac code", headers=NO_STORE)
     if row.netid is not None and (row.netid != who or row.exam_id != e.id):
         raise HTTPException(409, "This Mac code belongs to another student or exam", headers=NO_STORE)
-    if row.issued_count >= ISSUES_PER_LOCK:
-        raise HTTPException(429, "This Mac code already got its exit codes", headers=NO_STORE)
-    await _limit(f"oj:nexit:{e.id}:{who}", ISSUES_PER_STUDENT_HOUR, HOUR_S)
-    listed = (await session.execute(select(func.count()).select_from(OjRosterEntry).where(
-        OjRosterEntry.exam_id == e.id, OjRosterEntry.revoked_at.is_(None)))).scalar_one()
-    await _limit(f"oj:nexit:exam:{e.id}", max(ISSUES_PER_EXAM_HOUR, listed), HOUR_S)
     try:
         k = open_blob(base64.b64encode(row.blob).decode("ascii"), lock_id, priv)
     except Exception:
@@ -366,7 +360,7 @@ async def native_exit(key: str, netid: str, call: BridgeCall = Depends(signed_ca
 
     claimed = await session.execute(
         update(NativeExitLock)
-        .where(NativeExitLock.lock_id == lock_id, NativeExitLock.issued_count < ISSUES_PER_LOCK,
+        .where(NativeExitLock.lock_id == lock_id,
                (NativeExitLock.netid.is_(None)) | ((NativeExitLock.netid == who) & (NativeExitLock.exam_id == e.id)))
         .values(netid=who, exam_id=e.id, exam_key=e.external_key, issued_count=NativeExitLock.issued_count + 1,
                 last_issue_at=now))

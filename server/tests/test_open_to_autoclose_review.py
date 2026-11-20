@@ -174,12 +174,11 @@ def test_dkuoj_end_time_moved_later_while_live(oj, fake):  # noqa: F811
     assert oj_exam(oj, teacher)["closes_at"] == iso(fake.end)
     again = oj.get(f"/api/student/attempts/{a['attempt_id']}", headers=alice).json()
     assert parse_iso(again["deadline_at"]) == fake.end + timedelta(seconds=600)
-    # moved earlier again: a running deadline is never cut here
+    # moved earlier again: 2026-11, DKU OJ controls time, the running deadline follows (end + the student's extra)
     fake.end = fake.end - timedelta(minutes=10)
     fake.listing_updated = iso(utcnow() + timedelta(seconds=2))
     run(oj)
-    assert parse_iso(attempt(oj, a["attempt_id"]).deadline_at.isoformat()) \
-        == fake.end + timedelta(minutes=10, seconds=600)
+    assert parse_iso(attempt(oj, a["attempt_id"]).deadline_at.isoformat()) == fake.end + timedelta(seconds=600)
 
 
 def test_dkuoj_close_stopped_half_way_still_delivers(oj, fake):  # noqa: F811

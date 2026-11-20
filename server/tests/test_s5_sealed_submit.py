@@ -185,3 +185,70 @@ def test_sealed_event_does_not_vouch_for_the_clients_clock(app_client, exam):
     assert post(app_client, h, aid, seal(aid, a["session"], answers)).status_code == 200
     ev = next(e for e in results_row(app_client, exam)["events"] if e["type"] == "sealed_submit")
     assert "in time by the seal's own clock" in ev["detail"] and "last app signal" in ev["detail"]
+
+
+# 0.8.9 fix: an in-time seal that arrives after the server's deadline sweep is graded, as before the sweep.
+def run_deadline_sweep(client):
+    import asyncio
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from app.closing import sweep_expired_attempts
+
+    async def go():
+        eng = create_async_engine(client.app.state.settings.database_url)
+        async with AsyncSession(eng, expire_on_commit=False) as s:
+            done = await sweep_expired_attempts(s, utcnow())
+        await eng.dispose()
+        return done
+    return asyncio.run(go())
+
+
+def offline_past_deadline(c, exam):
+    """Saved a wrong answer in time, then went offline; the deadline was 20 min ago."""
+    h, a, qs = setup(c, exam)
+    aid = a["attempt_id"]
+    qid, answers = mcq_answer(qs)
+    hs = {**h, "X-FairPlay-Session": a["session"]}
+    c.put(f"/api/student/attempts/{aid}/answers", headers=hs, json={"answers": {qid: 0}, "client_seq": 1})
+    started = datetime.fromisoformat(a["started_at"].replace("Z", "+00:00")).replace(tzinfo=None)
+    deadline = started - timedelta(minutes=20)
+    db_update(c, aid, started_at=started - timedelta(minutes=60), deadline_at=deadline)
+    forget_double_click(aid)
+    assert aid in run_deadline_sweep(c)
+    return h, a, answers, deadline
+
+
+def test_in_time_seal_replaces_the_deadline_sweep(app_client, exam):
+    h, a, answers, deadline = offline_past_deadline(app_client, exam)
+    aid = a["attempt_id"]
+    swept = results_row(app_client, exam)
+    assert swept["auto_submitted"] is True and swept["score"] == 0
+    body = seal(aid, a["session"], answers, sealed_at=deadline - timedelta(seconds=30))
+    r = post(app_client, h, aid, body)
+    assert r.status_code == 200, r.text
+    assert r.json()["late_sealed"] is False and r.json()["receipt"] != swept["receipt"]
+    row = results_row(app_client, exam)
+    assert row["score"] == 2 and row["late"] is False and not row["late_answers"]
+    assert row["auto_submitted"] is False
+    assert any("replaced the server's hand-in" in e["detail"] for e in row["events"] if e["type"] == "sealed_submit")
+    again = post(app_client, h, aid, body)                     # same file again: same receipt
+    assert again.status_code == 200 and again.json() == r.json()
+
+
+def test_late_seal_after_the_sweep_stays_aside(app_client, exam):
+    h, a, answers, deadline = offline_past_deadline(app_client, exam)
+    aid = a["attempt_id"]
+    r = post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=deadline + timedelta(minutes=5)))
+    assert r.status_code == 409
+    row = results_row(app_client, exam)
+    assert row["score"] == 0 and row["late_answers"] == answers and row["auto_submitted"] is True
+
+
+def test_in_time_seal_after_the_exam_closed_stays_aside(app_client, exam):
+    h, a, answers, deadline = offline_past_deadline(app_client, exam)
+    aid = a["attempt_id"]
+    t = login(app_client, "teacher")
+    assert app_client.post(f"/api/exams/{exam['id']}/close", headers=t).status_code == 200
+    r = post(app_client, h, aid, seal(aid, a["session"], answers, sealed_at=deadline - timedelta(seconds=30)))
+    assert r.status_code == 409
+    row = results_row(app_client, exam)
+    assert row["score"] == 0 and row["late_answers"] == answers

@@ -48,6 +48,17 @@ class OjStudentGrant(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
+class OjRequestUse(Base):
+    """An idempotency id (the optional request_id of add-time / extra-time) that was applied. The row is
+    written in the SAME transaction as the grant, so a crash or a Redis failure can never leave the time
+    given without the id remembered (or the reverse). The primary key makes two concurrent calls with
+    one id serialize: the second one's INSERT fails (or waits for the first's commit, then fails)."""
+    __tablename__ = "oj_request_uses"
+    scope: Mapped[str] = mapped_column(String(200), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
+
+
 class OjAsset(Base):
     """A file referenced by a statement (fp-asset:<name>), checked against its sha256.
     Bytes in the database (the host's disk is not kept across deploys)."""

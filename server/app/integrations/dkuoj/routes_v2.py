@@ -18,6 +18,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ... import exam_control as control
@@ -27,7 +28,7 @@ from ...services import exam_closes_at
 from ...store import get_store
 from ...timeutil import iso, iso_from_epoch, utcnow
 from . import signing
-from .models import ClassLogin, ClassLoginEvent, OjEditor, OjRosterEntry
+from .models import ClassLogin, ClassLoginEvent, OjEditor, OjRequestUse, OjRosterEntry
 from .setup import add_event, require_class_login, create_class_login, disable_logins, is_set_up, login_active, open_login_password
 
 log = logging.getLogger("proctora.dkuoj")
@@ -54,6 +55,7 @@ NOT_IN_CLASS = ("This student is not linked to this class in FairPlay: not set u
 class BridgeCall:
     acting_user: str
     data: dict = field(default_factory=dict)
+    header_request_id: str | None = None      # X-FP-Request-Id: unsigned, so never used as the idempotency id
 
 
 def _raw_path(request: Request) -> str:
@@ -113,7 +115,7 @@ async def signed_call(request: Request) -> BridgeCall:
             raise HTTPException(400, "The body must be a JSON object")
         if data.get("installation_id", SOURCE.config.installation_id) != SOURCE.config.installation_id:
             raise HTTPException(409, "DKU OJ installation identity does not match")
-    return BridgeCall(acting, data)
+    return BridgeCall(acting, data, request.headers.get("x-fp-request-id"))
 
 
 def _str(data: dict, name: str, max_len: int = 200) -> str:
@@ -167,34 +169,18 @@ async def _class_exam_ids(session: AsyncSession, class_id: int) -> list[str]:
 
 
 async def _require_class_staff(session: AsyncSession, class_id: int, call: BridgeCall) -> None:
-    """The acting DKU OJ user must be tied to the class. A class FairPlay knows (a mirror
-    class, an exam of it, a login or log entry made by someone) admits only its owner, an
-    editor of one of its exams, or someone who already acted on it. A class FairPlay has
-    never seen is open to any acting user that is not a student account (the first login
-    is how a class reaches FairPlay); that user is then recorded on it."""
+    """DKU OJ signs the call and names the acting user for this class, so any acting user that is
+    not a student account may act (instructor, TA, course staff): 2026-11, the earlier check
+    against FairPlay's own links to the class was too narrow. A student account is refused; the
+    acting user is recorded on the class events by the callers."""
     require_class_login()
     acting = (call.acting_user or "").strip()
     if not acting:
         raise HTTPException(403, NOT_CLASS_STAFF)
-    who = await _user_by_netid(session, acting, role="teacher")
-    if who is not None and who.role == "student":
-        raise HTTPException(403, NOT_CLASS_STAFF)
-    teacher = who if who is not None and who.role == "teacher" else None
-    mirror = (await session.execute(select(SchoolClass.teacher_id).where(
-        SchoolClass.external_ref == f"dkuoj:{class_id}"))).scalars().all()
-    exam_ids = await _class_exam_ids(session, class_id)
-    if teacher is not None and exam_ids and (await session.execute(select(OjEditor.id).where(
-            OjEditor.exam_id.in_(exam_ids), OjEditor.user_id == teacher.id).limit(1))).first():
-        return
-    if mirror or exam_ids:
-        raise HTTPException(403, NOT_CLASS_STAFF)
-    made = set((await session.execute(select(ClassLogin.created_by).where(ClassLogin.class_id == class_id))).scalars())
-    acted = set((await session.execute(select(ClassLoginEvent.actor).where(
-        ClassLoginEvent.class_id == class_id))).scalars())
-    if acting in made or acting in acted:
-        return
-    if (made | acted) - {None, ""}:
-        raise HTTPException(403, NOT_CLASS_STAFF)
+    for role in ("teacher", "student"):       # the netid's own account, or a v1 bridge account of that role
+        who = await _user_by_netid(session, acting, role=role)
+        if who is not None and who.role == "student":
+            raise HTTPException(403, NOT_CLASS_STAFF)
 
 
 # ---------------------------------------------------------------- class logins / students
@@ -507,7 +493,7 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
     # site_policy) and the ones it refused, with why, for the FairPlay tab in DKU OJ.
     from ..site_policy import filter_sites
     from ...schemas import clean_website_links
-    from ...services import upload_days
+    from ...services import site_limit, upload_days
     from ...site_companions import companions
     from ...box_profiles import checked_link, without_box_hosts
     from .lock_sites import build_lock_sites
@@ -533,12 +519,12 @@ async def exam_view(session: AsyncSession, e: Exam) -> dict:
             "closes_at": iso(exam_closes_at(e)), "open_to": open_to,
             "settings": {"calculator": e.calculator or "off", "open_book": bool(e.open_book),
                          "websites": websites,
-                         "lock_sites": build_lock_sites(websites, clean_website_links(e.website_links or [], websites),
+                         "lock_sites": build_lock_sites(websites, clean_website_links(e.website_links or [], websites, site_limit(e)),
                                                         box_link),
                          "box_link": box_link, "box_link_error": box_error,
                          # 2026-10-24: start pages, sites opened so a service works (Duke Box:
                          # sign-in, scripts, previews; app.site_companions), early uploads
-                         "website_links": clean_website_links(e.website_links or [], websites),
+                         "website_links": clean_website_links(e.website_links or [], websites, site_limit(e)),
                          "companions": companions(websites),
                          "upload_opens_days": upload_days(e),
                          # which of these were set in FairPlay (POST /exams/<key>/settings) and
@@ -655,14 +641,72 @@ async def exam_close(key: str, call: BridgeCall = Depends(signed_call), session:
     return await _view(session, e)
 
 
+MAX_MINUTES = 5_256_000        # ten years: only keeps the date arithmetic from overflowing, not a limit
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
+REQUEST_ID_TTL_S = 24 * 3600
+
+
+def positive_minutes(data: dict, required: bool = True) -> int | None:
+    """Minutes from a body: any positive whole number (2026-11: no limit of FairPlay's own)."""
+    m = data.get("minutes")
+    if m is None and not required:
+        return None
+    if not isinstance(m, int) or isinstance(m, bool) or not 1 <= m <= MAX_MINUTES:
+        raise HTTPException(400, "minutes must be a whole number, 1 or more")
+    return m
+
+
+def request_id_of(call: "BridgeCall") -> str | None:
+    """The optional idempotency id of a call: the signed body's "request_id". The same id is applied
+    once. The X-FP-Request-Id header is not signed (anyone on the path could change it and replay a
+    grant), so it is ignored."""
+    rid = call.data.get("request_id")
+    if rid is None or rid == "":
+        return None
+    if not isinstance(rid, str) or not REQUEST_ID_RE.match(rid):
+        raise HTTPException(400, "request_id must be 1 to 100 letters, digits or . _ : -")
+    return rid
+
+
+async def request_used(session: AsyncSession, scope: str, rid: str | None) -> bool:
+    """True when this request id was applied already (the row is committed with the grant)."""
+    if rid is None:
+        return False
+    return (await session.execute(select(OjRequestUse.request_id).where(
+        OjRequestUse.scope == scope, OjRequestUse.request_id == rid))).first() is not None
+
+
+async def claim_request(session: AsyncSession, scope: str, rid: str | None) -> bool:
+    """Record the id in the caller's open transaction (it commits with the grant). False = the id is
+    recorded already (a duplicate or a concurrent twin): the transaction is rolled back, nothing is applied."""
+    if rid is None:
+        return True
+    session.add(OjRequestUse(scope=scope, request_id=rid))
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        return False
+    return True
+
+
 @router.post("/exams/{key}/add-time")
 async def exam_add_time(key: str, call: BridgeCall = Depends(signed_call),
                         session: AsyncSession = Depends(get_session)):
-    minutes = call.data.get("minutes")
-    if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= 120:
-        raise HTTPException(400, "minutes must be a whole number from 1 to 120")
+    """More time for everyone, any positive number of minutes. An optional "request_id" makes it
+    idempotent: a repeat of the same id (a double click, a retry) adds nothing more."""
+    minutes = positive_minutes(call.data)
+    rid = request_id_of(call)
     e = await _editor_exam(session, key, call)
-    await control.extend_exam(session, e, minutes)
+    scope = f"addtime:{e.id}"
+    if await request_used(session, scope, rid):
+        log.info("DKU OJ exam %s: repeated add-time %s ignored", key, rid)
+        return await _view(session, e)
+    # The request id is stored in the grant's own transaction (extend_exam), so it is applied once.
+    if not await control.extend_exam(session, e, minutes, lambda: claim_request(session, scope, rid)):
+        await session.refresh(e)
+        log.info("DKU OJ exam %s: repeated add-time %s ignored", key, rid)
+        return await _view(session, e)
     log.info("DKU OJ exam %s: %d min added by %s", key, minutes, call.acting_user)
     return await _view(session, e)
 
@@ -699,7 +743,6 @@ async def exam_review(key: str, call: BridgeCall = Depends(signed_call),
 
 
 MAX_SETTINGS_SITES = 100       # lines in one settings call (at most MAX_WEBSITES hosts kept)
-SETTINGS_FIXED = "The exam has started: its settings can't change any more."
 MAX_PENDING = 2000             # exams not synced yet that may hold settings at once
 PENDING_FOR = timedelta(days=180)
 SETTING_FIELDS = ("calculator", "open_book", "websites", "strong_lock", "resume_needs_approval",
@@ -836,9 +879,8 @@ async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
     hands a field back (the exam list's value or the default; not for review).
     Websites pass the same parsing and site policy as synced ones (refused ones are in
     settings.websites_blocked). An assignment not synced yet: kept and applied when it arrives
-    (the answer is the not-synced shape with these settings). Once the first student started
-    only `review` may change (any other field that differs from the exam's: 409); `review`
-    changes at any time. A field equal to what the exam has is no change."""
+    (the answer is the not-synced shape with these settings). Every setting may change at any
+    time, also while students write: the change reaches their locked devices live (2026-11)."""
     from ...services import invalidate_exam
     from .sync import FAIRPLAY_SETTINGS, apply_fairplay_settings, apply_review
     sent, ov = _settings_body(call.data, key)
@@ -858,19 +900,6 @@ async def exam_settings(key: str, call: BridgeCall = Depends(signed_call),
     seed_open_book_sites(sent, ov, was_open_book=bool(e.open_book), has_sites=had_sites)
     lock_fields = [f for f in sent if f != "review"]
     meta = dict(e.external_meta or {})
-    if lock_fields and (e.external_frozen_version or e.status == "closed"):
-        changed = []
-        for f in lock_fields:
-            if ov.get(f) is None:
-                changed.append(f)
-            elif f == "websites":
-                if (ov["websites"], ov["website_links"]) != _current(e, f):
-                    changed.append(f)
-            elif ov[f] != _current(e, f):
-                changed.append(f)
-        if changed:
-            raise HTTPException(409, SETTINGS_FIXED)
-        lock_fields = []
     if lock_fields:
         have = dict(meta.get(FAIRPLAY_SETTINGS) or {})
         for f in lock_fields:     # null: back to DKU OJ's value (from the stored listing, applied below)

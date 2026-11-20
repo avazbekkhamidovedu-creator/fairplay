@@ -199,14 +199,12 @@ def test_release_with_a_pending_swap_request_and_waiting_resume(oj, room):
     assert "moved to the computer that asked" in kinds(oj, IntegrityEvent, "device_released_oj")[0]
 
 
-def test_release_refuses_handed_in_and_limits_to_three(oj, room):
+def test_release_refuses_handed_in_and_has_no_count_limit(oj, room):
     eid, codes, _, _ = room
     body = sign_in(oj, codes["alice"], DEV_A)
     a = started(oj, body, eid, DEV_A)
-    for _ in range(3):
+    for _ in range(8):          # 2026-11: no "3 per 30 days" limit any more
         assert call(oj, "POST", f"{STU}/alice/release-device", {"reason": "again"}).status_code == 200
-    r = call(oj, "POST", f"{STU}/alice/release-device", {"reason": "again"})
-    assert r.status_code == 429
     assert call(oj, "POST", f"{STU}/carol/release-device", {"reason": "other student"}).status_code == 200
 
     body = sign_in(oj, codes["ax19"], DEV_A)
@@ -355,7 +353,8 @@ def test_reopen_gives_a_second_hand_in_and_both_are_delivered(oj, room, fake):
     assert "revision" not in one and "supersedes" not in one
     assert two["revision"] == 2 and two["supersedes"] == aid
     assert "first answer" in str(one["answers"]) and "second answer" in str(two["answers"])
-    assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 10, "reason": "again"}).status_code == 409
+    # 2026-11: no "reopened once" rule: DKU OJ may reopen again
+    assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 10, "reason": "again"}).status_code == 200
 
 
 def test_a_hand_in_not_sent_yet_keeps_its_own_answers_and_waits_for_the_earlier_one(oj, room, fake):
@@ -415,26 +414,60 @@ def test_resend_repairs_a_cached_revision_without_rebuilding_its_answers(oj, roo
     assert db(oj, stored) == (expected, {"cached-file": "existing-upload"})
 
 
-def test_reopen_deadline_is_capped_at_the_close_time(oj, room):
-    eid, codes, _, _ = room
-    hand_in(oj, eid, codes, "carol", DEV_A, "x")
-
-    async def soon_over(s):
+def _soon_over(c):
+    async def go(s):
         e = (await s.execute(select(Exam).where(Exam.external_key == KEY))).scalar_one()
         meta = dict(e.external_meta)
         meta["end_time"] = iso(utcnow() + timedelta(minutes=1))
         e.external_meta = meta
         await s.commit()
-    db(oj, soon_over)
-    r = call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 60, "reason": "r"})
+    db(c, go)
+
+
+def test_reopen_without_minutes_runs_until_the_close_time_plus_extra(oj, room):
+    eid, codes, _, _ = room
+    hand_in(oj, eid, codes, "carol", DEV_A, "x")
+    _soon_over(oj)
+    r = call(oj, "POST", f"{STU}/carol/reopen", {"reason": "r"})              # minutes are optional
     assert r.status_code == 200, r.text
     left = parse_iso(r.json()["deadline_at"]) - utcnow()
     assert timedelta(minutes=10) < left < timedelta(minutes=11, seconds=5)      # close + alice's 10 min extra
 
 
+def test_reopen_with_minutes_is_not_capped_by_the_end_time(oj, room):
+    eid, codes, _, _ = room
+    hand_in(oj, eid, codes, "carol", DEV_A, "x")
+    _soon_over(oj)
+    r = call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 300, "reason": "r"})   # any amount: DKU OJ decides
+    assert r.status_code == 200, r.text
+    left = parse_iso(r.json()["deadline_at"]) - utcnow()
+    assert timedelta(minutes=299) < left <= timedelta(minutes=300)
+
+
+@pytest.mark.parametrize("minutes", [1, 4, 61, 500])
+def test_reopen_has_no_five_to_sixty_range(oj, room, minutes):
+    eid, codes, _, _ = room
+    hand_in(oj, eid, codes, "carol", DEV_A, "x")
+    r = call(oj, "POST", f"{STU}/carol/reopen", {"minutes": minutes})
+    assert r.status_code == 200, r.text
+    left = parse_iso(r.json()["deadline_at"]) - utcnow()
+    assert timedelta(minutes=minutes - 1) < left <= timedelta(minutes=minutes)
+
+
+def test_reopen_after_the_clock_closed_the_exam_opens_it_again(oj, room):
+    eid, codes, _, _ = room
+    hand_in(oj, eid, codes, "carol", DEV_A, "x")
+    db(oj, lambda s: _upd(s, Exam, {"status": "closed", "auto_closed": True, "closed_at": utcnow()}))
+    r = call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 15, "reason": "DKU OJ asked"})
+    assert r.status_code == 200, r.text
+    e = db(oj, lambda s: s.scalar(select(Exam).where(Exam.external_key == KEY)))
+    assert e.status == "live" and e.auto_closed is False and e.start_code and e.closed_at is None
+    assert attempts_of(oj)[0].status == "in_progress"
+
+
 def test_reopen_refusals(oj, room):
     eid, codes, _, _ = room
-    for bad in (4, 61, 0, True, "10", None, 10.5):
+    for bad in (0, -5, True, "10", 10.5):
         assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": bad, "reason": "r"}).status_code == 400, bad
     assert call(oj, "POST", f"{STU}/carol/reopen", {"minutes": 10, "reason": "r"}).status_code == 409   # no attempt
     body = sign_in(oj, codes["carol"], DEV_A)
@@ -508,7 +541,7 @@ def test_extra_time_before_the_start_and_it_survives_a_sync(oj, room, fake):
     assert ev[0][0] == "carol" and "accommodation" in ev[0][2]
 
 
-def test_extra_time_for_a_running_attempt_applies_at_once_and_is_capped(oj, room, fake):
+def test_extra_time_for_a_running_attempt_applies_at_once_and_has_no_cap(oj, room, fake):
     eid, codes, _, _ = room
     body = sign_in(oj, codes["carol"], DEV_A)
     a = started(oj, body, eid, DEV_A)
@@ -518,17 +551,17 @@ def test_extra_time_for_a_running_attempt_applies_at_once_and_is_capped(oj, room
     assert abs(parse_iso(r.json()["deadline_at"]) - before - timedelta(minutes=120)) < timedelta(milliseconds=1)
     live = oj.get(f"/api/student/attempts/{a['attempt_id']}", headers={**bearer(body), "X-FairPlay-Session": a["session"]})
     assert abs(parse_iso(live.json()["deadline_at"]) - before - timedelta(minutes=120)) < timedelta(milliseconds=1)
-    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 121, "reason": "r"}).status_code == 400
     assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 0, "reason": "r"}).status_code == 400
-    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 120, "reason": "r"}).status_code == 200
-    r = call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 1, "reason": "r"})
-    assert r.status_code == 409 and "240" in r.json()["detail"]
-    assert attempts_of(oj)[0].deadline_at - before == timedelta(minutes=240)
+    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": -3, "reason": "r"}).status_code == 400
+    # 2026-11: no 1..120 range and no 240 total
+    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 121, "reason": "r"}).status_code == 200
+    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 500, "reason": "r"}).status_code == 200
+    assert attempts_of(oj)[0].deadline_at - before == timedelta(minutes=120 + 121 + 500)
 
     fake.end = fake.end + timedelta(hours=1)          # DKU OJ moves the end later: the sync never shortens it
     fake.listing_updated = iso(utcnow())
     run(oj)
-    assert attempts_of(oj)[0].deadline_at - before >= timedelta(minutes=240)
+    assert attempts_of(oj)[0].deadline_at - before >= timedelta(minutes=120 + 121 + 500)
 
 
 def test_extra_time_widens_the_window_the_exam_stays_open(oj, room):
@@ -570,9 +603,8 @@ def test_offline_exit_gives_the_teacher_route_code(oj, room, monkeypatch):
     assert call(oj, "POST", f"{STU}/alice/offline-exit", {"mac_code": "nope"}).status_code == 422
     assert call(oj, "POST", f"{STU}/alice/offline-exit", {}).status_code == 400
     assert call(oj, "POST", f"{STU}/carol/offline-exit", {"mac_code": "K7QM-3XPA"}).status_code == 404
-    monkeypatch.setattr(rescue, "OFFLINE_EXITS_PER_STUDENT_HOUR", 2)
-    assert call(oj, "POST", f"{STU}/alice/offline-exit", {"mac_code": "K7QM-3XPA"}).status_code == 200
-    assert call(oj, "POST", f"{STU}/alice/offline-exit", {"mac_code": "K7QM-3XPA"}).status_code == 429
+    for _ in range(30):          # 2026-11: no hourly cap on instructor-issued codes
+        assert call(oj, "POST", f"{STU}/alice/offline-exit", {"mac_code": "K7QM-3XPA"}).status_code == 200
 
 
 # ---------------------------------------------------------------- student view
@@ -588,3 +620,35 @@ def test_exam_view_student_fields(oj, room):
     assert view(oj)["ax19"]["code_state"] == "unused"
     body, a, _ = hand_in(oj, eid, codes, "alice", DEV_A, "x")
     assert view(oj)["alice"]["hand_in_count"] == 1 and view(oj)["alice"]["reopened"] is False
+
+
+# ---------------------------------------------------------------- idempotent time (docs/dkuoj-fix-requests #5)
+def test_student_extra_time_with_the_same_request_id_is_added_once(oj, room):
+    eid, codes, _, _ = room
+    body = sign_in(oj, codes["carol"], DEV_A)
+    started(oj, body, eid, DEV_A)
+    before = attempts_of(oj)[0].deadline_at
+    first = call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 10, "request_id": "click-1"})
+    again = call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 10, "request_id": "click-1"})
+    assert first.status_code == again.status_code == 200
+    assert again.json().get("repeated") is True and "repeated" not in first.json()
+    assert attempts_of(oj)[0].deadline_at - before == timedelta(minutes=10)
+    assert db(oj, lambda s: s.scalar(select(OjStudentGrant.extra_seconds))) == 600
+    other = call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 10, "request_id": "click-2"})
+    assert other.status_code == 200
+    assert attempts_of(oj)[0].deadline_at - before == timedelta(minutes=20)
+    # no id: every call adds
+    call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 1})
+    call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 1})
+    assert attempts_of(oj)[0].deadline_at - before == timedelta(minutes=22)
+    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 1, "request_id": "bad id!"}).status_code == 400
+
+
+def test_a_failed_extra_time_does_not_burn_its_request_id(oj, room):
+    eid, codes, _, _ = room
+    body = sign_in(oj, codes["ax19"], DEV_A)
+    a = started(oj, body, eid, DEV_A)
+    submit(oj, body, a, {}, 1)
+    refused = call(oj, "POST", f"{STU}/ax19/extra-time", {"minutes": 5, "request_id": "r-9"})
+    assert refused.status_code == 409
+    assert call(oj, "POST", f"{STU}/carol/extra-time", {"minutes": 5, "request_id": "r-9"}).status_code == 200

@@ -62,7 +62,7 @@ class DkuojSource(ExternalSource):
         if exam.external_removed:
             return REMOVED
         if not self.package_ready(exam):
-            return "The questions arrive from DKU OJ 24 hours before the start. Try again then."
+            return NOT_READY
         return super().open_refused_message(exam)
 
     async def is_teacher(self, session: AsyncSession, exam, user_id: int) -> bool:
@@ -101,11 +101,12 @@ class DkuojSource(ExternalSource):
 
     def roster_condition(self, user_id: int):
         from sqlalchemy import and_
-        return and_(exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id,
-                                   OjRosterEntry.revoked_at.is_(None)).correlate(Exam),
-                    or_(Exam.external_removed.is_(False), exists().where(
-                        Attempt.exam_id == Exam.id, Attempt.student_id == user_id,
-                        Attempt.status == "in_progress").correlate(Exam)))
+        writing = exists().where(Attempt.exam_id == Exam.id, Attempt.student_id == user_id,
+                                 Attempt.status == "in_progress").correlate(Exam)
+        return or_(and_(exists().where(OjRosterEntry.exam_id == Exam.id, OjRosterEntry.user_id == user_id,
+                                       OjRosterEntry.revoked_at.is_(None)).correlate(Exam),
+                        or_(Exam.external_removed.is_(False), writing)),
+                   writing)       # off the list mid-exam: the student still finishes
 
     async def current_student(self, session, exam_id, user_id):
         return (await session.execute(select(OjRosterEntry.id).where(
@@ -113,19 +114,20 @@ class DkuojSource(ExternalSource):
             OjRosterEntry.revoked_at.is_(None)).limit(1))).first() is not None
 
     async def can_take(self, session: AsyncSession, exam_id: str, user_id: int) -> bool:
-        if not await self.current_student(session, exam_id, user_id):
-            return False
+        # A student already writing finishes, also when DKU OJ took them off the list meanwhile.
         if await self.resuming(session, exam_id, user_id):
             return True
+        if not await self.current_student(session, exam_id, user_id):
+            return False
         e = await session.get(Exam, exam_id)
-        from .isolation import audience_valid, require_binding
-        if e is None or e.external_removed or not audience_valid(e.external_meta):
+        from .isolation import require_binding
+        if e is None or e.external_removed:
             return False
         await require_binding(session, self.config)
         return True
 
     async def resuming(self, session, exam_id, user_id):
-        return user_id is not None and await self.current_student(session, exam_id, user_id) and (await session.execute(select(Attempt.id).where(
+        return user_id is not None and (await session.execute(select(Attempt.id).where(
             Attempt.exam_id == exam_id, Attempt.student_id == user_id, Attempt.status == "in_progress")
             .limit(1))).first() is not None
 
@@ -137,9 +139,9 @@ class DkuojSource(ExternalSource):
                                      .where(Exam.id == exam_id))).first()
         if row is None:
             raise HTTPException(404, "Exam not found")
-        from .isolation import audience_valid, require_binding
+        from .isolation import require_binding
         resume = await self.resuming(session, exam_id, user_id)
-        if (row.external_removed or not audience_valid(row.external_meta)) and not resume:
+        if row.external_removed and not resume:
             raise HTTPException(409, REMOVED)
         if not resume:
             await require_binding(session, self.config)
@@ -147,12 +149,14 @@ class DkuojSource(ExternalSource):
             await super().check_start(session, exam_id)
         if not row.external_version or not row.question_count:
             raise HTTPException(409, NOT_READY)
+        # a newer version is listed but not fetched yet and nobody started: wait for it
         if not row.external_frozen_version and (row.external_meta or {}).get("package_version") != row.external_version:
             raise HTTPException(409, NOT_READY)
 
     async def on_start(self, session: AsyncSession, exam_id: str, user_id: int) -> timedelta:
-        """The first start freezes the package version (sync never applies another one
-        after that); the student's DKU OJ extra time plus what a professor granted (OjStudentGrant)."""
+        """The first start freezes the question package (sync never applies another version to
+        the questions after that; the settings, tools, title and time still follow DKU OJ live);
+        the student's DKU OJ extra time plus what a professor granted (OjStudentGrant)."""
         await self.check_start(session, exam_id, user_id)
         if not await self.can_take(session, exam_id, user_id):
             raise HTTPException(403, self.take_refused_message())

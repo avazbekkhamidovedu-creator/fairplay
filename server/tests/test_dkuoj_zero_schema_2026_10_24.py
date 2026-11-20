@@ -152,17 +152,27 @@ def test_pending_needs_a_sane_key_and_is_capped(oj, fake, monkeypatch):
     assert call(oj, "POST", f"{V1}/exams/p1/settings", {"calculator": "graphing"}).status_code == 200
 
 
-def test_after_the_first_start_only_review_changes(oj, fake):
+def test_settings_change_any_time_and_reach_a_student_already_writing(oj, fake):
     run(oj)
     path = f"{V1}/exams/{KEY}/settings"
     call(oj, "POST", path, {"calculator": "scientific", "websites": ["docs.python.org"]})
     teacher, alice = login(oj, "teacher"), login(oj, "alice")
     v = call(oj, "POST", f"{V1}/exams/{KEY}/open", {"open_to": "all"}).json()
     e = oj_exam(oj, teacher)
-    assert start(oj, alice, e["id"], v["start_code"]).status_code == 200
-    assert call(oj, "POST", path, {"calculator": "graphing"}).status_code == 409
-    assert call(oj, "POST", path, {"websites": ["en.cppreference.com"]}).status_code == 409
-    # the same values (DKU OJ sends the whole form): no change, accepted; review changes any time
+    started = start(oj, alice, e["id"], v["start_code"])
+    assert started.status_code == 200
+    aid, headers = started.json()["attempt_id"], {**alice, "X-FairPlay-Session": started.json()["session"]}
+    # 2026-11: nothing is fixed at the first start; the change reaches the student's attempt live
+    assert call(oj, "POST", path, {"calculator": "graphing"}).status_code == 200
+    assert call(oj, "POST", path, {"websites": ["en.cppreference.com"]}).status_code == 200
+    tools = oj.get(f"/api/student/attempts/{aid}", headers=headers).json()["tools"]
+    assert tools["calculator"] == "graphing" and tools["websites"] == ["en.cppreference.com"]
+    assert "en.cppreference.com" in tools["allowed_sites"]
+    # also on a closed exam
+    call(oj, "POST", f"{V1}/exams/{KEY}/close", {})
+    assert call(oj, "POST", path, {"calculator": "off"}).status_code == 200
+    call(oj, "POST", path, {"calculator": "scientific", "websites": ["docs.python.org"]})
+    # the same values (DKU OJ sends the whole form) are accepted too; review changes any time
     r = call(oj, "POST", path, {"calculator": "scientific", "websites": ["docs.python.org"], "open_book": False,
                                 "strong_lock": False, "resume_needs_approval": True, "upload_opens_days": 0,
                                 "review": "answers"})

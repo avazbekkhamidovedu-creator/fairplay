@@ -234,3 +234,57 @@ describe("before you start: tools and materials", () => {
     expect(screen.queryByTestId("start-tools")).toBeNull();
   });
 });
+
+
+describe("exam page: DKU OJ changes tools while tabs are open", () => {
+  it("a website that is no longer allowed loses its tab and frame; the others stay", async () => {
+    nativeApp();
+    api.getAttempt
+      .mockResolvedValueOnce(view({ tools: ALL, content_rev: "r1" }))
+      .mockResolvedValue(view({ tools: { ...ALL, websites: ["en.cppreference.com"] }, content_rev: "r2" }));
+    let changed = false;
+    api.heartbeat.mockImplementation(async () => ({
+      ok: true, status: "in_progress", server_time: new Date().toISOString(), deadline_at: view().deadline_at,
+      content_rev: changed ? "r2" : "r1",
+    }));
+    renderExam();
+    expect(await screen.findByRole("heading", { name: "2+2?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Websites\s*2 sites/ }));
+    fireEvent.click(screen.getByRole("button", { name: "docs.python.org" }));
+    expect(document.querySelector("iframe")?.getAttribute("src")).toBe("https://docs.python.org/");
+    changed = true;                                   // DKU OJ removes docs.python.org; the next heartbeat tells the page
+    await waitFor(() => expect(document.querySelector("iframe")).toBeNull(), { timeout: 8000 });
+    expect(screen.queryByRole("tab", { name: /docs\.python\.org/ })).toBeNull();
+  }, 15000);
+
+  it("an allowlist that narrows docs.python.org to python.org removes the docs tab (same rule as the app)", async () => {
+    nativeApp();
+    api.getAttempt
+      .mockResolvedValueOnce(view({ tools: ALL, content_rev: "r1" }))
+      .mockResolvedValue(view({ tools: { ...ALL, websites: ["python.org", "en.cppreference.com"] }, content_rev: "r2" }));
+    let changed = false;
+    api.heartbeat.mockImplementation(async () => ({
+      ok: true, status: "in_progress", server_time: new Date().toISOString(), deadline_at: view().deadline_at,
+      content_rev: changed ? "r2" : "r1",
+    }));
+    renderExam();
+    expect(await screen.findByRole("heading", { name: "2+2?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Websites\s*2 sites/ }));
+    fireEvent.click(screen.getByRole("button", { name: "docs.python.org" }));
+    expect(document.querySelector("iframe")).not.toBeNull();
+    changed = true;
+    await waitFor(() => expect(document.querySelector("iframe")).toBeNull(), { timeout: 8000 });
+  }, 15000);
+
+  it("a view without content_rev is refreshed once the server has one", async () => {
+    nativeApp();
+    api.getAttempt.mockResolvedValueOnce(view()).mockResolvedValue(view({ title: "Renamed live", content_rev: "r9" }));
+    api.heartbeat.mockResolvedValue({
+      ok: true, status: "in_progress", server_time: new Date().toISOString(), deadline_at: view().deadline_at, content_rev: "r9",
+    });
+    renderExam();
+    expect((await screen.findAllByText("Renamed live", undefined, { timeout: 4000 })).length).toBeGreaterThan(0);
+  });
+});

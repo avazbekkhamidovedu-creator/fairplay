@@ -257,8 +257,10 @@ def split_websites(v: list[str] | None) -> tuple[list[str], list[dict]]:
     return hosts, links
 
 
-def clean_website_links(v, hosts: list[str]) -> list[dict]:
-    """Stored / received links, kept only when well formed and their host is on `hosts`."""
+def clean_website_links(v, hosts: list[str], limit: int | None = None) -> list[dict]:
+    """Stored / received links, kept only when well formed and their host is on `hosts`
+    (at most `limit`, default MAX_WEBSITE_LINKS)."""
+    limit = MAX_WEBSITE_LINKS if limit is None else limit
     out: list[dict] = []
     for x in v or []:
         if not isinstance(x, dict) or not isinstance(x.get("url"), str):
@@ -275,7 +277,7 @@ def clean_website_links(v, hosts: list[str]) -> list[dict]:
         link["title"] = _link_title(t) if isinstance(t, str) else link["title"]
         if all(y["url"] != link["url"] for y in out):
             out.append(link)
-        if len(out) >= MAX_WEBSITE_LINKS:
+        if len(out) >= limit:
             break
     return out
 
@@ -885,7 +887,8 @@ class OpenToIn(BaseModel):
 
 
 class ExtendIn(BaseModel):
-    minutes: int = Field(ge=1, le=120)
+    # at most 120 for a FairPlay exam (routes_teacher.extend_exam); an exam from DKU OJ takes any positive number
+    minutes: int = Field(ge=1, le=5_256_000)
 
 
 class ReviewIn(BaseModel):

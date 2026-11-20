@@ -13,6 +13,8 @@ from ...site_companions import companions
 from ..site_policy import filter_sites
 from .open_book_defaults import CHAIN_ONLY_HOSTS
 
+# 32: shipped Mac apps refuse a signed context with more than 32 sites (NativeDeviceContext.swift,
+# BrowserExamContext.swift, ProtectedBrowserPolicy.swift), so the lock never carries more.
 MAX_LOCK_PAGES_AND_RESOURCES = 32
 CLOSED = {"pages": [], "resources": []}
 

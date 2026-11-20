@@ -188,7 +188,7 @@ def test_box_host_in_websites_is_not_framed(oj, fake):
     assert any(b["site"] == "duke.app.box.com" and "Duke Box" in b["reason"] for b in s["websites_blocked"])
 
 
-def test_link_is_fixed_after_the_first_start(oj, fake):
+def test_link_can_change_after_the_first_start(oj, fake):
     run(oj)
     post(oj, {"box_link": CANON})
 
@@ -198,7 +198,7 @@ def test_link_is_fixed_after_the_first_start(oj, fake):
         await s.commit()
     db(oj, freeze)
     assert post(oj, {"box_link": CANON}).status_code == 200
-    assert post(oj, {"box_link": "https://duke.box.com/s/" + "b" * 20}).status_code == 409
+    assert post(oj, {"box_link": "https://duke.box.com/s/" + "b" * 20}).status_code == 200    # 2026-11: no freeze
 
 
 # ---------------------------------------------------------------- tools.box on the attempt view

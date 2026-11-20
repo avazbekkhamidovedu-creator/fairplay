@@ -84,14 +84,14 @@ def test_bridge_roster_students_can_be_added_by_their_editor(oj):
 
 
 # ---------------------------------------------------------------- DKU OJ bridge
-def test_known_class_refuses_an_unrelated_acting_user(oj):
+def test_known_class_accepts_any_non_student_dkuoj_signs_for_it(oj):
+    """2026-11: no FairPlay-side link to the class is required (instructor, TA, course staff)."""
     run(oj)
     path = f"{V1}/classes/{CLASS_ID}"
     for method, url, body in (("GET", path + "/status", None), ("POST", path + "/login", {"class_name": "x"}),
-                              ("DELETE", path + "/login", None),
-                              ("POST", f"{V1}/students/bl642/reset", {"class_id": CLASS_ID})):
-        r = call(oj, method, url, body, acting="stranger")
-        assert r.status_code == 403, (method, url, r.text)
+                              ("DELETE", path + "/login", None)):
+        r = call(oj, method, url, body, acting="ta-of-this-class")
+        assert r.status_code == 200, (method, url, r.text)
     assert call(oj, "GET", path + "/status", acting="teacher").status_code == 200
 
 
@@ -102,12 +102,12 @@ def test_student_account_and_empty_acting_user_are_refused(oj):
     assert call(oj, "GET", path, acting="").status_code == 403
 
 
-def test_new_class_is_claimed_by_its_first_acting_professor(oj):
+def test_new_class_is_open_to_every_non_student_acting_user(oj):
     r = call(oj, "POST", f"{V1}/classes/777/login", {"class_name": "New"}, acting="prof1")
     assert r.status_code == 200, r.text
     assert call(oj, "GET", f"{V1}/classes/777/status", acting="prof1").status_code == 200
-    assert call(oj, "GET", f"{V1}/classes/777/status", acting="prof2").status_code == 403
-    assert call(oj, "DELETE", f"{V1}/classes/777/login", acting="prof2").status_code == 403
+    assert call(oj, "GET", f"{V1}/classes/777/status", acting="prof2").status_code == 200
+    assert call(oj, "DELETE", f"{V1}/classes/777/login", acting="prof2").status_code == 200
 
 
 def test_unsynced_exam_calls_need_a_named_non_student(oj):

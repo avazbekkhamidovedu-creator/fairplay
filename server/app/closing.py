@@ -168,8 +168,8 @@ async def sweep_expired_attempts(session: AsyncSession, now: datetime) -> list[s
         res = await session.execute(
             update(Attempt).where(Attempt.id == aid, Attempt.status == "in_progress",
                                   Attempt.deadline_at <= now - AUTO_SUBMIT_AFTER).values(
-                status="submitted", submitted_at=now, auto_submitted=True, receipt=new_receipt(),
-                score=score, needs_grading=pending, late=True, updated_at=now))
+                status="submitted", submitted_at=now, auto_submitted=True, deadline_swept=True,
+                receipt=new_receipt(), score=score, needs_grading=pending, late=True, updated_at=now))
         if res.rowcount == 1:
             done.append(aid)
             integ = integration_for(e)

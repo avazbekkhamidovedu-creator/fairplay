@@ -18,13 +18,14 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import update
+from sqlalchemy import Text, cast, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import app_client as ac
 from .db import get_session
 from .grading import handin_grade
-from .models import Attempt, Exam
+from .integrations.models import ExternalDelivery
+from .models import Attempt, Exam, IntegrityEvent
 from .routes_student import LATE_GRACE, _known_answers, _own_attempt, count_answered
 from .schemas import AnswersIn, SealedSubmitIn
 from .security import Principal, require_student
@@ -90,7 +91,95 @@ async def sealed_submit(aid: str, body: SealedSubmitIn, request: Request,
                 await _note_ahead(session, store, a, body.proof, ahead)
             await cache_attempt(store, a)
             return _receipt(a)
+    elif await _replaces_deadline_handin(session, store, a, seal, answers, body.proof, seen, now):
+        return _receipt(a)
     return await _after_submit(session, store, a, seal, answers, body.proof, seen)
+
+
+async def _replaces_deadline_handin(session: AsyncSession, store, a: Attempt, seal: ac.Seal, answers: dict,
+                                    proof: str, seen: str, now) -> bool:
+    """0.8.9 fix: the deadline sweep (closing.sweep_expired_attempts) hands in the server's saved copy
+    AUTO_SUBMIT_AFTER past a student's own deadline, while the exam itself is still open. A seal the app
+    made in time and could only upload later is what the student handed in, so it replaces that copy and
+    is graded, as it was before the sweep existed. Only a hand-in the deadline sweep made (Attempt.
+    deadline_swept), never a teacher's or the automatic close's, never once grades were released or the
+    external system returned a result. Not after the exam closed (the teacher closed it: the
+    seal goes to the late answers, as before), not over the student's or another seal's hand-in, and not
+    once an external hand-in (DKU OJ) was already built from the swept copy."""
+    def eligible() -> bool:
+        return not (not a.auto_submitted or not a.deadline_swept or a.sealed_proof is not None
+                    or a.external_result is not None or seal.sealed_at > a.deadline_at + LATE_GRACE)
+    if not eligible():
+        return False
+    # Lock the exam row for this whole replacement transaction (SELECT ... FOR UPDATE; the close's own
+    # UPDATE of the row waits for it, so a close cannot slip in between this check and the UPDATE below).
+    # SQLite has no row locks: the UPDATE's own EXISTS condition below re-checks the exam.
+    exam = (await session.execute(select(Exam).where(Exam.id == a.exam_id).with_for_update()
+                                  .execution_options(populate_existing=True))).scalars().first()
+    if exam is None or exam.status == "closed" or exam.grades_released:
+        await session.rollback()
+        await session.refresh(a)
+        return False
+    # Lock the attempt row too (the teacher's grading locks it) and re-read it, so the grades kept below
+    # are the teacher's current ones, not those loaded before. SQLite: the UPDATE below also requires
+    # updated_at to be what was read here (grading bumps it).
+    await session.execute(select(Attempt.id).where(Attempt.id == a.id).with_for_update()
+                          .execution_options(populate_existing=True))
+    await session.refresh(a)
+    if not eligible():
+        await session.rollback()
+        await session.refresh(a)
+        return False
+    # The outbox worker builds the payload from the attempt as it is then. Lock this hand-in's
+    # delivery row (current revision only: 1 + the times the attempt was reopened) so a replacement and
+    # the building cannot interleave: a row whose payload is built, or that a worker has leased
+    # to build it, keeps the swept copy. (SQLite ignores FOR UPDATE; the tests keep the semantics.)
+    from .integrations.outbox import REOPENED
+    reopened = (await session.execute(select(func.count()).select_from(IntegrityEvent).where(
+        IntegrityEvent.attempt_id == a.id, IntegrityEvent.type == REOPENED))).scalar_one()
+    row = (await session.execute(select(ExternalDelivery).where(
+        ExternalDelivery.attempt_id == a.id, ExternalDelivery.revision == 1 + int(reopened or 0))
+        .with_for_update())).scalars().first()
+    if row is not None and (row.payload is not None
+                            or (row.locked_until is not None and row.locked_until > now)):
+        await session.rollback()          # releases the row lock
+        await session.refresh(a)
+        return False
+    # A teacher's grade belongs to the answer it was given for: one whose answer the seal changed is
+    # dropped, so that question is graded again (an essay waits for the teacher); unchanged ones stay.
+    read_updated_at = a.updated_at
+    swept = a.answers or {}
+    grades = {q: g for q, g in (a.grades or {}).items() if swept.get(q) == answers.get(q)} or None
+    score, pending = handin_grade(exam, answers, grades)
+    res = await session.execute(
+        update(Attempt).where(Attempt.id == a.id, Attempt.status == "submitted",
+                              Attempt.auto_submitted.is_(True), Attempt.deadline_swept.is_(True),
+                              Attempt.sealed_proof.is_(None), Attempt.updated_at == read_updated_at,
+                              select(Exam.id).where(Exam.id == Attempt.exam_id, Exam.status != "closed",
+                                                    Exam.grades_released.is_not(True)).exists(),
+                              # SQLite ignores FOR UPDATE: the UPDATE itself re-checks that no worker has
+                              # built or leased this hand-in's delivery since the check above.
+                              ~select(ExternalDelivery.id).where(
+                                  ExternalDelivery.attempt_id == Attempt.id,
+                                  ExternalDelivery.revision == 1 + int(reopened or 0),
+                                  # a JSON None may be stored as the text 'null': that is not built either
+                                  ((ExternalDelivery.payload.is_not(None))
+                                   & (cast(ExternalDelivery.payload, Text) != "null"))
+                                  | (ExternalDelivery.locked_until > now)).exists()).values(
+            submitted_at=min(seal.sealed_at, now), receipt=new_receipt(), grades=grades,
+            score=score, needs_grading=pending, answers=answers, answered=count_answered(answers),
+            client_seq=max(seal.client_seq, a.client_seq), late=False, late_answers=None, late_sealed=False,
+            sealed_proof=proof, auto_submitted=False, deadline_swept=False, updated_at=now))
+    if res.rowcount != 1:
+        await session.rollback()
+        await session.refresh(a)
+        return False
+    await session.commit()
+    await session.refresh(a)
+    await _note(session, store, a, seal, proof,
+                f"{_seal_detail(a, seal, seen)}; replaced the server's hand-in of the saved answers at the deadline")
+    await cache_attempt(store, a)
+    return True
 
 
 async def _hand_in(session: AsyncSession, a: Attempt, seal: ac.Seal, answers: dict,

@@ -121,4 +121,18 @@ describe("exam page S3 / S5", () => {
     renderExam();
     expect(await screen.findByTestId("wait-for-teacher")).toBeInTheDocument();
   });
+
+  it("DKU OJ changes the exam's name or tools while the page is open: the heartbeat's content_rev makes it load them again, answers kept", async () => {
+    nativeApp();
+    const changed = view({ content_rev: "r2", title: "Renamed by DKU OJ" });
+    api.getAttempt.mockResolvedValueOnce(view({ content_rev: "r1" })).mockResolvedValue(changed);
+    api.heartbeat.mockResolvedValue({
+      ok: true, status: "in_progress", server_time: new Date().toISOString(), deadline_at: view().deadline_at, content_rev: "r2",
+    });
+    renderExam();
+    expect((await screen.findAllByText("Renamed by DKU OJ", undefined, { timeout: 4000 })).length).toBeGreaterThan(0);
+    expect(api.getAttempt.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(api.saveAnswers).not.toHaveBeenCalledWith("a_1", expect.objectContaining({ q1: null }), expect.anything());
+  });
+
 });

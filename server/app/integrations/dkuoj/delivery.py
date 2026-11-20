@@ -102,7 +102,7 @@ async def _payload(session: AsyncSession, client: DkuojClient, throttle: Throttl
             out_answers.append(item)
     body = {
         "username": username, "attempt_id": a.id,
-        "package_version": e.external_frozen_version or e.external_version,
+        "package_version": e.external_version,
         "started_at": _snap_z(snap, "started_at", a.started_at),
         "deadline_at": _snap_z(snap, "deadline_at", a.deadline_at),
         "handed_in_at": _snap_z(snap, "handed_in_at", a.submitted_at or a.updated_at),

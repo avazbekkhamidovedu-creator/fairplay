@@ -114,7 +114,7 @@ not send them today; its schema does not change). Values set with v2 `POST /exam
 ## 5. FairPlay server (FastAPI)
 
 - New columns on `Exam` (added like the others, `server_default`): `source` (`"fairplay"` | `"dkuoj"`), `oj_key`, `oj_package_version`, `oj_frozen_version` (set at the first student start; later packages never change a running exam), `oj_synced_at`, `oj_removed`.
-- `app/dkuoj/` package: `client.py` (httpx, Bearer token, timeouts, retries on 429/5xx, test transport hook like `app.lms.base`), `adapter.py` (OJ package ⇄ FairPlay question model, OJ answers out), `sync.py` (poll `exams` every 120 s; schedule the package fetch at start−24 h; download assets, check sha256, store; create/update the FairPlay exam, roster and editor accounts), `delivery.py` (outbox), `results.py` (poll released results after the end), `routes.py` (`/oj/live` signed login, admin status page JSON).
+- `app/dkuoj/` package: `client.py` (httpx, Bearer token, timeouts, retries on 429/5xx, test transport hook like `app.lms.base`), `adapter.py` (OJ package ⇄ FairPlay question model, OJ answers out), `sync.py` (poll `exams` every 30 s; schedule the package fetch at start−24 h; download assets, check sha256, store; create/update the FairPlay exam, roster and editor accounts), `delivery.py` (outbox), `results.py` (poll released results after the end), `routes.py` (`/oj/live` signed login, admin status page JSON).
 - Background loop started in `main.py` lifespan when the bridge is configured, with a DB lock so only one worker runs it.
 - **Exam created from OJ:** `source="dkuoj"`, `delivery="computer"`, `mode="questions"`, title = name, `scheduled_at` = start_time, `duration_min` = time limit (or the window), settings mapped to `calculator`, `open_book`, `websites`, `require_strong_lock`, `resume_needs_approval`. A FairPlay class per OJ class (`SchoolClass`, linked by OJ class id) with the roster as members. Read-only in the FairPlay exam editor (questions cannot be edited in FairPlay; a banner says "Edit this exam in DKU OJ").
 - **Accounts:** students and editors are matched by username = OJ username (NetID). Missing ones are created with an unusable password (like `routes_lms.IMPORTED_PASSWORD`) — how students first sign in is a later feature (temporary class login); for the pilot the FairPlay admin can set passwords. Editors get role teacher.
@@ -130,7 +130,7 @@ not send them today; its schema does not change). Values set with v2 `POST /exam
 - **Delivery outbox:** table `oj_deliveries` (`attempt_id` unique, `exam_id`, `status` pending|sent|failed|dead, `tries`, `next_at`, `last_error`, `receipt`, `created_at`, `sent_at`). Row written in the same transaction as the final hand-in (and sealed submit). Worker sends with backoff 30 s → 15 min, throttled to 10 req/s; 409/422 → `dead` + admin alert; 5xx/timeout retried for 14 days. Student hand-in receipt never waits for OJ.
 - **Results:** stored per attempt (`oj_result` JSON: total, total_points, per question points + feedback, released flag); the student Grades page shows them when released.
 - **Teacher in FairPlay:** OJ editors see the OJ exam in their exam list and the live room (open with start code, approvals, events, integrity report) exactly like FairPlay exams; results/grading pages say "Graded in DKU OJ" with a link.
-- Config: `DKUOJ_URL`, `DKUOJ_TOKEN`, `DKUOJ_SYNC_SECONDS=120`, `DKUOJ_DELIVERY_RPS=10`.
+- Config: `DKUOJ_URL`, `DKUOJ_TOKEN`, `DKUOJ_SYNC_SECONDS=30`, `DKUOJ_DELIVERY_RPS=10`.
 
 ## 6. FairPlay web (React)
 

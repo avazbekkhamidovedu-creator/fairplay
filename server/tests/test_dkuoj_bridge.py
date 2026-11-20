@@ -565,31 +565,43 @@ def test_full_flow(oj, fake):
     assert oj.get(f"/api/student/grades/{e['id']}/assets/cell.png", headers=alice).status_code == 404
 
 
-def test_package_waits_until_24h_before_and_honours_425(oj, fake):
+def test_package_is_fetched_as_soon_as_dkuoj_offers_it(oj, fake):
+    """2026-11: no 24 hour lead of FairPlay's own: the package comes the moment DKU OJ hands it over."""
     teacher = login(oj, "teacher")
     fake.start = utcnow() + timedelta(days=3)
     fake.end = fake.start + timedelta(hours=2)
     out = run(oj)
-    assert out["packages"] == 0 and not any(c.endswith("/package") for c in fake.calls)
+    assert out["packages"] == 1 and sum(c.endswith("/package") for c in fake.calls) == 1
     e = oj_exam(oj, teacher)
-    assert e["question_count"] == 0 and e["external"]["package_ready"] is False
-    r = oj.post(f"/api/exams/{e['id']}/open", headers=teacher)
-    assert r.status_code == 409 and "24 hours" in r.json()["detail"]
-    # 24 h before: DKU OJ still says 425 -> retried after Retry-After, not every loop
+    assert e["question_count"] == 7 and e["external"]["package_ready"] is True
+
+
+def test_425_is_retried_quietly(oj, fake):
+    """DKU OJ not ready (425): asked again after Retry-After (default a minute), no error shown."""
+    teacher = login(oj, "teacher")
+    fake.start = utcnow() + timedelta(days=3)
+    fake.end = fake.start + timedelta(hours=2)
     fake.too_early = True
-    t = fake.start - timedelta(hours=23)
+    t = utcnow()
     run(oj, now=t)
-    n = sum(c.endswith("/package") for c in fake.calls)
-    assert n == 1
-    run(oj, now=t + timedelta(minutes=10))
+    assert sum(c.endswith("/package") for c in fake.calls) == 1
+    e = oj_exam(oj, teacher)
+    assert e["question_count"] == 0
+    assert "package_error" not in (db(oj, lambda s: _meta_of(s, KEY)) or {})
+    run(oj, now=t + timedelta(seconds=20))                   # not every loop
     assert sum(c.endswith("/package") for c in fake.calls) == 1
     fake.too_early = False
-    run(oj, now=t + timedelta(hours=1, minutes=1))
+    run(oj, now=t + timedelta(hours=1, minutes=1))   # after DKU OJ's Retry-After
     assert sum(c.endswith("/package") for c in fake.calls) == 2
     assert oj_exam(oj, teacher)["question_count"] == 7
-    # unchanged afterwards: no new download (304 or not due)
-    run(oj, now=t + timedelta(hours=2))
+    run(oj, now=t + timedelta(hours=2))                      # unchanged afterwards: no new download
     assert sum(c.endswith("/package") for c in fake.calls) == 2
+
+
+async def _meta_of(s, key):
+    from sqlalchemy import select as _select
+    from app.models import Exam as _Exam
+    return (await s.execute(_select(_Exam.external_meta).where(_Exam.external_key == key))).scalar_one()
 
 
 def test_asset_hash_mismatch_keeps_package_out(oj, fake):
@@ -694,21 +706,20 @@ def test_removed_exam_cannot_start(oj, fake):
     fake.removed = True
     fake.listing_updated = iso(utcnow() + timedelta(seconds=1))
     run(oj)
-    assert oj.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
+    # 2026-11: editors are kept, so instructors still see the removed exam (native exit codes ...)
+    assert oj.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 200
     from app.services import invalidate_exam
     from app.store import get_store
     oj.portal.call(invalidate_exam, get_store(), e["id"])
     r = start(oj, alice, e["id"], e["start_code"])
     assert r.status_code in (403, 409)
-    assert oj.post(f"/api/exams/{e['id']}/close", headers=teacher).status_code == 404
-    assert oj.delete(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
 
     async def left(s):
         from sqlalchemy import func, select
         from app.integrations.dkuoj.models import OjAsset, OjEditor, OjRosterEntry
         return [(await s.execute(select(func.count()).select_from(m))).scalar_one()
                 for m in (OjAsset, OjEditor, OjRosterEntry)]
-    assert db(oj, left) == [1, 0, 3]
+    assert db(oj, left) == [1, 2, 3]
 
 
 def test_sealed_submit_writes_outbox_with_sealed_evidence(oj, fake):
@@ -920,7 +931,7 @@ def test_against_dkuoj_real_shapes(tmp_path, static_dir, monkeypatch):
             # removed: only in the incremental poll; editors keep the exam
             real.removed = True
             run(c)
-            assert c.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 404
+            assert c.get(f"/api/exams/{e['id']}", headers=teacher).status_code == 200    # 2026-11: editors kept
 
     finally:
         ojclient.set_transport_factory(None)

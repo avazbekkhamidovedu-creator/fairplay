@@ -119,4 +119,30 @@ describe("Duke Box for the teacher", () => {
     expect(eventDetailText("box_opened", "duke.app.box.com")).toBe("duke.app.box.com");
     expect(eventDetailText("blocked_navigation", null)).toBe("");
   });
+
+  it("a changed Box link closes the open window and opens the new link; a removed Box closes it", async () => {
+    native(true);
+    const NEW: ExamBox = { ...BOX, start_url: `https://duke.app.box.com/s/ZzZzZz9876543210`, path_prefix: "/s/ZzZzZz9876543210" };
+    const r = render(<Harness box={BOX} />);
+    await userEvent.click(screen.getByRole("button", { name: "Open Duke Box" }));
+    send({ type: "boxResult", state: "opened" });
+    expect(sent("open_box")).toHaveLength(1);
+    r.rerender(<Harness box={NEW} />);
+    expect(sent("close_box").length).toBeGreaterThanOrEqual(1);
+    expect(sent("open_box")).toHaveLength(2);
+    expect((sent("open_box")[1] as { box?: ExamBox }).box?.start_url ?? JSON.stringify(sent("open_box")[1])).toContain("ZzZzZz9876543210");
+    send({ type: "boxResult", state: "opened" });
+    const closed = sent("close_box").length;
+    r.rerender(<Harness />);
+    expect(sent("close_box").length).toBeGreaterThan(closed);
+    expect(sent("open_box")).toHaveLength(2);
+  });
+
+  it("a Box window that was not open stays closed when the link changes", () => {
+    native(true);
+    const NEW: ExamBox = { ...BOX, start_url: `https://duke.app.box.com/s/ZzZzZz9876543210`, path_prefix: "/s/ZzZzZz9876543210" };
+    const r = render(<Harness box={BOX} />);
+    r.rerender(<Harness box={NEW} />);
+    expect(sent("open_box")).toHaveLength(0);
+  });
 });

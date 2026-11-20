@@ -44,7 +44,7 @@ import {
 } from "../../lib/examPrefs";
 import { useStudentIdentity } from "../../lib/useStudentIdentity";
 import { useBattery } from "../../lib/battery";
-import { lockSites } from "../../lib/websites";
+import { hostAllowed, lockSites } from "../../lib/websites";
 import { AnswerQueue, type SyncStatus } from "../../lib/answerQueue";
 import * as bridge from "../../lib/bridge";
 import { readTrialKey, writeTrialKey } from "../../lib/trialKey";
@@ -238,6 +238,9 @@ function ExamTakingInner() {
   const appsRef = useRef<AllowedApp[] | undefined>(undefined);
   // 2026-10-23 (exam tools): the exam's websites, handed to the app with "lock" / "session"
   const sitesRef = useRef<string[]>([]);
+  // 2026-11: the questions / tools fingerprint the page holds; the heartbeat brings the server's.
+  const contentRevRef = useRef("");
+  const refreshingRef = useRef(false);
   const offline = isOfflineAttemptId(attemptId);
   const offlineExamId = offline ? examIdOfOffline(attemptId) : "";
   const realAidRef = useRef<string | null>(
@@ -507,6 +510,7 @@ function ExamTakingInner() {
         setAnswers(queue.getAnswers());
         appsRef.current = a.allowed_apps;   // 2026-10-14: handed to the app with "lock"
         sitesRef.current = lockSites(a.tools);   // 2026-10-24: + companions
+        contentRevRef.current = a.content_rev ?? "";
         setWaiting(a.needs_approval === true || a.approval === "pending");
         setAttempt(a);
         setDeadline(a.deadline_at);
@@ -764,6 +768,41 @@ function ExamTakingInner() {
         setOffset(clockOffset(res.server_time));
         if (res.deadline_at) setDeadline(res.deadline_at);
         if (res.approval !== undefined) setWaiting(res.approval === "pending");
+        // DKU OJ changed the questions or tools while this page was open: fetch them again.
+        // The typed answers stay (they live in the answer queue and are not replaced).
+        // (a view without a revision, e.g. an old cached copy, is refreshed as soon as the server has one;
+        // an attempt started offline refreshes too once it reached the server)
+        if (res.content_rev && res.content_rev !== contentRevRef.current
+            && !refreshingRef.current && realAidRef.current) {
+          refreshingRef.current = true;
+          try {
+            const fresh = await call((aid) => studentApi.getAttempt(aid));
+            if (fresh.status !== "submitted" && fresh.mode !== "external") {
+              contentRevRef.current = fresh.content_rev || res.content_rev;
+              sitesRef.current = lockSites(fresh.tools);
+              cacheAttemptView(fresh, clockOffset(fresh.server_time));
+              setCurrent((c) => Math.min(c, Math.max(0, fresh.questions.length - 1)));
+              setAttempt((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      title: fresh.title,
+                      course: fresh.course,
+                      questions: fresh.questions,
+                      tools: fresh.tools,
+                      total_points: fresh.total_points,
+                      answer_files: fresh.answer_files ?? prev.answer_files,
+                      content_rev: contentRevRef.current,
+                    }
+                  : prev,
+              );
+            }
+          } catch {
+            /* try again on the next heartbeat */
+          } finally {
+            refreshingRef.current = false;
+          }
+        }
         if (res.status === "submitted") {
           // closed by the teacher (or submitted elsewhere): finish and unlock
           if (!submittingRef.current) void doSubmitRef.current(true);
@@ -979,6 +1018,31 @@ function ExamTakingInner() {
   useEffect(() => {
     document.getElementById(`xd-tab-${activeTab}`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [activeTab, matTabs.length]);
+  // DKU OJ / the teacher changed the allowed websites or the Box link while tabs were open: a tab
+  // for a site that is no longer allowed (or for Box, when it is gone) is closed with its frame.
+  const siteKey = (tools?.websites ?? []).join("|");
+  const hasBox = !!tools?.box;
+  // Every open website frame is loaded again from its tab's own page when the list changes: a frame
+  // that navigated from its allowed site to one now removed must not keep showing it.
+  const [sitesGen, setSitesGen] = useState(0);
+  const lastSiteKey = useRef(siteKey);
+  useEffect(() => {
+    if (lastSiteKey.current === siteKey) return;
+    lastSiteKey.current = siteKey;
+    setSitesGen((g) => g + 1);
+  }, [siteKey]);
+  useEffect(() => {
+    const allowed = siteKey ? siteKey.split("|") : [];
+    // the same rule as the app's allowed-sites policy (lib/websites hostAllowed)
+    const ok = (host: string) => hostAllowed(host.replace(/:\d+$/, ""), allowed);
+    setMatTabs((prev) => {
+      const next = prev.filter((t) => (t.kind === "site" ? ok(t.host) : t.kind === "sites" ? allowed.length > 0 : t.kind === "box" ? hasBox : true));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [siteKey, hasBox]);
+  useEffect(() => {
+    if (activeTab !== "question" && !matTabs.some((t) => t.id === activeTab)) setActiveTab("question");
+  }, [matTabs, activeTab]);
   const closeTab = (id: string) => {
     setMatTabs((prev) => prev.filter((t) => t.id !== id));
     setActiveTab("question");
@@ -1483,6 +1547,7 @@ function ExamTakingInner() {
                     </div>
                   ) : (
                     <WebsitesPaneContent
+                      key={`${t.id}:${sitesGen}`}
                       sites={tools?.websites ?? []}
                       links={tools?.website_links}
                       startUrl={t.url}
@@ -1783,7 +1848,7 @@ function ExamTakingInner() {
       {/* 2026-10-23 review: stays mounted (hidden) while handing in, so a failed hand-in
           doesn't lose what is in it */}
       {calcMode && calcMounted && (
-        <Calculator mode={calcMode} open={calcOpen && toolsShown} onClose={closeCalc} paneWidth={0} />
+        <Calculator key={calcMode} mode={calcMode} open={calcOpen && toolsShown} onClose={closeCalc} paneWidth={0} />
       )}
       {phase === "submitting" && !timeUpPanel && phaseBeforeSubmit.current === "exam" && (
         <div className="stu-toast" role="status">

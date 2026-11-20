@@ -488,11 +488,8 @@ async def _own_attempt(session: AsyncSession, aid: str, p: Principal) -> Attempt
     a = await session.get(Attempt, aid)
     if a is None or a.student_id != p.user_id:
         raise HTTPException(404, "Attempt not found")
-    source = (await session.execute(select(Exam.source).where(Exam.id == a.exam_id))).scalar()
-    if source == "dkuoj" and a.status == "in_progress":
-        from .integrations.dkuoj.source import SOURCE
-        if not await SOURCE.current_student(session, a.exam_id, p.user_id):
-            raise HTTPException(403, SOURCE.take_refused_message())
+    # 2026-11: a DKU OJ student taken off the list mid-exam still finishes their attempt (only a
+    # new start is refused, in DKU OJ's check_start / can_take), so no roster check here.
     return a
 
 
@@ -666,8 +663,12 @@ async def heartbeat(aid: str, body: HeartbeatIn, request: Request,
         beat["chg"] = body.charging
     await store.hset(f"hb:{meta['exam_id']}", aid, json.dumps(beat), LIVE_TTL)
     await ac.note_js_heartbeat(request, session, store, aid, meta, raw_abt=raw_abt)
+    hot = await get_exam_hot(store, session, meta["exam_id"])
     return JSONResponse({"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
-                         "deadline_at": meta["deadline_at"], "approval": meta.get("approval")})   # S3
+                         "deadline_at": meta["deadline_at"], "approval": meta.get("approval"),   # S3
+                         # 2026-11: changes by DKU OJ (questions, tools) reach a running page: it
+                         # fetches the attempt again when this differs from the one it holds
+                         "content_rev": (hot or {}).get("rev") or ""})
 
 
 @router.post("/attempts/{aid}/events")
@@ -869,9 +870,11 @@ async def app_beat(aid: str, body: AppBeatIn, request: Request,
     if ip and seen_ip != ip:
         writes.append(("set", ip_key, ip, LIVE_TTL))
     await store.batch(writes)
+    hot = await get_exam_hot(store, session, exam_id)
     return JSONResponse({"ok": True, "status": meta["status"], "server_time": iso(utcnow()),
                          "deadline_at": meta["deadline_at"], "min_app_version": min_version,
-                         "approval": meta.get("approval")})   # S3
+                         "approval": meta.get("approval"),   # S3
+                         "content_rev": (hot or {}).get("rev") or ""})
 
 
 async def _check_strong_lock(session: AsyncSession, store, aid: str, exam_id: str,

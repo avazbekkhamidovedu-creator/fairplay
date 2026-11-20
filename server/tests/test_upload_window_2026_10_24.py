@@ -254,9 +254,10 @@ def test_dkuoj_settings_endpoint(oj, fake):
     assert [b["site"] for b in s["websites_blocked"]] == ["*.com"]
     s = call(oj, "POST", path, {"upload_opens_days": None}).json()["settings"]
     assert s["upload_opens_days"] == 0 and s["set_in_fairplay"] == []
-    # once a student started: fixed
+    # once a student started: still changeable (2026-11, nothing is fixed)
     call(oj, "POST", path, {"upload_opens_days": 2})
     v = call(oj, "POST", f"{V1}/exams/{KEY}/open", {"open_to": "all"}).json()
     a = oj.post(f"/api/student/exams/{e['id']}/start", json={"start_code": v["start_code"]}, headers=alice)
     assert a.status_code == 200, a.text
-    assert call(oj, "POST", path, {"upload_opens_days": 3}).status_code == 409
+    r = call(oj, "POST", path, {"upload_opens_days": 3})
+    assert r.status_code == 200 and r.json()["settings"]["upload_opens_days"] == 3
