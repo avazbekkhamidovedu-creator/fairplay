@@ -134,7 +134,9 @@ async def extend_exam(session: AsyncSession, e: Exam, minutes: int, claim=None) 
         reopen = True
     # `claim` records the caller's idempotency id in THIS transaction (committed with the time below).
     # False: that id was applied already, nothing changes (True = go on).
+    exam_id = e.id                              # read before claim(): its rollback expires `e`
     if claim is not None and not await claim():
+        await forget_time_caches(session, exam_id)       # a retry repairs a cache step the first call lost
         return False
     delta = timedelta(minutes=minutes)
     e.duration_min += minutes
@@ -202,10 +204,30 @@ async def extend_exam(session: AsyncSession, e: Exam, minutes: int, claim=None) 
             await store.hdel(f"ab:{e.id}", aid)
         await best_effort("the live-room note", live_room)
         await best_effort("the cache of a reopened attempt", forget)
-    await best_effort("the exam cache", lambda: invalidate_exam(store, e.id))   # new starts get the longer duration
-    if rows:  # heartbeats re-read the new deadline from the DB on their next call
-        await best_effort("the deadline cache", lambda: store.delete(*[attempt_key(aid) for aid, _ in rows]))
+    await forget_time_caches(session, exam_id, [aid for aid, _ in rows])
     return True
+
+
+async def forget_time_caches(session: AsyncSession, exam_id: str, attempt_ids: list[str] | None = None) -> None:
+    """Best effort: drop the exam cache (new starts get the new duration) and the cached deadlines
+    (heartbeats re-read them from the DB). attempt_ids None = every attempt still writing.
+    Also called for a repeated time grant (same request id): a cache step that failed after the
+    first grant is done again, instead of students keeping the old deadline until the entry expires."""
+    import logging
+    log = logging.getLogger("proctora")
+    store = get_store()
+    try:
+        await invalidate_exam(store, exam_id)
+    except Exception:  # noqa: BLE001
+        log.exception("time grant: the exam cache failed for exam %s", exam_id)
+    try:
+        if attempt_ids is None:
+            attempt_ids = list((await session.execute(select(Attempt.id).where(
+                Attempt.exam_id == exam_id, Attempt.status == "in_progress"))).scalars().all())
+        if attempt_ids:
+            await store.delete(*[attempt_key(aid) for aid in attempt_ids])
+    except Exception:  # noqa: BLE001
+        log.exception("time grant: the deadline cache failed for exam %s", exam_id)
 
 
 async def _reopen_closed_out(session: AsyncSession, e: Exam, closed_at: datetime | None,

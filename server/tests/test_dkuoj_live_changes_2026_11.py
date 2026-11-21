@@ -605,3 +605,64 @@ def test_a_grade_saved_after_the_seal_loaded_the_attempt_is_kept_by_the_replacem
     assert r.status_code == 200, r.text
     row = results_row(app_client, exam)
     assert row["score"] == 2 and row["auto_submitted"] is False
+
+
+# ---------------------------------------------------------------- a retried grant repairs a cache step the first call lost
+def _cached(c, aid):
+    from app.services import attempt_key
+    holder = {}
+
+    async def go(_s):
+        holder["v"] = await get_store().get(attempt_key(aid))
+    db(c, go)
+    return holder["v"]
+
+
+def _plant(c, aid):
+    from app.services import attempt_key
+
+    async def go(_s):
+        await get_store().set(attempt_key(aid), "stale-deadline", 3600)
+    db(c, go)
+
+
+def test_a_retried_add_time_clears_the_cached_deadline_a_redis_failure_left(oj, room, monkeypatch):
+    eid, codes, _, _ = room
+    body = sign_in(oj, codes["carol"], DEV_A)
+    aid = started(oj, body, eid, DEV_A)["attempt_id"]
+    path = f"{V1}/exams/{KEY}/add-time"
+    d0 = db(oj, lambda s: s.scalar(select(Exam).where(Exam.external_key == KEY))).duration_min
+    _plant(oj, aid)
+    store = get_store()
+    real_delete = store.delete
+
+    async def down(*_a, **_k):
+        raise RuntimeError("redis down")
+    monkeypatch.setattr(store, "delete", down)
+    assert call(oj, "POST", path, {"minutes": 10, "request_id": "cache-1"}).status_code == 200
+    monkeypatch.setattr(store, "delete", real_delete)
+    assert _cached(oj, aid) == "stale-deadline"                   # the first call could not clear it
+    assert call(oj, "POST", path, {"minutes": 10, "request_id": "cache-1"}).status_code == 200
+    assert _cached(oj, aid) is None                               # the retry did
+    assert db(oj, lambda s: s.scalar(select(Exam).where(Exam.external_key == KEY))).duration_min == d0 + 10
+
+
+def test_a_retried_extra_time_clears_the_cached_deadline_a_redis_failure_left(oj, room, monkeypatch):
+    eid, codes, _, _ = room
+    body = sign_in(oj, codes["carol"], DEV_A)
+    aid = started(oj, body, eid, DEV_A)["attempt_id"]
+    before = attempts_of(oj)[0].deadline_at
+    path = f"{STU}/carol/extra-time"
+    _plant(oj, aid)
+    store = get_store()
+    real_delete = store.delete
+
+    async def down(*_a, **_k):
+        raise RuntimeError("redis down")
+    monkeypatch.setattr(store, "delete", down)
+    assert call(oj, "POST", path, {"minutes": 7, "request_id": "cache-2"}).status_code == 200
+    monkeypatch.setattr(store, "delete", real_delete)
+    assert _cached(oj, aid) == "stale-deadline"
+    assert call(oj, "POST", path, {"minutes": 7, "request_id": "cache-2"}).json().get("repeated") is True
+    assert _cached(oj, aid) is None
+    assert attempts_of(oj)[0].deadline_at - before == timedelta(minutes=7)

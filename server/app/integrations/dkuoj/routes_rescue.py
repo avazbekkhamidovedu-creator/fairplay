@@ -151,6 +151,7 @@ async def extra_time(key: str, netid: str, call: BridgeCall = Depends(signed_cal
     # student handed in or the exam closed since.
     if await request_used(session, scope, rid):
         log.info("DKU OJ exam %s: repeated extra-time %s ignored", key, rid)
+        await _forget_student_caches(e, a)              # a retry repairs a cache step the first call lost
         return _out(repeated)
     if e.status == "closed" and not e.auto_closed:      # closed by its clock: extra time still counts (like add-time)
         raise HTTPException(409, "Exam is closed")
@@ -180,6 +181,7 @@ async def extra_time(key: str, netid: str, call: BridgeCall = Depends(signed_cal
         if a is not None:
             await session.refresh(a)
         log.info("DKU OJ exam %s: repeated extra-time %s ignored", key, rid)
+        await _forget_student_caches(e, a)
         return _out({"ok": True, "repeated": True,
                      "deadline_at": iso(a.deadline_at) if a is not None and a.status == "in_progress" else None})
     total, deadline = granted_now
@@ -199,6 +201,18 @@ async def extra_time(key: str, netid: str, call: BridgeCall = Depends(signed_cal
         log.exception("DKU OJ exam %s: extra time of %s granted, but the cache / event step failed", key, netid)
     log.info("DKU OJ exam %s: %d extra minutes by %s", key, minutes, call.acting_user)
     return _out({"ok": True, "deadline_at": iso(deadline)})
+
+
+async def _forget_student_caches(e: Exam, a: Attempt | None) -> None:
+    """Best effort: the exam cache and this student's cached deadline, so a repeated grant
+    redoes a cache step that failed after the first one."""
+    from ...services import invalidate_exam
+    try:
+        await invalidate_exam(get_store(), e.id)
+        if a is not None and a.status == "in_progress":
+            await get_store().delete(attempt_key(a.id))
+    except Exception:  # noqa: BLE001
+        log.exception("DKU OJ exam %s: the cache step of a repeated extra time failed", e.id)
 
 
 async def _grant(session: AsyncSession, e: Exam, u: User, a: Attempt | None, minutes: int,

@@ -701,6 +701,7 @@ async def exam_add_time(key: str, call: BridgeCall = Depends(signed_call),
     scope = f"addtime:{e.id}"
     if await request_used(session, scope, rid):
         log.info("DKU OJ exam %s: repeated add-time %s ignored", key, rid)
+        await control.forget_time_caches(session, e.id)     # a retry repairs a cache step the first call lost
         return await _view(session, e)
     # The request id is stored in the grant's own transaction (extend_exam), so it is applied once.
     if not await control.extend_exam(session, e, minutes, lambda: claim_request(session, scope, rid)):
