@@ -1,6 +1,9 @@
 ## What's new in 0.8.9
 
 - Duke Box now opens during open-book exams: FairPlay allows Box's last sign-in step (the page Box sends you back to after Duke sign-in), which was being blocked, so the sign-in could never finish. Only that one step is added; the rest of Box and your personal Box pages stay blocked.
+- Duke NetID sign-in (with Duo) works in the DKU OJ tab, so you can sign in to DKU OJ with your NetID inside FairPlay.
+- Changes your instructor makes in DKU OJ during the exam (time, questions, allowed websites, tools) reach your exam right away. A website the instructor removes closes in your exam.
+- Instructors and TAs: FairPlay no longer limits DKU OJ. Add time, extra time, reopen, unlock a device and offline exit codes have no caps, and only students are locked. Grading stays in DKU OJ.
 
 ## What's new in 0.8.8
 
