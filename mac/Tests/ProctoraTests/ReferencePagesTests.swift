@@ -388,9 +388,9 @@ extension ReferencePages {
         #expect(policy?.allows(URL(string: "https://cdn.example.org/a.js"), mainFrame: false) == true)
         // Content rules: every rule that lets a chain host load is scoped to a chain page and never lets /settings of an account host in.
         let rules = try? JSONSerialization.jsonObject(with: Data((policy?.contentRules ?? "[]").utf8)) as? [[String: Any]]
-        let chainRules = (rules ?? []).filter { (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("shib") == true
-            || (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("duosecurity") == true
-            || (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("account") == true }
+        // (The always-on Duke NetID rules of the OJ tab also name shib and duosecurity: DukeNetIDSignInTests covers them.)
+        let chainRules = (rules ?? []).filter { (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("account\\.box") == true
+            || (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("sso\\.services") == true }
         #expect(!chainRules.isEmpty)
         for rule in chainRules where ((rule["action"] as? [String: Any])?["type"] as? String) == "ignore-previous-rules" {
             let trigger = rule["trigger"] as? [String: Any]
@@ -401,7 +401,7 @@ extension ReferencePages {
         #expect(account.contains { $0.hasSuffix("/sso/ping_federate") } && account.contains { $0.hasSuffix("/login") })
         // No Box page in the list: no chain at all.
         let none = ProtectedBrowserPolicy(start: "https://dkuoj.example.edu/", additionalOrigins: "", forbiddenOrigin: URL(string: "https://fairplay.example.edu")!, referenceSites: ["https://docs.python.org/"])
-        #expect(none?.hasBoxPage == false && !(none?.contentRules.contains("shib") ?? true))
+        #expect(none?.hasBoxPage == false && !(none?.contentRules.contains("sso\\\\.services") ?? true))
     }
 
     @Test func frameRulesOfTheChainAreForABoxTabOnTheChainOnly() {
